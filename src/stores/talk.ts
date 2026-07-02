@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { supabase } from '@/lib/supabase'
-import { submitKnock } from '@/lib/knockQueue'
+import { deleteKnock, submitKnock } from '@/lib/knockQueue'
+import { geocodeAndCache } from '@/lib/geocode'
 import { useAuthStore } from './auth'
 import type { Address, KnockLog, KnockOutcome, NewKnock, Person } from '@/types'
 
@@ -19,7 +20,12 @@ interface TalkState {
   history: KnockLog[]
   selectedPerson: Person | null
   notes: string
+  /** Outcome logged for the CURRENT selection (person, or household if no
+   * person picked) — editable until the selection changes or Next is tapped.
+   * Tapping the same button again undoes it; tapping a different one swaps
+   * it; both write through activeClientId so it's the same DB row. */
   pendingOutcome: KnockOutcome | null
+  activeClientId: string | null
 }
 
 const SEARCH_DEBOUNCE_MS = 250
@@ -37,6 +43,7 @@ export const useTalkStore = defineStore('talk', {
     selectedPerson: null,
     notes: '',
     pendingOutcome: null,
+    activeClientId: null,
   }),
 
   actions: {
@@ -99,14 +106,32 @@ export const useTalkStore = defineStore('talk', {
         ? (this.roster.find((p) => p.id === preselectPersonId) ?? null)
         : null
       this.pendingOutcome = null
+      this.activeClientId = null
       this.activeTab = 'talk'
       this.clearSearch()
+
+      // Geocode on view, not on import: the first time this address is
+      // pulled up without coordinates, look it up and cache it so it gets a
+      // pin on Hunt from now on. Fire-and-forget — never blocks Talk mode.
+      if (this.selectedAddress.lat == null || this.selectedAddress.lng == null) {
+        const address = this.selectedAddress
+        void geocodeAndCache(address).then((loc) => {
+          if (loc && this.selectedAddress?.id === address.id) {
+            this.selectedAddress.lat = loc.lat
+            this.selectedAddress.lng = loc.lng
+          }
+        })
+      }
     },
 
     /** Tap a roster row to pick who you're actually talking to (tap again to
-     * deselect — the outcome then applies to the household). */
+     * deselect — the outcome then applies to the household). Switching the
+     * target clears any in-progress outcome selection — it belonged to
+     * whoever was previously active, not the new target. */
     selectPerson(person: Person) {
       this.selectedPerson = this.selectedPerson?.id === person.id ? null : person
+      this.pendingOutcome = null
+      this.activeClientId = null
     },
 
     clearAddress() {
@@ -115,15 +140,31 @@ export const useTalkStore = defineStore('talk', {
       this.history = []
       this.selectedPerson = null
       this.pendingOutcome = null
+      this.activeClientId = null
     },
 
-    /** Log an outcome. Works with nothing selected (anonymous walk-up: both
-     * person and household null; a caught name goes in the notes field). */
+    /** Log an outcome for whatever is currently selected (a person, or the
+     * household if none is picked — or a fully anonymous walk-up if neither).
+     * Tapping the already-active button undoes it; tapping a different one
+     * swaps it in place (same DB row, via activeClientId); tapping with
+     * nothing active creates a new log. The button row itself never hides —
+     * this only changes which outcome is highlighted. */
     async logOutcome(outcome: KnockOutcome) {
       const auth = useAuthStore()
-      if (!auth.profile || this.pendingOutcome) return
+      if (!auth.profile) return
+
+      if (this.pendingOutcome === outcome && this.activeClientId) {
+        const clientId = this.activeClientId
+        this.pendingOutcome = null
+        this.activeClientId = null
+        this.history = this.history.filter((h) => h.client_id !== clientId)
+        await deleteKnock(clientId)
+        return
+      }
+
+      const clientId = this.activeClientId ?? crypto.randomUUID()
       const knock: NewKnock = {
-        client_id: crypto.randomUUID(),
+        client_id: clientId,
         person_id: this.selectedPerson?.id ?? null,
         household_id: this.selectedAddress?.id ?? null,
         canvasser_id: auth.profile.id,
@@ -132,18 +173,25 @@ export const useTalkStore = defineStore('talk', {
         notes: this.notes.trim() || null,
       }
       this.pendingOutcome = outcome
+      this.activeClientId = clientId
       await submitKnock(knock)
-      // Optimistic: show the fresh knock in this household's history.
+      // Optimistic: reflect the (possibly corrected) knock in this
+      // household's history, replacing any prior entry for the same log.
       if (knock.household_id) {
-        this.history.unshift({ ...knock, id: knock.client_id, created_at: knock.occurred_at })
+        this.history = [
+          { ...knock, id: clientId, created_at: knock.occurred_at },
+          ...this.history.filter((h) => h.client_id !== clientId),
+        ]
       }
     },
 
     /** Canvasser confirms before the screen clears — no silent auto-advance.
      * Keeps the address + roster loaded: door conversations often involve
-     * several residents; switching houses happens via search or Hunt. */
+     * several residents; switching houses happens via search or Hunt. The
+     * outcome itself was already written by logOutcome — this just moves on. */
     confirmNext() {
       this.pendingOutcome = null
+      this.activeClientId = null
       this.selectedPerson = null
       this.notes = ''
     },

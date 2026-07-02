@@ -69,7 +69,10 @@ export default async (req: Request): Promise<Response> => {
     return json({ error: 'Invalid messages payload' }, 400)
   }
 
-  const client = new Anthropic({ apiKey: apiKey.trim() })
+  // Pin the base URL explicitly — don't inherit ANTHROPIC_BASE_URL from the
+  // function's environment. This is a BYO-key proxy for the admin's own
+  // Anthropic account; it must always talk to the real public API.
+  const client = new Anthropic({ apiKey: apiKey.trim(), baseURL: 'https://api.anthropic.com' })
   try {
     const response = await client.messages.create({
       model: MODEL,

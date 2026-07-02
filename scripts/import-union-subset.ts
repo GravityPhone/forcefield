@@ -1,19 +1,29 @@
-// One-off local import: load a small demo subset of UNION.txt (Union County
-// OH voter roll, Ohio SOS export, gitignored) into Supabase so Talk/Hunt can
-// be exercised before the full admin CSV-import feature ships.
+// One-off local import: load UNION.txt (Union County OH voter roll, Ohio SOS
+// export, gitignored) into Supabase so Talk/Hunt can be exercised before the
+// full admin CSV-import feature ships.
+//
+// Addresses import WITHOUT lat/lng by default — geocoding happens on-demand
+// in the app (Talk mode geocodes an address the first time a canvasser pulls
+// it up, via the browser Maps Geocoder, and caches the result). --geocode is
+// an opt-in bulk backfill for when you want pins ahead of time.
 //
 // Usage (from repo root):
-//   npm run import:union -- --dry-run        # parse + print counts, NO network
-//   npm run import:union -- --skip-geocode   # insert without lat/lng
-//   npm run import:union                     # full run (geocode + insert)
+//   npm run import:union -- --dry-run    # parse + print counts, NO network
+//   npm run import:union                 # bulk insert, no lat/lng (default)
+//   npm run import:union -- --geocode    # also geocode every address (slow,
+//                                        # real Google API usage — county-wide
+//                                        # this is 20k+ sequential calls)
+//
+// Scope: set TARGET_CITY=Richwood to limit to one city; unset = whole county.
+// MAX_HOUSEHOLDS caps the household count (default: no cap).
 //
 // Required env vars for a real run (values in gitignored KEYS-AND-ACCESS.md —
 // NEVER commit them):
 //   SUPABASE_SERVICE_ROLE_KEY   bypasses RLS for the insert
 //   GOOGLE_MAPS_API_KEY         optional; falls back to the demo key
 //
-// Real runs write to the live database and call the Google Geocoding API —
-// per project process rules, only run this with explicit user approval.
+// Real runs write to the live database — per project process rules, only run
+// this with explicit user approval.
 
 import { createReadStream } from 'node:fs'
 import { createInterface } from 'node:readline'
@@ -32,8 +42,8 @@ import {
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const VOTER_FILE = join(REPO_ROOT, 'UNION.txt')
 
-const TARGET_CITY = 'Richwood' // small town → manageable demo subset
-const MAX_HOUSEHOLDS = 150
+const TARGET_CITY = process.env.TARGET_CITY || null // null = whole county
+const MAX_HOUSEHOLDS = Number(process.env.MAX_HOUSEHOLDS) || Infinity
 const GEOCODE_DELAY_MS = 60
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? 'https://whrliwbdxjdcksbvwkrc.supabase.co'
@@ -41,7 +51,8 @@ const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 const MAPS_KEY = process.env.GOOGLE_MAPS_API_KEY ?? 'AIzaSyADqvazUypiLr81MNwwiE6MJXUQ9nr6Kis'
 
 const dryRun = process.argv.includes('--dry-run')
-const skipGeocode = process.argv.includes('--skip-geocode')
+const doGeocode = process.argv.includes('--geocode')
+const INSERT_BATCH_SIZE = 500
 
 async function readSubset(): Promise<Map<string, Household>> {
   const rl = createInterface({
@@ -65,11 +76,12 @@ async function readSubset(): Promise<Map<string, Household>> {
     const voter = rowToVoter(columns, parseCsvLine(line))
     if (!voter) continue
     if (voter.status !== 'ACTIVE') continue
-    if (voter.city.toUpperCase() !== TARGET_CITY.toUpperCase()) continue
+    if (TARGET_CITY && voter.city.toUpperCase() !== TARGET_CITY.toUpperCase()) continue
     voters.push(voter)
   }
 
-  console.log(`Parsed ${total} rows; ${voters.length} active voters in ${TARGET_CITY}.`)
+  const scope = TARGET_CITY ? `active voters in ${TARGET_CITY}` : 'active voters county-wide'
+  console.log(`Parsed ${total} rows; ${voters.length} ${scope}.`)
 
   const all = groupIntoHouseholds(voters)
   // Deterministic cap: sort keys so re-runs pick the same subset.
@@ -123,11 +135,12 @@ async function main() {
     auth: { persistSession: false },
   })
 
-  // Idempotency: skip households/persons that already exist.
-  const { data: existingAddresses, error: addrErr } = await supabase
-    .from('addresses')
-    .select('id, street, unit, city, zip')
-    .eq('city', TARGET_CITY)
+  // Idempotency: skip households/persons that already exist. (City-scoped
+  // when TARGET_CITY is set; whole table otherwise — still cheap at this
+  // scale, and this is a demo import script, not a hot path.)
+  let addressQuery = supabase.from('addresses').select('street, unit, city, zip')
+  if (TARGET_CITY) addressQuery = addressQuery.eq('city', TARGET_CITY)
+  const { data: existingAddresses, error: addrErr } = await addressQuery
   if (addrErr) throw addrErr
   const existingAddressKeys = new Set(
     (existingAddresses ?? []).map((a) =>
@@ -141,64 +154,77 @@ async function main() {
   if (persErr) throw persErr
   const existingVoterIds = new Set((existingPersons ?? []).map((p) => p.voter_file_id))
 
+  const toImport = [...households.values()].filter(
+    (h) => !existingAddressKeys.has([h.address1, h.secondaryAddr, h.city, h.zip].join('|').toUpperCase()),
+  )
+  console.log(`${households.size - toImport.length} already imported; ${toImport.length} new households.`)
+
   let addressesInserted = 0
   let personsInserted = 0
   let geocoded = 0
 
-  for (const h of households.values()) {
-    const key = [h.address1, h.secondaryAddr, h.city, h.zip].join('|').toUpperCase()
-    if (existingAddressKeys.has(key)) continue
+  for (let i = 0; i < toImport.length; i += INSERT_BATCH_SIZE) {
+    const batch = toImport.slice(i, i + INSERT_BATCH_SIZE)
 
-    let location: { lat: number; lng: number } | null = null
-    if (!skipGeocode) {
-      location = await geocode(h)
-      if (location) geocoded++
-      await new Promise((r) => setTimeout(r, GEOCODE_DELAY_MS))
+    let locations: ({ lat: number; lng: number } | null)[] = batch.map(() => null)
+    if (doGeocode) {
+      locations = []
+      for (const h of batch) {
+        const loc = await geocode(h)
+        if (loc) geocoded++
+        locations.push(loc)
+        await new Promise((r) => setTimeout(r, GEOCODE_DELAY_MS))
+      }
     }
 
-    const { data: address, error: insertErr } = await supabase
+    // Bulk insert this batch; Postgres/PostgREST returns rows in the same
+    // order they were inserted, so `addresses[j]` maps back to `batch[j]`.
+    const { data: addresses, error: insertErr } = await supabase
       .from('addresses')
-      .insert({
-        street: h.address1,
-        unit: h.secondaryAddr || null,
-        city: h.city,
-        county: h.county,
-        zip: h.zip || null,
-        lat: location?.lat ?? null,
-        lng: location?.lng ?? null,
-        data_source: 'csv_import',
-        registered_voter: true,
-      })
+      .insert(
+        batch.map((h, j) => ({
+          street: h.address1,
+          unit: h.secondaryAddr || null,
+          city: h.city,
+          county: h.county,
+          zip: h.zip || null,
+          lat: locations[j]?.lat ?? null,
+          lng: locations[j]?.lng ?? null,
+          data_source: 'csv_import',
+          registered_voter: true,
+        })),
+      )
       .select('id')
-      .single()
-    if (insertErr || !address) {
-      console.warn(`  insert failed for ${h.address1}: ${insertErr?.message}`)
+    if (insertErr || !addresses) {
+      console.warn(`  batch insert failed at offset ${i}: ${insertErr?.message}`)
       continue
     }
-    addressesInserted++
+    addressesInserted += addresses.length
 
-    const newPersons = h.persons
-      .filter((p) => !existingVoterIds.has(p.voterId))
-      .map((p) => ({
-        name: p.name,
-        household_id: address.id,
-        voter_file_id: p.voterId,
-        registered_voter: true,
-      }))
+    const newPersons = batch.flatMap((h, j) =>
+      h.persons
+        .filter((p) => !existingVoterIds.has(p.voterId))
+        .map((p) => ({
+          name: p.name,
+          household_id: addresses[j].id,
+          voter_file_id: p.voterId,
+          registered_voter: true,
+        })),
+    )
     if (newPersons.length) {
       const { error: personsErr } = await supabase.from('persons').insert(newPersons)
-      if (personsErr) console.warn(`  persons insert failed for ${h.address1}: ${personsErr.message}`)
+      if (personsErr) console.warn(`  persons insert failed for batch at offset ${i}: ${personsErr.message}`)
       else personsInserted += newPersons.length
     }
+
+    console.log(`  ${Math.min(i + INSERT_BATCH_SIZE, toImport.length)}/${toImport.length} households…`)
   }
 
   console.log(
     `Done. Inserted ${addressesInserted} addresses (${geocoded} geocoded) and ${personsInserted} persons.`,
   )
-  if (!skipGeocode && geocoded === 0 && addressesInserted > 0) {
-    console.log(
-      'No addresses geocoded — the Maps key may lack Geocoding API/billing. Hunt map will have no pins, but search and the address list still work.',
-    )
+  if (!doGeocode) {
+    console.log('No lat/lng yet — Talk mode geocodes an address on-demand the first time it is opened.')
   }
 }
 
