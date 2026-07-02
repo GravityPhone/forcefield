@@ -163,10 +163,17 @@ do $$
 declare
   admin_id uuid := gen_random_uuid();
 begin
+  -- The token columns must be '' rather than their NULL default — Supabase's
+  -- auth server errors with "Database error querying schema" trying to read
+  -- a NULL into these on login. Only manual inserts hit this; normal signups
+  -- go through GoTrue, which already sets them correctly.
   insert into auth.users (
     instance_id, id, aud, role, email, encrypted_password,
     email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
-    created_at, updated_at
+    created_at, updated_at,
+    confirmation_token, recovery_token, email_change,
+    email_change_token_new, email_change_token_current,
+    reauthentication_token, phone_change, phone_change_token
   ) values (
     '00000000-0000-0000-0000-000000000000',
     admin_id,
@@ -178,7 +185,8 @@ begin
     '{"provider": "email", "providers": ["email"]}',
     '{"username": "admin"}',
     now(),
-    now()
+    now(),
+    '', '', '', '', '', '', '', ''
   );
 
   insert into auth.identities (
