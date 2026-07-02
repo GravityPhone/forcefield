@@ -9,3 +9,6 @@ dist/
 # Large local data files — voter roll stays out of git
 UNION.txt
 files.zip
+
+# Real secrets — never commit
+KEYS-AND-ACCESS.md
