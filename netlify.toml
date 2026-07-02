@@ -2,6 +2,9 @@
   command = "npm run build"
   publish = "dist"
 
+[functions]
+  directory = "netlify/functions"
+
 # SPA routing — serve index.html for all client-side routes
 [[redirects]]
   from = "/*"

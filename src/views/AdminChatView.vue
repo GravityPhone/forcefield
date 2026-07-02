@@ -6,33 +6,86 @@ interface ChatMessage {
   id: number
   role: 'user' | 'assistant'
   text: string
+  error?: boolean
 }
 
-// UI shell only — Phase 2 wires this to a real backend (RAG over knock/address data).
+const KEY_STORAGE = 'forcefield.anthropic_api_key'
+
 const messages = ref<ChatMessage[]>([
   {
     id: 0,
     role: 'assistant',
-    text: "Hi! I'm the Forcefield data assistant. Once I'm connected, you'll be able to ask things like \"which streets have the best signature rate in the evenings?\" and get answers from your live canvassing data. For now I'm just a preview — the data backend is coming soon.",
+    text: "Hi! I'm the Forcefield assistant. I can't see your live canvassing data yet — that integration is coming — but I'm happy to help with canvassing strategy, scripts, and general questions.",
   },
 ])
 
 const draft = ref('')
+const loading = ref(false)
 const listEl = ref<HTMLElement | null>(null)
 let nextId = 1
 
-async function send() {
-  const text = draft.value.trim()
-  if (!text) return
-  messages.value.push({ id: nextId++, role: 'user', text })
-  draft.value = ''
-  messages.value.push({
-    id: nextId++,
-    role: 'assistant',
-    text: '🔌 Coming soon — I\'m not connected to your canvassing data yet. When the backend is live, I\'ll answer this from real knock logs, addresses, and turf data.',
-  })
+async function scrollToBottom() {
   await nextTick()
   listEl.value?.scrollTo({ top: listEl.value.scrollHeight, behavior: 'smooth' })
+}
+
+async function send() {
+  const text = draft.value.trim()
+  if (!text || loading.value) return
+
+  const apiKey = localStorage.getItem(KEY_STORAGE)?.trim()
+  if (!apiKey) {
+    messages.value.push({ id: nextId++, role: 'user', text })
+    messages.value.push({
+      id: nextId++,
+      role: 'assistant',
+      text: 'No API key saved — add your Anthropic API key in Settings first.',
+      error: true,
+    })
+    draft.value = ''
+    await scrollToBottom()
+    return
+  }
+
+  messages.value.push({ id: nextId++, role: 'user', text })
+  draft.value = ''
+  loading.value = true
+  await scrollToBottom()
+
+  // Full multi-turn history, skipping error bubbles and the seeded greeting —
+  // the Anthropic API requires the first message to be from the user.
+  const history = messages.value.filter((m) => !m.error)
+  const firstUser = history.findIndex((m) => m.role === 'user')
+  const wireMessages = history.slice(firstUser).map((m) => ({ role: m.role, content: m.text }))
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apiKey, messages: wireMessages }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      messages.value.push({
+        id: nextId++,
+        role: 'assistant',
+        text: data.error ?? `Request failed (${res.status}).`,
+        error: true,
+      })
+    } else {
+      messages.value.push({ id: nextId++, role: 'assistant', text: data.text ?? '(empty response)' })
+    }
+  } catch {
+    messages.value.push({
+      id: nextId++,
+      role: 'assistant',
+      text: 'Could not reach the chat service. (Note: the /api/chat function only runs on Netlify, not under plain "npm run dev".)',
+      error: true,
+    })
+  } finally {
+    loading.value = false
+    await scrollToBottom()
+  }
 }
 </script>
 
@@ -40,21 +93,28 @@ async function send() {
   <AppShell title="AI Chat">
     <div class="chat card">
       <div ref="listEl" class="chat-messages">
-        <div v-for="m in messages" :key="m.id" class="msg" :class="m.role">
+        <div v-for="m in messages" :key="m.id" class="msg" :class="[m.role, { error: m.error }]">
           <div class="bubble">{{ m.text }}</div>
+        </div>
+        <div v-if="loading" class="msg assistant">
+          <div class="bubble muted">Thinking…</div>
         </div>
       </div>
       <form class="chat-input" @submit.prevent="send">
         <input
           v-model="draft"
-          placeholder="Ask about your canvassing data…"
+          placeholder="Ask the assistant…"
           aria-label="Chat message"
+          :disabled="loading"
         />
-        <button class="btn btn-primary" type="submit" :disabled="!draft.trim()">Send</button>
+        <button class="btn btn-primary" type="submit" :disabled="!draft.trim() || loading">
+          Send
+        </button>
       </form>
       <p class="muted disclaimer">
-        Preview — responses use a placeholder until the data backend ships. Add your Anthropic API
-        key in <router-link to="/admin/settings">Settings</router-link>.
+        Responses come from Claude Haiku via your API key (set in
+        <router-link to="/admin/settings">Settings</router-link>). The assistant can't see live
+        canvassing data yet.
       </p>
     </div>
   </AppShell>
@@ -103,6 +163,12 @@ async function send() {
   background: var(--accent);
   color: var(--accent-contrast);
   border-bottom-right-radius: 4px;
+}
+
+.msg.error .bubble {
+  background: #fdecec;
+  border: 1px solid var(--danger);
+  color: var(--danger);
 }
 
 .chat-input {

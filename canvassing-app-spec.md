@@ -50,16 +50,17 @@ Forcefield is a Vue-based canvassing app for door-to-door and crowd petitioning,
 - data source: `csv_import` / `minivan` (future) — tracks provenance since you're starting with a manual CSV and may add Minivan sync later
 - registered voter (boolean — true by default for records sourced from the county voter roll CSV)
 
+**Person** (not optional — talk mode needs the full roster at an address)
+- name, household ID (**nullable** — a street/parking-lot walk-up may have a name with no address on file yet), voter file ID (if applicable), registered voter flag, prior contact history
+- an address can have multiple Person records (the household roster shown at a glance in talk mode); a Person can exist unlinked to any address
+
 **Knock Log** (the core event Reach was missing)
-- household ID
+- person ID (**nullable** — logging an outcome doesn't strictly require an identified person)
+- household ID (**nullable** — walk-ups may have no address)
 - canvasser ID
 - timestamp
-- outcome: `Signed` / `Maybe` / `Refused` / `Not Home` / `Moved` / `Invalid` (customizable list)
-- notes (free text, optional)
-- follow-up flag (for "maybe"s that need a second visit)
-
-**Person** (optional, if you're tracking individuals not just households)
-- name, household ID, voter file ID (if applicable), prior contact history
+- outcome: `Signed` / `Didn't Sign` / `Maybe` / `Not Home` / `Skip` / `Hostile` — six fixed buttons, no dropdown. (`Hostile` flags a safety-relevant interaction distinct from a routine decline; `Skip` covers "didn't engage" in contexts where "Not Home" doesn't apply, like a crowd or parking lot.)
+- notes (free text, optional, always-visible small field — not a toggle)
 
 **Turf/Territory**
 - polygon or street-range boundary
@@ -70,13 +71,19 @@ Forcefield is a Vue-based canvassing app for door-to-door and crowd petitioning,
 
 ## 5. Core Features — Phase 1 (MVP)
 
-1. **Single-screen "talk mode"**
-   - One screen per address: name/household info, quick-tap outcome buttons (Signed / Maybe / Not Home / Refused), notes field, auto-timestamp on save.
-   - No navigation required mid-conversation — this directly answers your Reach complaint.
-2. **Street & person lookup**
-   - Fast search/filter by street name or last name, typeahead, minimal taps to get from search to talk-mode screen.
-3. **Map view**
-   - Google Map showing turf boundaries and pins colored by knock status (not started / not home / maybe / signed / refused).
+1. **Talk mode — the canvasser's persistent home screen, two tabs**
+   - **Talk tab (default):** always-on name/address search field at the top, plus six large outcome buttons (Signed / Didn't Sign / Maybe / Not Home / Skip / Hostile) and an always-visible notes field — both are live even before anything is searched, because a canvasser needs to be able to walk up to a total stranger (street, parking lot, crowd), catch a name, and hit "Signed" without ever navigating anywhere.
+     - **Unpopulated state:** just the search field + buttons. Typing a name/address and picking a match (or not) doesn't change the screen — it just attaches that person/address to the outcome about to be logged.
+     - **Populated state** (arrived via the Hunt tab, or resolved through search): shows the **full roster of every Person on file at that address** at a glance — a door-knock conversation might involve more than one resident, and the canvasser needs to see and pick among all of them without leaving the screen. Each person shows registered-voter status and prior contact history inline.
+     - Switching people or addresses happens inline via the same search field — this screen never navigates away mid-conversation.
+     - After logging an outcome: a "Next" button confirms before clearing/advancing — no silent auto-advance.
+   - **Hunt tab:** the door-knocking helper — map with pins colored by knock status, plus a searchable/browsable street list. Selecting a pin or list entry switches back to the Talk tab with that address and its full resident roster pre-loaded.
+   - No separate "lookup" screen and no separate map screen that talk mode is bolted onto — Hunt and Talk are two tabs of one persistent home, and Hunt only ever hands off into Talk, never away from it.
+2. **Address / street lookup (lives inside the Hunt tab)**
+   - Context-dependent list: searching a street name shows every house on that street/block; selecting one house shows its individual units if it's a multi-unit building.
+   - Selecting any result switches to the Talk tab with that address (and its roster) loaded.
+3. **Map view (the other half of the Hunt tab)**
+   - Google Map showing turf boundaries and pins colored by knock status (not started / not home / maybe / signed / refused / hostile).
    - This is the feature Reach lacks entirely.
 4. **Real-time sync**
    - Knock logs write to Supabase immediately when online; queue locally and retry when signal returns (handles "spotty but usually some signal").
@@ -126,21 +133,22 @@ Forcefield is a Vue-based canvassing app for door-to-door and crowd petitioning,
 
 ## 8. UI & Feature Behavior Details
 
-**Map**
-- Tapping a pin minimizes the map and transitions directly into the talk-mode screen for that address — no intermediate preview/details step. The map isn't gone, just minimized, so the canvasser can return to it after logging.
-- Pin colors (4-state): Not Home / Maybe / Signed / Refused, distinct colors for each.
-- Dense areas (apartment buildings, tight blocks) cluster into a number bubble; clusters break apart as the canvasser zooms in.
-
-**Talk-mode screen**
-- Outcome selection: large, tap-friendly buttons, one per outcome (no dropdowns/menus — matches the "don't fumble with the phone" requirement).
+**Talk mode (canvasser home screen — two tabs, Talk + Hunt)**
+- **Talk tab** is always reachable and always "live" — the outcome buttons work even with nothing searched yet, so a canvasser can engage a total stranger and log an outcome in two taps (search or skip search → tap outcome).
+- Selecting a pin or list entry in the **Hunt tab** switches to the Talk tab with that address loaded — never an intermediate preview/details screen. Hunt itself isn't lost, just backgrounded, so the canvasser can flip back to it after logging.
+- When an address is loaded, talk mode shows **every Person on file at that address** at a glance (the household roster) — a conversation may involve more than one resident, and the canvasser picks who they're actually engaging without leaving the screen.
+- Outcome selection: six large, tap-friendly buttons (Signed / Didn't Sign / Maybe / Not Home / Skip / Hostile), no dropdowns/menus.
 - Notes field: always visible as a small text field, not hidden behind a toggle.
-- After logging an outcome: show a "Next Address" button — canvasser confirms before moving on (no silent auto-advance).
+- After logging an outcome: show a "Next" button — canvasser confirms before the screen clears/advances (no silent auto-advance).
+- Switching to a different person or address happens inline via the same search field on the Talk tab — this screen never fully navigates away mid-conversation.
+
+**Hunt tab (map + address lookup)**
+- Map: pins colored by knock status (6-state, matching the outcome list above), clustering into a number bubble in dense areas, breaking apart as the canvasser zooms in.
+- Address lookup is context-dependent: searching a street name shows every house on that street/block; selecting one house shows its individual units if multi-unit.
+- Both the map and the list are ways to *find* an address — actually logging an outcome always happens back on the Talk tab.
 
 **Maybe / follow-up handling**
 - No automatic task/reminder system. A "Maybe" is simply tagged on the map (via its pin color) for anyone to see and revisit — kept intentionally simple for MVP.
-
-**Street & person lookup**
-- Dual-mode: search bar (type-to-filter) AND a browsable street/area list. Canvassers can use whichever fits the moment.
 
 **Leaderboards**
 - Admin-configurable ranking metric. Default: signatures collected.
