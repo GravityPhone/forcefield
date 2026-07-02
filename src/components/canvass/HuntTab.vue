@@ -14,7 +14,8 @@ const talk = useTalkStore()
 
 const mapEl = ref<HTMLElement | null>(null)
 const listQuery = ref('')
-const addresses = ref<Address[]>([])
+const streetResults = ref<Address[]>([])
+const searching = ref(false)
 const statusByHousehold = ref<Map<string, KnockOutcome>>(new Map())
 const loadError = ref('')
 const expandedStreet = ref<string | null>(null)
@@ -23,6 +24,7 @@ let map: google.maps.Map | null = null
 let clusterer: MarkerClusterer | null = null
 let markersByAddress = new Map<string, google.maps.Marker>()
 let initStarted = false
+let searchTimer: ReturnType<typeof setTimeout> | undefined
 
 // Hunt is the door-knocking helper: find an address here, log it on Talk.
 // Lazy-init on first activation so the Maps script never loads for
@@ -41,16 +43,18 @@ watch(
   { immediate: true },
 )
 
-async function fetchData() {
+/** Only geocoded addresses get pins — a much smaller, growing-over-time set
+ * (Talk mode geocodes on view), so no arbitrary cap/ordering bias here. */
+async function fetchMapData() {
   const [addressesRes, statusRes] = await Promise.all([
-    supabase.from('addresses').select('*').order('street').limit(2000),
+    supabase.from('addresses').select('*').not('lat', 'is', null).limit(1000),
     supabase.from('household_latest_knock').select('*'),
   ])
   if (addressesRes.error) throw addressesRes.error
-  addresses.value = (addressesRes.data ?? []) as Address[]
   statusByHousehold.value = new Map(
     ((statusRes.data ?? []) as HouseholdLatestKnock[]).map((s) => [s.household_id, s.outcome]),
   )
+  return (addressesRes.data ?? []) as Address[]
 }
 
 function pinIcon(addressId: string): google.maps.Symbol {
@@ -66,8 +70,9 @@ function pinIcon(addressId: string): google.maps.Symbol {
 }
 
 async function initialize() {
+  let mapAddresses: Address[] = []
   try {
-    await Promise.all([fetchData(), loadMaps()])
+    ;[mapAddresses] = await Promise.all([fetchMapData(), loadMaps()])
   } catch {
     loadError.value = 'Could not load the map or address data. Check your connection.'
     initStarted = false
@@ -85,8 +90,8 @@ async function initialize() {
 
   const bounds = new google.maps.LatLngBounds()
   const markers: google.maps.Marker[] = []
-  for (const a of addresses.value) {
-    if (a.lat == null || a.lng == null) continue // not geocoded → no pin
+  for (const a of mapAddresses) {
+    if (a.lat == null || a.lng == null) continue
     const marker = new google.maps.Marker({
       position: { lat: a.lat, lng: a.lng },
       title: `${a.street}${a.unit ? ' ' + a.unit : ''}`,
@@ -111,21 +116,44 @@ async function refreshStatuses() {
   for (const [id, marker] of markersByAddress) marker.setIcon(pinIcon(id))
 }
 
-// Context-dependent list: street query → houses grouped by street; a street
-// group with several units expands to its unit rows. Ungeocoded addresses
-// still appear here even though they have no pin.
+// Context-dependent list: searching a street name queries the DB live and
+// orders alphabetically by street NAME (not a pre-fetched, arbitrarily
+// capped slice — with 20k+ addresses, capping by naive string order on the
+// full "123 MAIN ST" line put nearly every result starting with digit "1"
+// at the front, since house numbers sort lexicographically).
+function onListInput(value: string) {
+  listQuery.value = value
+  clearTimeout(searchTimer)
+  const q = value.trim()
+  if (q.length < 2) {
+    streetResults.value = []
+    searching.value = false
+    return
+  }
+  searching.value = true
+  searchTimer = setTimeout(async () => {
+    const { data } = await supabase
+      .from('addresses')
+      .select('*')
+      .ilike('street', `%${q}%`)
+      .order('street')
+      .limit(100)
+    if (listQuery.value.trim() !== q) return // superseded by a newer keystroke
+    streetResults.value = (data ?? []) as Address[]
+    searching.value = false
+  }, 250)
+}
+
+// A street group with several units expands to its unit rows. Ungeocoded
+// addresses still appear here even though they have no pin.
 const streetGroups = computed(() => {
-  const q = listQuery.value.trim().toLowerCase()
-  const matches = q
-    ? addresses.value.filter((a) => a.street.toLowerCase().includes(q))
-    : addresses.value
   const groups = new Map<string, Address[]>()
-  for (const a of matches) {
+  for (const a of streetResults.value) {
     const list = groups.get(a.street)
     if (list) list.push(a)
     else groups.set(a.street, [a])
   }
-  return [...groups.entries()].slice(0, 50)
+  return [...groups.entries()]
 })
 
 function pickGroup(street: string, rows: Address[]) {
@@ -148,33 +176,40 @@ onUnmounted(() => {
     <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
 
     <input
-      v-model="listQuery"
+      :value="listQuery"
       class="street-search"
       type="search"
-      placeholder="Filter by street…"
-      aria-label="Filter addresses by street"
+      placeholder="Search a street name…"
+      aria-label="Search addresses by street"
+      @input="onListInput(($event.target as HTMLInputElement).value)"
     />
 
     <div class="street-list">
-      <div v-for="[street, rows] in streetGroups" :key="street" class="street-group">
-        <button class="street-row" @click="pickGroup(street, rows)">
-          <span class="street-name">{{ street }}</span>
-          <span class="muted unit-count">
-            {{ rows.length === 1 ? rows[0].city : rows.length + ' units' }}
-          </span>
-        </button>
-        <div v-if="expandedStreet === street && rows.length > 1" class="units">
-          <button
-            v-for="a in rows"
-            :key="a.id"
-            class="unit-row"
-            @click="talk.loadAddress(a.id)"
-          >
-            {{ a.unit || '(main)' }} <span class="muted">{{ a.city }}</span>
+      <p v-if="listQuery.trim().length < 2" class="muted empty">
+        Type at least 2 characters of a street name to search.
+      </p>
+      <p v-else-if="searching" class="muted empty">Searching…</p>
+      <template v-else>
+        <div v-for="[street, rows] in streetGroups" :key="street" class="street-group">
+          <button class="street-row" @click="pickGroup(street, rows)">
+            <span class="street-name">{{ street }}</span>
+            <span class="muted unit-count">
+              {{ rows.length === 1 ? rows[0].city : rows.length + ' units' }}
+            </span>
           </button>
+          <div v-if="expandedStreet === street && rows.length > 1" class="units">
+            <button
+              v-for="a in rows"
+              :key="a.id"
+              class="unit-row"
+              @click="talk.loadAddress(a.id)"
+            >
+              {{ a.unit || '(main)' }} <span class="muted">{{ a.city }}</span>
+            </button>
+          </div>
         </div>
-      </div>
-      <p v-if="!streetGroups.length" class="muted empty">No addresses match.</p>
+        <p v-if="!streetGroups.length" class="muted empty">No addresses match.</p>
+      </template>
     </div>
   </div>
 </template>
@@ -261,5 +296,6 @@ onUnmounted(() => {
 
 .empty {
   font-size: 0.9rem;
+  padding: 0.4rem 0.1rem;
 }
 </style>

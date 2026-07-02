@@ -20,6 +20,9 @@ const router = createRouter({
     // Canvasser home
     { path: '/canvass', name: 'canvass', component: () => import('@/views/CanvasserHomeView.vue'), meta: { roles: [] } },
 
+    // User-to-user chat (everyone) — distinct from the admin-only AI chat
+    { path: '/chat', name: 'chat', component: () => import('@/views/ChatView.vue'), meta: { roles: [] } },
+
     // Team lead home (admins can view too)
     { path: '/team', name: 'team', component: () => import('@/views/TeamLeadHomeView.vue'), meta: { roles: ['team_lead', 'admin'] } },
 

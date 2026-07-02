@@ -1,12 +1,15 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
+import { useAuthStore, roleHome } from '@/stores/auth'
 import { ROLE_LABELS } from '@/types'
 
 defineProps<{ title: string }>()
 
 const auth = useAuthStore()
 const router = useRouter()
+
+const homePath = computed(() => (auth.profile ? roleHome(auth.profile.role) : '/'))
 
 async function handleLogout() {
   await auth.logOut()
@@ -30,10 +33,15 @@ async function handleLogout() {
       </div>
     </header>
 
-    <nav v-if="auth.profile?.role === 'admin'" class="admin-nav">
-      <router-link to="/admin">Dashboard</router-link>
-      <router-link to="/admin/chat">AI Chat</router-link>
-      <router-link to="/admin/settings">Settings</router-link>
+    <!-- AI Chat stays admin-only; the user-to-user Chat link is for everyone. -->
+    <nav v-if="auth.profile" class="admin-nav">
+      <template v-if="auth.profile.role === 'admin'">
+        <router-link to="/admin">Dashboard</router-link>
+        <router-link to="/admin/chat">AI Chat</router-link>
+        <router-link to="/admin/settings">Settings</router-link>
+      </template>
+      <router-link v-else :to="homePath">Home</router-link>
+      <router-link to="/chat">Chat</router-link>
     </nav>
 
     <main class="shell-main">

@@ -86,3 +86,35 @@ export interface HouseholdLatestKnock {
   outcome: KnockOutcome
   occurred_at: string
 }
+
+export type ChatKind = 'global' | 'squad' | 'dm'
+
+export interface Chat {
+  id: string
+  kind: ChatKind
+  name: string | null
+  created_by: string | null
+  created_at: string
+}
+
+export interface ChatMember {
+  chat_id: string
+  user_id: string
+  added_by: string | null
+  joined_at: string
+}
+
+export interface ChatMessage {
+  id: string
+  chat_id: string
+  sender_id: string
+  body: string
+  created_at: string
+}
+
+/** Minimal profile info shown next to chat messages and in member pickers. */
+export interface ChatProfile {
+  id: string
+  username: string
+  display_name: string | null
+}
