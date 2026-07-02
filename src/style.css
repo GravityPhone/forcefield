@@ -1,0 +1,173 @@
+/* Design tokens — theme feature (light/dark/accent) will swap these later. */
+:root {
+  --bg: #f5f6fa;
+  --surface: #ffffff;
+  --surface-2: #eef0f6;
+  --text: #1a1d29;
+  --text-muted: #6b7080;
+  --border: #dde0ea;
+  --accent: #2f6fed;
+  --accent-contrast: #ffffff;
+  --danger: #d64545;
+  --success: #2e9e5b;
+  --warning: #e0a02e;
+  --radius: 12px;
+  --shadow: 0 1px 3px rgba(20, 24, 40, 0.08), 0 4px 16px rgba(20, 24, 40, 0.06);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+h1, h2, h3 {
+  margin: 0 0 0.5rem;
+  line-height: 1.25;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+/* --- shared primitives --- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 0.8rem 1.4rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--surface-2);
+  color: var(--text);
+  transition: filter 0.12s ease, transform 0.05s ease;
+  min-height: 48px; /* tap-friendly */
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn:hover {
+  filter: brightness(0.97);
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--border);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+.field label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.field input,
+.field textarea,
+.field select {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.9rem;
+  font-size: 1rem;
+  background: var(--surface);
+  color: var(--text);
+  min-height: 48px;
+}
+
+.field input:focus,
+.field textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.25rem;
+}
+
+.error-banner {
+  background: #fdecec;
+  border: 1px solid #f3bcbc;
+  color: var(--danger);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.92rem;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.page {
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 1.25rem;
+}
+
+.page-wide {
+  max-width: 860px;
+}

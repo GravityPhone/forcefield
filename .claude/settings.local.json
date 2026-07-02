@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C \"C:\\\\ClaudeCodeProjects\\\\ForceField\" status)",
+      "Bash(unzip -l files.zip)",
+      "Bash(gh repo *)",
+      "Bash(gh auth *)",
+      "Bash(npm --version)",
+      "Bash(git --version)",
+      "Bash(supabase --version)",
+      "Bash(netlify --version)",
+      "Read(//c/Users/gravi/**)",
+      "Bash(env)",
+      "Bash(curl -s -o /dev/null -w \"settings:%{http_code}\\\\n\" \"https://whrliwbdxjdcksbvwkrc.supabase.co/auth/v1/settings\" -H \"apikey: sb_publishable_JcZe2JFmhQGFK_Mddet4EA_IWZw4727\")",
+      "Bash(curl -s \"https://whrliwbdxjdcksbvwkrc.supabase.co/auth/v1/settings\" -H \"apikey: sb_publishable_JcZe2JFmhQGFK_Mddet4EA_IWZw4727\")",
+      "Bash(curl -s \"https://whrliwbdxjdcksbvwkrc.supabase.co/rest/v1/profiles?select=id&limit=1\" -H \"apikey: sb_publishable_JcZe2JFmhQGFK_Mddet4EA_IWZw4727\")",
+      "Bash(git init *)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(git add *)",
+      "Bash(git -c user.name=Claude -c user.email=noreply@anthropic.com commit -m 'Stage 1: scaffold, Supabase auth, three-role system with role-based routing *)"
+    ]
+  }
+}
