@@ -21,6 +21,7 @@ const addingPeople = ref(false)
 const pickedToAdd = ref<ChatProfile[]>([])
 
 const joinableSquads = computed(() => chat.chats.filter((c) => c.kind === 'squad' && !c.isMember))
+const membersExpanded = ref(false)
 
 // The global room has no chat_members rows (everyone's implicitly in it),
 // so its member list is every org user instead of the room's own roster.
@@ -98,6 +99,35 @@ function onAddRoom() {
   openComposer()
 }
 
+/** The dropdown next to each message (reply/edit/etc. by default) — we only
+ * support one action: jump to (or start) a DM with that message's sender.
+ * Shows on your own messages too since the library has no per-message
+ * "hide for self" option; clicking it there is just a silent no-op. */
+const messageActions = [{ name: 'messageUser', title: 'Message user' }]
+
+async function onMessageAction(e: Event) {
+  const detail = (e as CustomEvent).detail?.[0] as
+    | { action?: { name?: string }; message?: { senderId?: string } }
+    | undefined
+  if (detail?.action?.name !== 'messageUser') return
+  const senderId = detail.message?.senderId
+  if (senderId && senderId !== chat.myId) await chat.createChat('dm', null, [senderId])
+}
+
+/** The chat header's own menu (hamburger icon next to search) — gives a
+ * "Show members" entry, Discord-style, in addition to the toggle below. */
+const menuActions = [{ name: 'showMembers', title: 'Show members' }]
+
+function onMenuAction(e: Event) {
+  // Payload shape varies by which internal layer emits it — sometimes the
+  // raw { name, title } action, sometimes { action, roomId }. Accept both.
+  const detail = (e as CustomEvent).detail?.[0] as
+    | { name?: string; action?: { name?: string } }
+    | undefined
+  const name = detail?.name ?? detail?.action?.name
+  if (name === 'showMembers') membersExpanded.value = !membersExpanded.value
+}
+
 function openComposer() {
   composing.value = true
   chatName.value = ''
@@ -144,7 +174,12 @@ async function addPeople() {
         </button>
       </div>
 
-      <ChatMemberList v-if="chat.activeChat" :members="currentMembers" :active-chat="chat.activeChat" />
+      <ChatMemberList
+        v-if="chat.activeChat"
+        v-model:expanded="membersExpanded"
+        :members="currentMembers"
+        :active-chat="chat.activeChat"
+      />
 
       <vue-advanced-chat
         v-if="chat.myId"
@@ -155,11 +190,15 @@ async function addPeople() {
         :messages.prop="vacMessages"
         :messages-loaded="!chat.loadingMessages"
         :usernameOptions.prop="{ minUsers: 0, currentUser: false }"
+        :messageActions.prop="messageActions"
+        :menuActions.prop="menuActions"
         :show-add-room="true"
         :single-room="false"
         @fetch-messages="onFetchMessages"
         @send-message="onSendMessage"
         @add-room="onAddRoom"
+        @message-action-handler="onMessageAction"
+        @menu-action-handler="onMenuAction"
       ></vue-advanced-chat>
     </div>
 

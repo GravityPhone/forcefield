@@ -6,7 +6,9 @@ import type { ChatProfile } from '@/types'
 const props = defineProps<{ members: ChatProfile[]; activeChat: ChatListItem | null }>()
 
 const chat = useChatStore()
-const expanded = ref(false)
+// v-model so the chat header's own "Show members" menu action can toggle
+// this from outside, in addition to the toggle button below.
+const expanded = defineModel<boolean>('expanded', { default: false })
 const openMenuFor = ref<string | null>(null)
 
 function toggleMenu(id: string) {

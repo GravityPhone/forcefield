@@ -15,7 +15,7 @@ const messages = ref<ChatMessage[]>([
   {
     id: 0,
     role: 'assistant',
-    text: "Hi! I'm the Forcefield assistant. I can't see your live canvassing data yet — that integration is coming — but I'm happy to help with canvassing strategy, scripts, and general questions.",
+    text: "Hi! I'm the Forcefield assistant. I can query your live canvassing data (knocks, outcomes, addresses) and use Google Maps — ask me things like \"how many doors were signed today\" or \"what are the last 5 outcomes logged\".",
   },
 ])
 
@@ -113,8 +113,8 @@ async function send() {
       </form>
       <p class="muted disclaimer">
         Responses come from Claude Haiku via your API key (set in
-        <router-link to="/admin/settings">Settings</router-link>). The assistant can't see live
-        canvassing data yet.
+        <router-link to="/admin/settings">Settings</router-link>). The assistant can read live
+        canvassing data (not private user chats) and use Google Maps.
       </p>
     </div>
   </AppShell>
