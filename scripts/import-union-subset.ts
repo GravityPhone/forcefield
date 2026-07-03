@@ -20,7 +20,7 @@
 // Required env vars for a real run (values in gitignored KEYS-AND-ACCESS.md —
 // NEVER commit them):
 //   SUPABASE_SERVICE_ROLE_KEY   bypasses RLS for the insert
-//   GOOGLE_MAPS_API_KEY         optional; falls back to the demo key
+//   GOOGLE_MAPS_API_KEY         required only when running with --geocode
 //
 // Real runs write to the live database — per project process rules, only run
 // this with explicit user approval.
@@ -48,7 +48,7 @@ const GEOCODE_DELAY_MS = 60
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? 'https://whrliwbdxjdcksbvwkrc.supabase.co'
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-const MAPS_KEY = process.env.GOOGLE_MAPS_API_KEY ?? 'AIzaSyAQ2t13RtoidSYWPNJmL5R5PVQDzJvZtOs'
+const MAPS_KEY = process.env.GOOGLE_MAPS_API_KEY
 
 const dryRun = process.argv.includes('--dry-run')
 const doGeocode = process.argv.includes('--geocode')
@@ -129,6 +129,10 @@ async function main() {
 
   if (!SERVICE_ROLE_KEY) {
     console.error('SUPABASE_SERVICE_ROLE_KEY is not set. See KEYS-AND-ACCESS.md (gitignored).')
+    process.exit(1)
+  }
+  if (doGeocode && !MAPS_KEY) {
+    console.error('GOOGLE_MAPS_API_KEY is not set. See KEYS-AND-ACCESS.md (gitignored).')
     process.exit(1)
   }
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {

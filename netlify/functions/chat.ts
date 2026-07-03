@@ -26,7 +26,7 @@ const TOOL_TIMEOUT_MS = 4000
 
 const SUPABASE_URL = 'https://whrliwbdxjdcksbvwkrc.supabase.co'
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
-const MAPS_KEY = process.env.GOOGLE_MAPS_API_KEY ?? 'AIzaSyAQ2t13RtoidSYWPNJmL5R5PVQDzJvZtOs'
+const MAPS_KEY = process.env.GOOGLE_MAPS_API_KEY ?? ''
 
 const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 
