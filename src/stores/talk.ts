@@ -2,8 +2,12 @@ import { defineStore } from 'pinia'
 import { supabase } from '@/lib/supabase'
 import { deleteKnock, submitKnock } from '@/lib/knockQueue'
 import { geocodeAndCache } from '@/lib/geocode'
+import { findNextOnStreet, type WalkDirection, type WalkParity } from '@/lib/streetWalk'
 import { useAuthStore } from './auth'
 import type { Address, KnockLog, KnockOutcome, NewKnock, Person } from '@/types'
+
+const WALK_DIRECTION_KEY = 'forcefield.walk_direction'
+const WALK_PARITY_KEY = 'forcefield.walk_parity'
 
 /** Person search hit with its address embedded (null for unlinked walk-ups). */
 export interface PersonHit extends Person {
@@ -26,6 +30,11 @@ interface TalkState {
    * it; both write through activeClientId so it's the same DB row. */
   pendingOutcome: KnockOutcome | null
   activeClientId: string | null
+  /** Which way Next auto-advances on the current street — a per-device
+   * preference (set from Hunt mode) mimicking how canvassers actually walk:
+   * house numbers ascending/descending, one side of the street or both. */
+  walkDirection: WalkDirection
+  walkParity: WalkParity
 }
 
 const SEARCH_DEBOUNCE_MS = 250
@@ -44,6 +53,8 @@ export const useTalkStore = defineStore('talk', {
     notes: '',
     pendingOutcome: null,
     activeClientId: null,
+    walkDirection: (localStorage.getItem(WALK_DIRECTION_KEY) as WalkDirection) || 'ascending',
+    walkParity: (localStorage.getItem(WALK_PARITY_KEY) as WalkParity) || 'both',
   }),
 
   actions: {
@@ -185,15 +196,32 @@ export const useTalkStore = defineStore('talk', {
       }
     },
 
-    /** Canvasser confirms before the screen clears — no silent auto-advance.
-     * Keeps the address + roster loaded: door conversations often involve
-     * several residents; switching houses happens via search or Hunt. The
-     * outcome itself was already written by logOutcome — this just moves on. */
-    confirmNext() {
+    setWalkDirection(direction: WalkDirection) {
+      this.walkDirection = direction
+      localStorage.setItem(WALK_DIRECTION_KEY, direction)
+    },
+
+    setWalkParity(parity: WalkParity) {
+      this.walkParity = parity
+      localStorage.setItem(WALK_PARITY_KEY, parity)
+    },
+
+    /** Canvasser confirms before the screen clears. The outcome itself was
+     * already written by logOutcome — this just moves on, auto-advancing to
+     * the next house on the street per walkDirection/walkParity (falling
+     * back to staying put, roster and all, if there's no next house — e.g.
+     * end of the street — since door conversations often involve several
+     * residents anyway). */
+    async confirmNext() {
       this.pendingOutcome = null
       this.activeClientId = null
       this.selectedPerson = null
       this.notes = ''
+
+      const current = this.selectedAddress
+      if (!current) return
+      const next = await findNextOnStreet(current, this.walkDirection, this.walkParity)
+      if (next) await this.loadAddress(next.id)
     },
   },
 })

@@ -165,7 +165,7 @@ async function addPeople() {
 </script>
 
 <template>
-  <AppShell title="Chat">
+  <AppShell>
     <div class="chat-page">
       <div v-if="chat.activeChat && chat.activeChat.kind !== 'global'" class="active-bar">
         <span class="muted">{{ chat.chatTitle(chat.activeChat) }}</span>

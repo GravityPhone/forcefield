@@ -8,7 +8,7 @@ const talk = useTalkStore()
 </script>
 
 <template>
-  <AppShell title="Canvass">
+  <AppShell>
     <div class="tab-bar" role="tablist">
       <button
         class="tab"

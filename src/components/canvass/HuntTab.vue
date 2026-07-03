@@ -6,6 +6,7 @@ import { geocodeAndCache } from '@/lib/geocode'
 import { supabase } from '@/lib/supabase'
 import { useTalkStore } from '@/stores/talk'
 import { OUTCOME_HEX, PIN_DEFAULT_HEX, knockButtonHex } from '@/lib/outcomes'
+import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import OutcomeIndicatorGrid from './OutcomeIndicatorGrid.vue'
 import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockOutcome, Person } from '@/types'
 
@@ -212,17 +213,6 @@ const locatedStatusClass = computed(() => {
 // the same street (capped at 50 — geocoding only happens on this explicit
 // tap, never on page load, so API cost stays bounded and predictable). ---
 
-/** `street` stores the FULL address line ("123 Walnut St"), so matching by
- * house-number-stripped name is required to find neighbors — matching the
- * raw `street` column directly only ever matches that one exact house. */
-function streetNameOf(line: string): string {
-  return line.replace(/^\d+\s*/, '').trim().toUpperCase()
-}
-
-function houseNumber(street: string): number {
-  return parseInt(street.match(/^\d+/)?.[0] ?? '0', 10)
-}
-
 function flatDistance(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
   return (a.lat - b.lat) ** 2 + (a.lng - b.lng) ** 2
 }
@@ -298,6 +288,31 @@ onUnmounted(() => {
       aria-label="Search people or addresses"
       @input="onListInput(($event.target as HTMLInputElement).value)"
     />
+
+    <!-- Governs Talk mode's "Next" auto-advance — which way to walk a
+         street once you start logging outcomes. -->
+    <div class="walk-order">
+      <span class="muted walk-label">Next house:</span>
+      <select
+        class="walk-select"
+        :value="talk.walkDirection"
+        aria-label="Walk direction"
+        @change="talk.setWalkDirection(($event.target as HTMLSelectElement).value as 'ascending' | 'descending')"
+      >
+        <option value="ascending">Ascending</option>
+        <option value="descending">Descending</option>
+      </select>
+      <select
+        class="walk-select"
+        :value="talk.walkParity"
+        aria-label="Walk side of street"
+        @change="talk.setWalkParity(($event.target as HTMLSelectElement).value as 'both' | 'even' | 'odd')"
+      >
+        <option value="both">Both sides</option>
+        <option value="even">Evens only</option>
+        <option value="odd">Odds only</option>
+      </select>
+    </div>
 
     <!-- Whatever was last clicked — a pin on the map or a result below —
          always surfaces here, whether or not it matches the current search. -->
@@ -407,6 +422,30 @@ onUnmounted(() => {
 .street-search:focus {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
+}
+
+.walk-order {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.walk-label {
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.walk-select {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.88rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: inherit;
 }
 
 .located-card {

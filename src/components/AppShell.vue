@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useAuthStore, roleHome } from '@/stores/auth'
 import { ROLE_LABELS } from '@/types'
 
-defineProps<{ title: string }>()
+defineProps<{ title?: string }>()
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -46,7 +46,7 @@ async function handleLogout() {
 
     <main class="shell-main">
       <div class="page page-wide">
-        <h1 class="page-title">{{ title }}</h1>
+        <h1 v-if="title" class="page-title">{{ title }}</h1>
         <slot />
       </div>
     </main>
