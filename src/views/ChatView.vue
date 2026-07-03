@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { register } from 'vue-advanced-chat'
 import AppShell from '@/components/AppShell.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
+import ChatMemberList from '@/components/chat/ChatMemberList.vue'
 import { useChatStore } from '@/stores/chat'
 import type { ChatProfile } from '@/types'
 
@@ -21,8 +22,21 @@ const pickedToAdd = ref<ChatProfile[]>([])
 
 const joinableSquads = computed(() => chat.chats.filter((c) => c.kind === 'squad' && !c.isMember))
 
-onMounted(() => void chat.loadChats())
-onUnmounted(() => chat.closeChat())
+// The global room has no chat_members rows (everyone's implicitly in it),
+// so its member list is every org user instead of the room's own roster.
+const currentMembers = computed(() =>
+  chat.activeChat?.kind === 'global' ? chat.orgMembers : (chat.activeChat?.members ?? []),
+)
+
+onMounted(() => {
+  void chat.loadChats()
+  void chat.loadOrgMembers()
+  chat.subscribeToMembership()
+})
+onUnmounted(() => {
+  chat.closeChat()
+  chat.unsubscribeFromMembership()
+})
 
 // --- Adapt our data model to vue-advanced-chat's Room/Message shapes ---
 
@@ -130,6 +144,8 @@ async function addPeople() {
         </button>
       </div>
 
+      <ChatMemberList v-if="chat.activeChat" :members="currentMembers" :active-chat="chat.activeChat" />
+
       <vue-advanced-chat
         v-if="chat.myId"
         height="65dvh"
@@ -138,6 +154,7 @@ async function addPeople() {
         :rooms-loaded="!chat.loadingChats"
         :messages.prop="vacMessages"
         :messages-loaded="!chat.loadingMessages"
+        :usernameOptions.prop="{ minUsers: 0, currentUser: false }"
         :show-add-room="true"
         :single-room="false"
         @fetch-messages="onFetchMessages"

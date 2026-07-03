@@ -20,10 +20,14 @@ interface ChatState {
    * on demand (global chat can have senders we haven't seen yet). */
   profiles: Record<string, ChatProfile>
   sendError: string
+  /** Every user in the org — the global room has no chat_members rows (by
+   * design, everyone's implicitly in it), so its member list is this instead. */
+  orgMembers: ChatProfile[]
 }
 
 const MESSAGE_PAGE = 100
 let channel: RealtimeChannel | null = null
+let membershipChannel: RealtimeChannel | null = null
 
 /** Supabase's autoRefreshToken can be mid-rotation when a write fires right
  * after navigating to a new tab/view — the request goes out on a
@@ -45,6 +49,7 @@ export const useChatStore = defineStore('chat', {
     loadingMessages: false,
     profiles: {},
     sendError: '',
+    orgMembers: [],
   }),
 
   getters: {
@@ -152,6 +157,29 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
+    /** Live-refresh the chat list when someone adds you to a new DM/squad —
+     * without this, a newly-added chat only appeared after a manual reload. */
+    subscribeToMembership() {
+      this.unsubscribeFromMembership()
+      const myId = this.myId
+      if (!myId) return
+      membershipChannel = supabase
+        .channel(`chat-membership-${myId}`)
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'chat_members', filter: `user_id=eq.${myId}` },
+          () => void this.loadChats(),
+        )
+        .subscribe()
+    },
+
+    unsubscribeFromMembership() {
+      if (membershipChannel) {
+        void supabase.removeChannel(membershipChannel)
+        membershipChannel = null
+      }
+    },
+
     async ensureSenderProfiles(messages: ChatMessage[]) {
       const missing = [...new Set(messages.map((m) => m.sender_id))].filter(
         (id) => !this.profiles[id],
@@ -246,6 +274,16 @@ export const useChatStore = defineStore('chat', {
       }))
       await supabase.from('chat_members').insert(rows)
       await this.loadChats()
+    },
+
+    /** All org members, for the global room's member list (which has no
+     * chat_members rows of its own). */
+    async loadOrgMembers() {
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, username, display_name')
+        .order('username')
+      this.orgMembers = (data ?? []) as ChatProfile[]
     },
 
     /** Search app users for the member pickers (excludes yourself). */

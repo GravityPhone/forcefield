@@ -22,3 +22,24 @@ export const OUTCOME_HEX: Record<KnockOutcome, string> = Object.fromEntries(
 
 /** Pin color for addresses with no knock logged yet. */
 export const PIN_DEFAULT_HEX = '#2f6fed'
+
+/** Coarse 4-bucket status color for the Hunt "Knock" button — green once
+ * signed, yellow while still a maybe, red once it's a closed no (didn't
+ * sign / skip / hostile), blue for not-home or never-visited (nothing
+ * useful learned yet). Distinct from OUTCOME_HEX, which gives each of the
+ * six outcomes its own color for the pins/indicator grid. */
+export function knockButtonHex(outcome: KnockOutcome | null | undefined): string {
+  switch (outcome) {
+    case 'signed':
+      return '#2e9e5b'
+    case 'maybe':
+      return '#e0a02e'
+    case 'didnt_sign':
+    case 'skip':
+    case 'hostile':
+      return '#d64545'
+    case 'not_home':
+    default:
+      return '#2f6fed'
+  }
+}

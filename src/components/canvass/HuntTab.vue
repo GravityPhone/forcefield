@@ -2,33 +2,41 @@
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import { loadMaps } from '@/lib/googleMaps'
+import { geocodeAndCache } from '@/lib/geocode'
 import { supabase } from '@/lib/supabase'
 import { useTalkStore } from '@/stores/talk'
-import { OUTCOME_HEX, PIN_DEFAULT_HEX } from '@/lib/outcomes'
-import type { Address, HouseholdLatestKnock, KnockOutcome } from '@/types'
+import { OUTCOME_HEX, PIN_DEFAULT_HEX, knockButtonHex } from '@/lib/outcomes'
+import OutcomeIndicatorGrid from './OutcomeIndicatorGrid.vue'
+import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockOutcome, Person } from '@/types'
 
 // Fallback map center: Richwood, OH (the imported demo subset).
 const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
+const NEARBY_CAP = 50
+
+interface PersonHit extends Person {
+  addresses: Pick<Address, 'id' | 'street' | 'unit' | 'city'> | null
+}
 
 const talk = useTalkStore()
 
 const mapEl = ref<HTMLElement | null>(null)
 const listQuery = ref('')
-const streetResults = ref<Address[]>([])
+const searchResults = ref<{ persons: PersonHit[]; addresses: Address[] }>({ persons: [], addresses: [] })
 const searching = ref(false)
+const locating = ref(false)
+const locatedAddressId = ref<string | null>(null)
+const locatedAddress = ref<Address | null>(null)
 const statusByHousehold = ref<Map<string, KnockOutcome>>(new Map())
+const summaryByHousehold = ref<Map<string, HouseholdKnockSummary>>(new Map())
 const loadError = ref('')
-const expandedStreet = ref<string | null>(null)
 
 let map: google.maps.Map | null = null
 let clusterer: MarkerClusterer | null = null
 let markersByAddress = new Map<string, google.maps.Marker>()
 let initStarted = false
 let searchTimer: ReturnType<typeof setTimeout> | undefined
+let currentZoom = 14
 
-// Hunt is the door-knocking helper: find an address here, log it on Talk.
-// Lazy-init on first activation so the Maps script never loads for
-// canvassers who stay on the Talk tab.
 watch(
   () => talk.activeTab,
   (tab) => {
@@ -44,29 +52,66 @@ watch(
 )
 
 /** Only geocoded addresses get pins — a much smaller, growing-over-time set
- * (Talk mode geocodes on view), so no arbitrary cap/ordering bias here. */
+ * (Talk mode, and now Hunt's "locate", both geocode on demand). */
 async function fetchMapData() {
-  const [addressesRes, statusRes] = await Promise.all([
-    supabase.from('addresses').select('*').not('lat', 'is', null).limit(1000),
+  const [addressesRes, statusRes, summaryRes] = await Promise.all([
+    supabase.from('addresses').select('*').not('lat', 'is', null).limit(2000),
     supabase.from('household_latest_knock').select('*'),
+    supabase.from('household_knock_summary').select('*'),
   ])
   if (addressesRes.error) throw addressesRes.error
-  statusByHousehold.value = new Map(
-    ((statusRes.data ?? []) as HouseholdLatestKnock[]).map((s) => [s.household_id, s.outcome]),
-  )
+  applyStatusAndSummary(statusRes.data, summaryRes.data)
   return (addressesRes.data ?? []) as Address[]
+}
+
+function applyStatusAndSummary(
+  statusData: HouseholdLatestKnock[] | null,
+  summaryData: HouseholdKnockSummary[] | null,
+) {
+  statusByHousehold.value = new Map((statusData ?? []).map((s) => [s.household_id, s.outcome]))
+  summaryByHousehold.value = new Map((summaryData ?? []).map((s) => [s.household_id, s]))
+}
+
+/** Dynamic pin size: shrinks as you zoom out, grows as you zoom in, so the
+ * map doesn't get cluttered with oversized dots when many doors are close
+ * together. Located pin always stands out a bit larger than its neighbors. */
+function baseScale(zoom: number): number {
+  return Math.max(3, Math.min(8, zoom - 9))
 }
 
 function pinIcon(addressId: string): google.maps.Symbol {
   const outcome = statusByHousehold.value.get(addressId)
+  const isLocated = addressId === locatedAddressId.value
+  const scale = baseScale(currentZoom)
   return {
     path: google.maps.SymbolPath.CIRCLE,
-    scale: 9,
+    scale: isLocated ? scale + 4 : scale,
     fillColor: outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX,
     fillOpacity: 1,
-    strokeColor: '#ffffff',
-    strokeWeight: 1.5,
+    strokeColor: isLocated ? '#111' : '#ffffff',
+    strokeWeight: isLocated ? 3 : 1.5,
   }
+}
+
+function refreshAllPinScales() {
+  for (const [id, marker] of markersByAddress) marker.setIcon(pinIcon(id))
+}
+
+function addOrUpdateMarker(a: Address) {
+  if (a.lat == null || a.lng == null || !map) return
+  let marker = markersByAddress.get(a.id)
+  if (!marker) {
+    marker = new google.maps.Marker({
+      position: { lat: a.lat, lng: a.lng },
+      title: `${a.street}${a.unit ? ' ' + a.unit : ''}`,
+    })
+    marker.addListener('click', () => void locateAddress(a))
+    markersByAddress.set(a.id, marker)
+    clusterer?.addMarker(marker)
+  } else {
+    marker.setPosition({ lat: a.lat, lng: a.lng })
+  }
+  marker.setIcon(pinIcon(a.id))
 }
 
 async function initialize() {
@@ -82,86 +127,155 @@ async function initialize() {
 
   map = new google.maps.Map(mapEl.value, {
     center: FALLBACK_CENTER,
-    zoom: 14,
+    zoom: currentZoom,
     streetViewControl: false,
     mapTypeControl: false,
     fullscreenControl: false,
   })
+  map.addListener('zoom_changed', () => {
+    currentZoom = map!.getZoom() ?? currentZoom
+    refreshAllPinScales()
+  })
+  clusterer = new MarkerClusterer({ map, markers: [] })
 
   const bounds = new google.maps.LatLngBounds()
-  const markers: google.maps.Marker[] = []
   for (const a of mapAddresses) {
     if (a.lat == null || a.lng == null) continue
-    const marker = new google.maps.Marker({
-      position: { lat: a.lat, lng: a.lng },
-      title: `${a.street}${a.unit ? ' ' + a.unit : ''}`,
-      icon: pinIcon(a.id),
-    })
-    marker.addListener('click', () => void talk.loadAddress(a.id))
-    markersByAddress.set(a.id, marker)
-    markers.push(marker)
+    addOrUpdateMarker(a)
     bounds.extend({ lat: a.lat, lng: a.lng })
   }
-  clusterer = new MarkerClusterer({ map, markers })
   if (!bounds.isEmpty()) map.fitBounds(bounds, 48)
 }
 
-/** Re-color pins from the latest knock statuses (cheap: one view query). */
+/** Re-pull statuses/summaries and recolor existing pins (cheap: two view
+ * queries). Called whenever Hunt is revisited after logging knocks. */
 async function refreshStatuses() {
-  const { data, error } = await supabase.from('household_latest_knock').select('*')
-  if (error || !data) return
-  statusByHousehold.value = new Map(
-    (data as HouseholdLatestKnock[]).map((s) => [s.household_id, s.outcome]),
-  )
-  for (const [id, marker] of markersByAddress) marker.setIcon(pinIcon(id))
+  const [statusRes, summaryRes] = await Promise.all([
+    supabase.from('household_latest_knock').select('*'),
+    supabase.from('household_knock_summary').select('*'),
+  ])
+  applyStatusAndSummary(statusRes.data, summaryRes.data)
+  refreshAllPinScales()
 }
 
-// Context-dependent list: searching a street name queries the DB live and
-// orders alphabetically by street NAME (not a pre-fetched, arbitrarily
-// capped slice — with 20k+ addresses, capping by naive string order on the
-// full "123 MAIN ST" line put nearly every result starting with digit "1"
-// at the front, since house numbers sort lexicographically).
+// --- Search (people + addresses, like Talk's search) ---
+
 function onListInput(value: string) {
   listQuery.value = value
   clearTimeout(searchTimer)
   const q = value.trim()
   if (q.length < 2) {
-    streetResults.value = []
+    searchResults.value = { persons: [], addresses: [] }
     searching.value = false
     return
   }
   searching.value = true
   searchTimer = setTimeout(async () => {
-    const { data } = await supabase
-      .from('addresses')
-      .select('*')
-      .ilike('street', `%${q}%`)
-      .order('street')
-      .limit(100)
-    if (listQuery.value.trim() !== q) return // superseded by a newer keystroke
-    streetResults.value = (data ?? []) as Address[]
+    const pattern = `%${q}%`
+    const [personsRes, addressesRes] = await Promise.all([
+      supabase
+        .from('persons')
+        .select('*, addresses(id, street, unit, city)')
+        .ilike('name', pattern)
+        .limit(20),
+      supabase.from('addresses').select('*').ilike('street', pattern).limit(20),
+    ])
+    if (listQuery.value.trim() !== q) return
+    searchResults.value = {
+      persons: (personsRes.data ?? []) as PersonHit[],
+      addresses: (addressesRes.data ?? []) as Address[],
+    }
     searching.value = false
   }, 250)
 }
 
-// A street group with several units expands to its unit rows. Ungeocoded
-// addresses still appear here even though they have no pin.
-const streetGroups = computed(() => {
-  const groups = new Map<string, Address[]>()
-  for (const a of streetResults.value) {
-    const list = groups.get(a.street)
-    if (list) list.push(a)
-    else groups.set(a.street, [a])
-  }
-  return [...groups.entries()]
+function summaryFor(addressId: string | null | undefined): HouseholdKnockSummary | null {
+  if (!addressId) return null
+  return summaryByHousehold.value.get(addressId) ?? null
+}
+
+/** Knock button color reflects the latest outcome at that door — same data
+ * already driving the map pins (household_latest_knock), just re-bucketed
+ * into 4 colors instead of the pins' 6. */
+function knockColorFor(addressId: string | null | undefined): string {
+  if (!addressId) return knockButtonHex(null)
+  return knockButtonHex(statusByHousehold.value.get(addressId))
+}
+
+const locatedStatusClass = computed(() => {
+  const s = summaryFor(locatedAddress.value?.id)
+  if (!s || s.total_knocks === 0) return 'card-not-knocked'
+  return s.reached ? 'card-reached' : 'card-not-reached'
 })
 
-function pickGroup(street: string, rows: Address[]) {
-  if (rows.length === 1) {
-    void talk.loadAddress(rows[0].id) // flips to Talk with roster loaded
-  } else {
-    expandedStreet.value = expandedStreet.value === street ? null : street
+// --- Locate: pan/zoom the map, highlight the pin, fill in every house on
+// the same street (capped at 50 — geocoding only happens on this explicit
+// tap, never on page load, so API cost stays bounded and predictable). ---
+
+/** `street` stores the FULL address line ("123 Walnut St"), so matching by
+ * house-number-stripped name is required to find neighbors — matching the
+ * raw `street` column directly only ever matches that one exact house. */
+function streetNameOf(line: string): string {
+  return line.replace(/^\d+\s*/, '').trim().toUpperCase()
+}
+
+function houseNumber(street: string): number {
+  return parseInt(street.match(/^\d+/)?.[0] ?? '0', 10)
+}
+
+function flatDistance(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  return (a.lat - b.lat) ** 2 + (a.lng - b.lng) ** 2
+}
+
+async function locateAddress(address: Address) {
+  if (locating.value) return
+  locating.value = true
+  try {
+    if (address.lat == null || address.lng == null) {
+      const loc = await geocodeAndCache(address)
+      if (loc) Object.assign(address, loc)
+    }
+    locatedAddressId.value = address.id
+    locatedAddress.value = address
+    addOrUpdateMarker(address)
+
+    if (address.lat != null && address.lng != null && map) {
+      map.panTo({ lat: address.lat, lng: address.lng })
+      map.setZoom(Math.max(map.getZoom() ?? 14, 17))
+    }
+
+    const targetName = streetNameOf(address.street)
+    const { data } = await supabase.from('addresses').select('*').ilike('street', `%${targetName}`)
+    const rows = ((data ?? []) as Address[]).filter((a) => streetNameOf(a.street) === targetName)
+    const geocoded = rows.filter((a) => a.lat != null && a.lng != null)
+    const missing = rows.filter((a) => a.lat == null || a.lng == null)
+
+    if (address.lat != null && address.lng != null) {
+      const origin = { lat: address.lat, lng: address.lng }
+      geocoded.sort(
+        (a, b) => flatDistance({ lat: a.lat!, lng: a.lng! }, origin) - flatDistance({ lat: b.lat!, lng: b.lng! }, origin),
+      )
+    }
+    missing.sort((a, b) => Math.abs(houseNumber(a.street) - houseNumber(address.street)) -
+      Math.abs(houseNumber(b.street) - houseNumber(address.street)))
+
+    for (const a of missing) {
+      if (geocoded.length >= NEARBY_CAP) break
+      const loc = await geocodeAndCache(a)
+      if (loc) {
+        Object.assign(a, loc)
+        geocoded.push(a)
+      }
+    }
+
+    for (const a of geocoded.slice(0, NEARBY_CAP)) addOrUpdateMarker(a)
+  } finally {
+    locating.value = false
   }
+}
+
+function knock(addressId: string, personId?: string) {
+  void talk.loadAddress(addressId, personId)
 }
 
 onUnmounted(() => {
@@ -174,41 +288,88 @@ onUnmounted(() => {
   <div class="hunt">
     <div ref="mapEl" class="map"></div>
     <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
+    <p v-if="locating" class="muted map-error">Locating nearby doors…</p>
 
     <input
       :value="listQuery"
       class="street-search"
       type="search"
-      placeholder="Search a street name…"
-      aria-label="Search addresses by street"
+      placeholder="Search a name or street…"
+      aria-label="Search people or addresses"
       @input="onListInput(($event.target as HTMLInputElement).value)"
     />
 
-    <div class="street-list">
+    <!-- Whatever was last clicked — a pin on the map or a result below —
+         always surfaces here, whether or not it matches the current search. -->
+    <div v-if="locatedAddress" class="card located-card" :class="locatedStatusClass">
+      <span class="result-left">
+        <span class="result-name">
+          {{ locatedAddress.street }}{{ locatedAddress.unit ? ' ' + locatedAddress.unit : '' }}
+        </span>
+      </span>
+      <OutcomeIndicatorGrid :summary="summaryFor(locatedAddress.id)" />
+      <button
+        class="btn btn-sm knock-btn"
+        :style="{ background: knockColorFor(locatedAddress.id), color: 'var(--accent-contrast)' }"
+        @click="knock(locatedAddress.id)"
+      >
+        Knock
+      </button>
+    </div>
+
+    <div class="results-list">
       <p v-if="listQuery.trim().length < 2" class="muted empty">
-        Type at least 2 characters of a street name to search.
+        Type at least 2 characters of a name or street.
       </p>
       <p v-else-if="searching" class="muted empty">Searching…</p>
       <template v-else>
-        <div v-for="[street, rows] in streetGroups" :key="street" class="street-group">
-          <button class="street-row" @click="pickGroup(street, rows)">
-            <span class="street-name">{{ street }}</span>
-            <span class="muted unit-count">
-              {{ rows.length === 1 ? rows[0].city : rows.length + ' units' }}
-            </span>
-          </button>
-          <div v-if="expandedStreet === street && rows.length > 1" class="units">
-            <button
-              v-for="a in rows"
-              :key="a.id"
-              class="unit-row"
-              @click="talk.loadAddress(a.id)"
-            >
-              {{ a.unit || '(main)' }} <span class="muted">{{ a.city }}</span>
-            </button>
-          </div>
+        <div v-if="!searchResults.persons.length && !searchResults.addresses.length" class="muted empty">
+          No matches.
         </div>
-        <p v-if="!streetGroups.length" class="muted empty">No addresses match.</p>
+
+        <button
+          v-for="p in searchResults.persons"
+          :key="'p-' + p.id"
+          class="result-row"
+          :class="{ 'result-active': p.household_id === locatedAddressId }"
+          @click="p.addresses && locateAddress(p.addresses as Address)"
+        >
+          <span class="result-left">
+            <span class="result-name">{{ p.name }}</span>
+            <span class="muted result-sub">
+              {{ p.addresses ? `${p.addresses.street}${p.addresses.unit ? ' ' + p.addresses.unit : ''}` : 'No address on file' }}
+            </span>
+          </span>
+          <OutcomeIndicatorGrid :summary="summaryFor(p.household_id)" />
+          <button
+            v-if="p.household_id"
+            class="btn btn-sm knock-btn"
+            :style="{ background: knockColorFor(p.household_id), color: 'var(--accent-contrast)' }"
+            @click.stop="knock(p.household_id!, p.id)"
+          >
+            Knock
+          </button>
+        </button>
+
+        <button
+          v-for="a in searchResults.addresses"
+          :key="'a-' + a.id"
+          class="result-row"
+          :class="{ 'result-active': a.id === locatedAddressId }"
+          @click="locateAddress(a)"
+        >
+          <span class="result-left">
+            <span class="result-name">{{ a.street }}{{ a.unit ? ' ' + a.unit : '' }}</span>
+          </span>
+          <OutcomeIndicatorGrid :summary="summaryFor(a.id)" />
+          <button
+            class="btn btn-sm knock-btn"
+            :style="{ background: knockColorFor(a.id), color: 'var(--accent-contrast)' }"
+            @click.stop="knock(a.id)"
+          >
+            Knock
+          </button>
+        </button>
       </template>
     </div>
   </div>
@@ -248,7 +409,33 @@ onUnmounted(() => {
   outline-offset: -1px;
 }
 
-.street-list {
+.located-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 2px solid var(--accent);
+  border-left-width: 6px;
+  background: var(--surface);
+}
+
+/* Distinct color scheme per knock status — scannable at a glance. */
+.located-card.card-not-knocked {
+  border-left-color: var(--text-muted);
+}
+
+.located-card.card-reached {
+  border-left-color: var(--success);
+  background: color-mix(in srgb, var(--success) 8%, var(--surface));
+}
+
+.located-card.card-not-reached {
+  border-left-color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+}
+
+.results-list {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
@@ -256,8 +443,7 @@ onUnmounted(() => {
   overflow-y: auto;
 }
 
-.street-row,
-.unit-row {
+.result-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -274,24 +460,40 @@ onUnmounted(() => {
   text-align: left;
 }
 
-.street-name {
-  font-weight: 600;
+.result-row.result-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 
-.unit-count {
-  font-size: 0.85rem;
+.result-left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+
+.result-name,
+.result-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.units {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin: 0.25rem 0 0.25rem 1rem;
+.result-name {
+  font-weight: 600;
 }
 
-.unit-row {
-  min-height: 44px;
+.result-sub {
+  font-size: 0.82rem;
+}
+
+.knock-btn {
+  flex-shrink: 0;
+  font-weight: 700;
 }
 
 .empty {

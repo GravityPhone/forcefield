@@ -48,7 +48,7 @@ const GEOCODE_DELAY_MS = 60
 
 const SUPABASE_URL = process.env.SUPABASE_URL ?? 'https://whrliwbdxjdcksbvwkrc.supabase.co'
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
-const MAPS_KEY = process.env.GOOGLE_MAPS_API_KEY ?? 'AIzaSyADqvazUypiLr81MNwwiE6MJXUQ9nr6Kis'
+const MAPS_KEY = process.env.GOOGLE_MAPS_API_KEY ?? 'AIzaSyAQ2t13RtoidSYWPNJmL5R5PVQDzJvZtOs'
 
 const dryRun = process.argv.includes('--dry-run')
 const doGeocode = process.argv.includes('--geocode')

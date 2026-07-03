@@ -169,7 +169,7 @@ Forcefield is a Vue-based canvassing app for door-to-door and crowd petitioning,
 ```
 VITE_SUPABASE_URL=https://whrliwbdxjdcksbvwkrc.supabase.co
 VITE_SUPABASE_ANON_KEY=<publishable/anon key — safe to expose, access controlled by RLS policies>
-VITE_GOOGLE_MAPS_API_KEY=AIzaSyADqvazUypiLr81MNwwiE6MJXUQ9nr6Kis  # demo key — restrict by HTTP referrer (your domain + localhost) and by API (Maps JavaScript, Places, Geocoding only) before real use
+VITE_GOOGLE_MAPS_API_KEY=AIzaSyAQ2t13RtoidSYWPNJmL5R5PVQDzJvZtOs  # billing-enabled key with Maps JavaScript + Geocoding APIs, restricted by HTTP referrer
 ```
 
 **Secret (NEVER in this doc, NEVER committed to GitHub — .env + .gitignore only, or Netlify env vars for deploy):**

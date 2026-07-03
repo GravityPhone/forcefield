@@ -94,12 +94,6 @@ async function handleLogout() {
   font-size: 0.92rem;
 }
 
-.btn-sm {
-  min-height: 36px;
-  padding: 0.35rem 0.8rem;
-  font-size: 0.85rem;
-}
-
 .admin-nav {
   background: var(--surface);
   border-bottom: 1px solid var(--border);

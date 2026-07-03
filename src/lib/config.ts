@@ -9,7 +9,7 @@ export const SUPABASE_ANON_KEY =
   import.meta.env.VITE_SUPABASE_ANON_KEY ?? 'sb_publishable_JcZe2JFmhQGFK_Mddet4EA_IWZw4727'
 
 export const GOOGLE_MAPS_API_KEY =
-  import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? 'AIzaSyADqvazUypiLr81MNwwiE6MJXUQ9nr6Kis'
+  import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? 'AIzaSyAQ2t13RtoidSYWPNJmL5R5PVQDzJvZtOs'
 
 // Usernames are presented to users; Supabase Auth requires an email underneath.
 // example.com is RFC-reserved (never deliverable) AND passes Supabase's email

@@ -87,6 +87,18 @@ export interface HouseholdLatestKnock {
   occurred_at: string
 }
 
+export interface HouseholdKnockSummary {
+  household_id: string
+  total_knocks: number
+  signed_count: number
+  didnt_sign_count: number
+  maybe_count: number
+  not_home_count: number
+  skip_count: number
+  hostile_count: number
+  reached: boolean
+}
+
 export type ChatKind = 'global' | 'squad' | 'dm'
 
 export interface Chat {
