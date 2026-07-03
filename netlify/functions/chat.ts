@@ -17,6 +17,7 @@
 
 import Anthropic from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
+import * as ss from 'simple-statistics'
 
 const MODEL = 'claude-haiku-4-5-20251001'
 const MAX_TOKENS = 1024
@@ -50,7 +51,10 @@ const SYSTEM_PROMPT =
   '- profiles(id, username, display_name, role, team_id) — role is canvasser/team_lead/admin\n' +
   '- household_knock_summary(household_id -> addresses.id, total_knocks, signed_count, ' +
   'didnt_sign_count, maybe_count, not_home_count, skip_count, hostile_count, reached)\n' +
-  '- household_latest_knock(household_id -> addresses.id, outcome, occurred_at)'
+  '- household_latest_knock(household_id -> addresses.id, outcome, occurred_at)\n\n' +
+  'For statistical questions (trends, correlation, regression, clustering), pull the raw ' +
+  'numbers with query_database first, then pass them to compute_statistics rather than ' +
+  'computing by hand.'
 
 interface ChatRequest {
   apiKey?: unknown
@@ -143,6 +147,50 @@ const TOOLS: Anthropic.Tool[] = [
       required: ['lat1', 'lng1', 'lat2', 'lng2'],
     },
   },
+  {
+    name: 'compute_statistics',
+    description:
+      'Run a statistical computation over numeric data pulled via query_database. ' +
+      "Single-array operations (use `values`): mean, median, mode, min, max, sum, variance, " +
+      "standardDeviation, quantile (needs `param` in [0,1]), interquartileRange, skewness, " +
+      "kurtosis, geometricMean, harmonicMean, coefficientOfVariation, ckmeans (needs `param` " +
+      "= number of clusters, returns each cluster's values). Two-array operations (use " +
+      "`values` and `values2`, same length, paired by index): correlation, linearRegression " +
+      '(returns slope m, intercept b, and rSquared), tTestTwoSample.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        operation: {
+          type: 'string',
+          enum: [
+            'mean',
+            'median',
+            'mode',
+            'min',
+            'max',
+            'sum',
+            'variance',
+            'standardDeviation',
+            'quantile',
+            'interquartileRange',
+            'skewness',
+            'kurtosis',
+            'geometricMean',
+            'harmonicMean',
+            'coefficientOfVariation',
+            'ckmeans',
+            'correlation',
+            'linearRegression',
+            'tTestTwoSample',
+          ],
+        },
+        values: { type: 'array', items: { type: 'number' } },
+        values2: { type: 'array', items: { type: 'number' } },
+        param: { type: 'number' },
+      },
+      required: ['operation', 'values'],
+    },
+  },
 ]
 
 async function runQueryDatabase(sql: string): Promise<string> {
@@ -179,6 +227,65 @@ async function runReverseGeocode(lat: number, lng: number): Promise<string> {
   return JSON.stringify({ formatted_address: data.results[0].formatted_address })
 }
 
+function runComputeStatistics(
+  operation: string,
+  values: number[],
+  values2: number[] | undefined,
+  param: number | undefined,
+): string {
+  if (!values.length) return JSON.stringify({ error: 'values is empty' })
+  switch (operation) {
+    case 'mean':
+      return JSON.stringify({ result: ss.mean(values) })
+    case 'median':
+      return JSON.stringify({ result: ss.median(values) })
+    case 'mode':
+      return JSON.stringify({ result: ss.mode(values) })
+    case 'min':
+      return JSON.stringify({ result: ss.min(values) })
+    case 'max':
+      return JSON.stringify({ result: ss.max(values) })
+    case 'sum':
+      return JSON.stringify({ result: ss.sum(values) })
+    case 'variance':
+      return JSON.stringify({ result: ss.variance(values) })
+    case 'standardDeviation':
+      return JSON.stringify({ result: ss.standardDeviation(values) })
+    case 'quantile':
+      if (param == null) return JSON.stringify({ error: 'quantile needs param in [0,1]' })
+      return JSON.stringify({ result: ss.quantile(values, param) })
+    case 'interquartileRange':
+      return JSON.stringify({ result: ss.interquartileRange(values) })
+    case 'skewness':
+      return JSON.stringify({ result: ss.sampleSkewness(values) })
+    case 'kurtosis':
+      return JSON.stringify({ result: ss.sampleKurtosis(values) })
+    case 'geometricMean':
+      return JSON.stringify({ result: ss.geometricMean(values) })
+    case 'harmonicMean':
+      return JSON.stringify({ result: ss.harmonicMean(values) })
+    case 'coefficientOfVariation':
+      return JSON.stringify({ result: ss.coefficientOfVariation(values) })
+    case 'ckmeans':
+      if (param == null) return JSON.stringify({ error: 'ckmeans needs param = cluster count' })
+      return JSON.stringify({ clusters: ss.ckmeans(values, param) })
+    case 'correlation':
+      if (!values2?.length) return JSON.stringify({ error: 'correlation needs values2' })
+      return JSON.stringify({ result: ss.sampleCorrelation(values, values2) })
+    case 'linearRegression': {
+      if (!values2?.length) return JSON.stringify({ error: 'linearRegression needs values2' })
+      const pairs: [number, number][] = values.map((x, i) => [x, values2[i]])
+      const line = ss.linearRegression(pairs)
+      return JSON.stringify({ ...line, rSquared: ss.rSquared(pairs, ss.linearRegressionLine(line)) })
+    }
+    case 'tTestTwoSample':
+      if (!values2?.length) return JSON.stringify({ error: 'tTestTwoSample needs values2' })
+      return JSON.stringify({ result: ss.tTestTwoSample(values, values2) })
+    default:
+      return JSON.stringify({ error: `Unknown operation: ${operation}` })
+  }
+}
+
 function runDistanceBetween(lat1: number, lng1: number, lat2: number, lng2: number): string {
   const R = 3958.8 // Earth radius, miles
   const toRad = (deg: number) => (deg * Math.PI) / 180
@@ -210,6 +317,13 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
           Number(input.lng1),
           Number(input.lat2),
           Number(input.lng2),
+        )
+      case 'compute_statistics':
+        return runComputeStatistics(
+          String(input.operation),
+          (input.values as number[]) ?? [],
+          input.values2 as number[] | undefined,
+          input.param as number | undefined,
         )
       default:
         return JSON.stringify({ error: `Unknown tool: ${name}` })
