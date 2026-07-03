@@ -1,16 +1,58 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
+import { supabase } from '@/lib/supabase'
+import { useAuthStore } from '@/stores/auth'
 
-// Stored locally for now. Phase 2 (real chat backend) will move this to secure
-// per-admin storage — never into the frontend bundle or a shared table in plaintext.
-const KEY_STORAGE = 'forcefield.anthropic_api_key'
+// Persisted server-side per admin account (admin_settings table, RLS-scoped
+// to owner_id) so the key follows the account across devices/browsers
+// instead of living in this one browser's localStorage.
+const LEGACY_KEY_STORAGE = 'forcefield.anthropic_api_key'
 
-const apiKey = ref(localStorage.getItem(KEY_STORAGE) ?? '')
+const auth = useAuthStore()
+const apiKey = ref('')
+const loading = ref(true)
+const saving = ref(false)
 const saved = ref(false)
+const loadError = ref('')
 
-function saveKey() {
-  localStorage.setItem(KEY_STORAGE, apiKey.value.trim())
+onMounted(async () => {
+  const ownerId = auth.profile?.id
+  if (!ownerId) {
+    loading.value = false
+    return
+  }
+  const { data, error } = await supabase
+    .from('admin_settings')
+    .select('anthropic_api_key')
+    .eq('owner_id', ownerId)
+    .maybeSingle()
+  loading.value = false
+  if (error) {
+    loadError.value = 'Could not load saved key — try reloading.'
+    return
+  }
+  if (data?.anthropic_api_key) {
+    apiKey.value = data.anthropic_api_key
+  } else {
+    // One-time carryover from the old per-browser storage, if present.
+    apiKey.value = localStorage.getItem(LEGACY_KEY_STORAGE) ?? ''
+  }
+})
+
+async function saveKey() {
+  const ownerId = auth.profile?.id
+  if (!ownerId) return
+  saving.value = true
+  const { error } = await supabase
+    .from('admin_settings')
+    .upsert({ owner_id: ownerId, anthropic_api_key: apiKey.value.trim(), updated_at: new Date().toISOString() })
+  saving.value = false
+  if (error) {
+    loadError.value = 'Could not save the key — try again.'
+    return
+  }
+  localStorage.removeItem(LEGACY_KEY_STORAGE)
   saved.value = true
   setTimeout(() => (saved.value = false), 2000)
 }
@@ -22,10 +64,10 @@ function saveKey() {
       <div class="card">
         <h3>AI Assistant — Anthropic API Key</h3>
         <p class="muted">
-          Bring your own key. Used by the AI chat once the data backend ships (Phase 2). The key
-          stays on this device for now.
+          Bring your own key. Saved to your admin account, so it's available on any device you log
+          in from — set it once here.
         </p>
-        <form @submit.prevent="saveKey">
+        <form v-if="!loading" @submit.prevent="saveKey">
           <div class="field">
             <label for="anthropic-key">API key</label>
             <input
@@ -36,10 +78,12 @@ function saveKey() {
               autocomplete="off"
             />
           </div>
-          <button class="btn btn-primary" type="submit">
-            {{ saved ? 'Saved ✓' : 'Save Key' }}
+          <button class="btn btn-primary" type="submit" :disabled="saving">
+            {{ saved ? 'Saved ✓' : saving ? 'Saving…' : 'Save Key' }}
           </button>
+          <p v-if="loadError" class="error">{{ loadError }}</p>
         </form>
+        <p v-else class="muted">Loading…</p>
       </div>
 
       <div class="card">
@@ -86,5 +130,11 @@ function saveKey() {
 .small {
   font-size: 0.85rem;
   margin: 0.2rem 0 0;
+}
+
+.error {
+  color: var(--danger, #c0392b);
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
 }
 </style>

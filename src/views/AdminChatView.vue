@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { nextTick, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
+import { supabase } from '@/lib/supabase'
+import { useAuthStore } from '@/stores/auth'
 
 interface ChatMessage {
   id: number
@@ -9,7 +11,24 @@ interface ChatMessage {
   error?: boolean
 }
 
-const KEY_STORAGE = 'forcefield.anthropic_api_key'
+const auth = useAuthStore()
+// Loaded once per visit from admin_settings (the account-level, cross-device
+// store) rather than re-fetched per message.
+const apiKey = ref<string | null>(null)
+const keyLoaded = ref(false)
+
+onMounted(async () => {
+  const ownerId = auth.profile?.id
+  if (ownerId) {
+    const { data } = await supabase
+      .from('admin_settings')
+      .select('anthropic_api_key')
+      .eq('owner_id', ownerId)
+      .maybeSingle()
+    apiKey.value = data?.anthropic_api_key?.trim() || null
+  }
+  keyLoaded.value = true
+})
 
 const messages = ref<ChatMessage[]>([
   {
@@ -33,8 +52,8 @@ async function send() {
   const text = draft.value.trim()
   if (!text || loading.value) return
 
-  const apiKey = localStorage.getItem(KEY_STORAGE)?.trim()
-  if (!apiKey) {
+  if (!keyLoaded.value) return // still fetching; send is disabled in the UI until then
+  if (!apiKey.value) {
     messages.value.push({ id: nextId++, role: 'user', text })
     messages.value.push({
       id: nextId++,
@@ -62,7 +81,7 @@ async function send() {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ apiKey, messages: wireMessages }),
+      body: JSON.stringify({ apiKey: apiKey.value, messages: wireMessages }),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
@@ -105,9 +124,9 @@ async function send() {
           v-model="draft"
           placeholder="Ask the assistant…"
           aria-label="Chat message"
-          :disabled="loading"
+          :disabled="loading || !keyLoaded"
         />
-        <button class="btn btn-primary" type="submit" :disabled="!draft.trim() || loading">
+        <button class="btn btn-primary" type="submit" :disabled="!draft.trim() || loading || !keyLoaded">
           Send
         </button>
       </form>

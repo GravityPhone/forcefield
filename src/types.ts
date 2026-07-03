@@ -130,3 +130,45 @@ export interface ChatProfile {
   username: string
   display_name: string | null
 }
+
+export interface Bulletin {
+  id: string
+  author_id: string | null
+  title: string
+  body: string
+  created_at: string
+  /** PostgREST embed via the author_id FK. */
+  author?: ChatProfile | null
+}
+
+export type LeaderboardMetric = 'signatures' | 'doors'
+
+export const METRIC_LABELS: Record<LeaderboardMetric, string> = {
+  signatures: 'Signatures',
+  doors: 'Doors knocked',
+}
+
+export interface LeaderboardSettings {
+  id: boolean
+  primary_metric: LeaderboardMetric
+  doors_board_enabled: boolean
+  updated_at: string
+}
+
+export interface CanvasserLeaderboardRow {
+  canvasser_id: string
+  username: string
+  display_name: string | null
+  team_id: string | null
+  team_name: string | null
+  doors_knocked: number
+  signatures: number
+}
+
+export interface TeamLeaderboardRow {
+  team_id: string
+  team_name: string
+  member_count: number
+  doors_knocked: number
+  signatures: number
+}

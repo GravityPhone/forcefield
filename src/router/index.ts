@@ -23,6 +23,10 @@ const router = createRouter({
     // User-to-user chat (everyone) — distinct from the admin-only AI chat
     { path: '/chat', name: 'chat', component: () => import('@/views/ChatView.vue'), meta: { roles: [] } },
 
+    // Campaign bulletin (everyone reads; admins post) and leaderboards
+    { path: '/bulletin', name: 'bulletin', component: () => import('@/views/BulletinView.vue'), meta: { roles: [] } },
+    { path: '/leaderboard', name: 'leaderboard', component: () => import('@/views/LeaderboardView.vue'), meta: { roles: [] } },
+
     // Team lead home (admins can view too)
     { path: '/team', name: 'team', component: () => import('@/views/TeamLeadHomeView.vue'), meta: { roles: ['team_lead', 'admin'] } },
 

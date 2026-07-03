@@ -42,6 +42,8 @@ async function handleLogout() {
       </template>
       <router-link v-else :to="homePath">Home</router-link>
       <router-link to="/chat">Chat</router-link>
+      <router-link to="/bulletin">Bulletin</router-link>
+      <router-link to="/leaderboard">Leaderboard</router-link>
     </nav>
 
     <main class="shell-main">

@@ -17,12 +17,14 @@ This doc below is the original requirements/planning spec — left intact as a r
   - `compute_statistics` (`simple-statistics`) — mean/median/mode/stddev/quantile/skewness/kurtosis/ckmeans clustering, plus two-array correlation/linear-regression/t-test.
   - Bounded to an ~8s internal deadline (`netlify/functions/chat.ts`) so a multi-round tool-use loop never exceeds Netlify's ~10s function timeout, regardless of plan.
 
-**Not built yet** — the admin dashboard (`/admin`) is currently four "coming soon" placeholder cards:
+**Also built and working:**
+- **Leaderboards** (`/leaderboard`) — per-canvasser and per-team standings over `knock_logs`, via two security-invoker views (`canvasser_leaderboard`, `team_leaderboard`, `supabase/migrations/20260703130000_leaderboards.sql`). Admin-configurable primary ranking metric (signatures or doors knocked) plus an optional second doors-knocked board, stored in a single-row `leaderboard_settings` table and configured from a card on `/admin`. Canvasser-facing view defaults to their own team with an org-wide toggle (teamless users default to org-wide); realtime-refreshes (debounced) on new knock inserts.
+- **Campaign bulletin** (`/bulletin`) — admin-post, everyone-reads announcements feed. Deliberately its own table (`public.bulletins`, `supabase/migrations/20260703120000_bulletins.sql`) rather than reusing the `chats`/`chat_messages` pattern: bulletins don't need a membership model and, unlike private chats, should be readable by the admin AI's `query_database` tool — a fresh table inherits `service_role`'s default grant, so no extra REVOKE/GRANT surgery was needed (see the chat tables' walled-off REVOKE in `20260703110000_fix_ai_readonly_query.sql` for contrast). Realtime-backed feed, admin delete.
+
+**Not built yet** — the admin dashboard (`/admin`) still has three "coming soon" placeholder cards:
 - User/role management UI (elevating accounts, creating admins)
 - Turf assignment UI (street-range based, per section 6/9 below)
 - Voter CSV import UI (the import itself only exists as the CLI script, not an admin-facing upload flow)
-- **Leaderboards** (doors knocked / signatures, per-canvasser and per-team, admin-configurable ranking metric — section 5.5 and 8 below)
-- **Campaign "bulletin"** — admin posts announcements to the team for a campaign (e.g., the UBI campaign this demo data is themed around). Mentioned early in the project but never designed — no schema, no UI. Natural shape: reuse the `chats`/`chat_messages` pattern (a read-mostly "announcements" room admins post to, everyone on the campaign can read) rather than inventing a separate system.
 
 ---
 
