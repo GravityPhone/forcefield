@@ -14,19 +14,28 @@ import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockOutcome
 const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
 const NEARBY_CAP = 50
 
+/** `persons(count)` is a PostgREST aggregate embed — one row per address
+ * with a single { count } entry, giving household roster size in the same
+ * query as the address itself (no extra round trip). */
+type RosterCount = { persons: { count: number }[] }
+type AddressWithRoster = Address & Partial<RosterCount>
+
 interface PersonHit extends Person {
-  addresses: Pick<Address, 'id' | 'street' | 'unit' | 'city'> | null
+  addresses: (Pick<Address, 'id' | 'street' | 'unit' | 'city'> & Partial<RosterCount>) | null
 }
 
 const talk = useTalkStore()
 
 const mapEl = ref<HTMLElement | null>(null)
 const listQuery = ref('')
-const searchResults = ref<{ persons: PersonHit[]; addresses: Address[] }>({ persons: [], addresses: [] })
+const searchResults = ref<{ persons: PersonHit[]; addresses: AddressWithRoster[] }>({
+  persons: [],
+  addresses: [],
+})
 const searching = ref(false)
 const locating = ref(false)
 const locatedAddressId = ref<string | null>(null)
-const locatedAddress = ref<Address | null>(null)
+const locatedAddress = ref<AddressWithRoster | null>(null)
 const statusByHousehold = ref<Map<string, KnockOutcome>>(new Map())
 const summaryByHousehold = ref<Map<string, HouseholdKnockSummary>>(new Map())
 const loadError = ref('')
@@ -56,13 +65,13 @@ watch(
  * (Talk mode, and now Hunt's "locate", both geocode on demand). */
 async function fetchMapData() {
   const [addressesRes, statusRes, summaryRes] = await Promise.all([
-    supabase.from('addresses').select('*').not('lat', 'is', null).limit(2000),
+    supabase.from('addresses').select('*, persons(count)').not('lat', 'is', null).limit(2000),
     supabase.from('household_latest_knock').select('*'),
     supabase.from('household_knock_summary').select('*'),
   ])
   if (addressesRes.error) throw addressesRes.error
   applyStatusAndSummary(statusRes.data, summaryRes.data)
-  return (addressesRes.data ?? []) as Address[]
+  return (addressesRes.data ?? []) as AddressWithRoster[]
 }
 
 function applyStatusAndSummary(
@@ -98,7 +107,7 @@ function refreshAllPinScales() {
   for (const [id, marker] of markersByAddress) marker.setIcon(pinIcon(id))
 }
 
-function addOrUpdateMarker(a: Address) {
+function addOrUpdateMarker(a: AddressWithRoster) {
   if (a.lat == null || a.lng == null || !map) return
   let marker = markersByAddress.get(a.id)
   if (!marker) {
@@ -116,7 +125,7 @@ function addOrUpdateMarker(a: Address) {
 }
 
 async function initialize() {
-  let mapAddresses: Address[] = []
+  let mapAddresses: AddressWithRoster[] = []
   try {
     ;[mapAddresses] = await Promise.all([fetchMapData(), loadMaps()])
   } catch {
@@ -176,15 +185,15 @@ function onListInput(value: string) {
     const [personsRes, addressesRes] = await Promise.all([
       supabase
         .from('persons')
-        .select('*, addresses(id, street, unit, city)')
+        .select('*, addresses(id, street, unit, city, persons(count))')
         .ilike('name', pattern)
         .limit(20),
-      supabase.from('addresses').select('*').ilike('street', pattern).limit(20),
+      supabase.from('addresses').select('*, persons(count)').ilike('street', pattern).limit(20),
     ])
     if (listQuery.value.trim() !== q) return
     searchResults.value = {
       persons: (personsRes.data ?? []) as PersonHit[],
-      addresses: (addressesRes.data ?? []) as Address[],
+      addresses: (addressesRes.data ?? []) as AddressWithRoster[],
     }
     searching.value = false
   }, 250)
@@ -193,6 +202,14 @@ function onListInput(value: string) {
 function summaryFor(addressId: string | null | undefined): HouseholdKnockSummary | null {
   if (!addressId) return null
   return summaryByHousehold.value.get(addressId) ?? null
+}
+
+/** Household roster size, straight off the `persons(count)` embed — lets the
+ * ratio next to the indicator grid read "out of everyone who lives here"
+ * rather than "out of however many times someone's been knocked", so it's
+ * meaningful even when nobody's home yet. */
+function householdSize(address: Partial<RosterCount> | null | undefined): number | null {
+  return address?.persons?.[0]?.count ?? null
 }
 
 /** Knock button color reflects the latest outcome at that door — same data
@@ -217,7 +234,7 @@ function flatDistance(a: { lat: number; lng: number }, b: { lat: number; lng: nu
   return (a.lat - b.lat) ** 2 + (a.lng - b.lng) ** 2
 }
 
-async function locateAddress(address: Address) {
+async function locateAddress(address: AddressWithRoster) {
   if (locating.value) return
   locating.value = true
   try {
@@ -235,8 +252,13 @@ async function locateAddress(address: Address) {
     }
 
     const targetName = streetNameOf(address.street)
-    const { data } = await supabase.from('addresses').select('*').ilike('street', `%${targetName}`)
-    const rows = ((data ?? []) as Address[]).filter((a) => streetNameOf(a.street) === targetName)
+    const { data } = await supabase
+      .from('addresses')
+      .select('*, persons(count)')
+      .ilike('street', `%${targetName}`)
+    const rows = ((data ?? []) as AddressWithRoster[]).filter(
+      (a) => streetNameOf(a.street) === targetName,
+    )
     const geocoded = rows.filter((a) => a.lat != null && a.lng != null)
     const missing = rows.filter((a) => a.lat == null || a.lng == null)
 
@@ -276,6 +298,27 @@ onUnmounted(() => {
 
 <template>
   <div class="hunt">
+    <!-- Whatever was last clicked — a pin on the map or a result below —
+         always surfaces here, whether or not it matches the current search. -->
+    <div v-if="locatedAddress" class="card located-card" :class="locatedStatusClass">
+      <span class="result-left">
+        <span class="result-name">
+          {{ locatedAddress.street }}{{ locatedAddress.unit ? ' ' + locatedAddress.unit : '' }}
+        </span>
+      </span>
+      <OutcomeIndicatorGrid
+        :summary="summaryFor(locatedAddress.id)"
+        :household-size="householdSize(locatedAddress)"
+      />
+      <button
+        class="btn btn-sm knock-btn"
+        :style="{ background: knockColorFor(locatedAddress.id), color: 'var(--accent-contrast)' }"
+        @click="knock(locatedAddress.id)"
+      >
+        Knock
+      </button>
+    </div>
+
     <div ref="mapEl" class="map"></div>
     <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
     <p v-if="locating" class="muted map-error">Locating nearby doors…</p>
@@ -314,24 +357,6 @@ onUnmounted(() => {
       </select>
     </div>
 
-    <!-- Whatever was last clicked — a pin on the map or a result below —
-         always surfaces here, whether or not it matches the current search. -->
-    <div v-if="locatedAddress" class="card located-card" :class="locatedStatusClass">
-      <span class="result-left">
-        <span class="result-name">
-          {{ locatedAddress.street }}{{ locatedAddress.unit ? ' ' + locatedAddress.unit : '' }}
-        </span>
-      </span>
-      <OutcomeIndicatorGrid :summary="summaryFor(locatedAddress.id)" />
-      <button
-        class="btn btn-sm knock-btn"
-        :style="{ background: knockColorFor(locatedAddress.id), color: 'var(--accent-contrast)' }"
-        @click="knock(locatedAddress.id)"
-      >
-        Knock
-      </button>
-    </div>
-
     <div class="results-list">
       <p v-if="listQuery.trim().length < 2" class="muted empty">
         Type at least 2 characters of a name or street.
@@ -347,7 +372,7 @@ onUnmounted(() => {
           :key="'p-' + p.id"
           class="result-row"
           :class="{ 'result-active': p.household_id === locatedAddressId }"
-          @click="p.addresses && locateAddress(p.addresses as Address)"
+          @click="p.addresses && locateAddress(p.addresses as AddressWithRoster)"
         >
           <span class="result-left">
             <span class="result-name">{{ p.name }}</span>
@@ -355,7 +380,10 @@ onUnmounted(() => {
               {{ p.addresses ? `${p.addresses.street}${p.addresses.unit ? ' ' + p.addresses.unit : ''}` : 'No address on file' }}
             </span>
           </span>
-          <OutcomeIndicatorGrid :summary="summaryFor(p.household_id)" />
+          <OutcomeIndicatorGrid
+            :summary="summaryFor(p.household_id)"
+            :household-size="householdSize(p.addresses)"
+          />
           <button
             v-if="p.household_id"
             class="btn btn-sm knock-btn"
@@ -376,7 +404,7 @@ onUnmounted(() => {
           <span class="result-left">
             <span class="result-name">{{ a.street }}{{ a.unit ? ' ' + a.unit : '' }}</span>
           </span>
-          <OutcomeIndicatorGrid :summary="summaryFor(a.id)" />
+          <OutcomeIndicatorGrid :summary="summaryFor(a.id)" :household-size="householdSize(a)" />
           <button
             class="btn btn-sm knock-btn"
             :style="{ background: knockColorFor(a.id), color: 'var(--accent-contrast)' }"
@@ -448,30 +476,37 @@ onUnmounted(() => {
   color: inherit;
 }
 
+/* A violet family, distinct from the list's blue accent highlight below —
+ * this card is "what's currently focused on the map", a different concern
+ * from "which list row matches it", so they shouldn't share a color. */
 .located-card {
+  --located-accent: #7c3aed;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.75rem;
-  border: 2px solid var(--accent);
+  border: 2px solid var(--located-accent);
   border-left-width: 6px;
-  background: var(--surface);
+  background: color-mix(in srgb, var(--located-accent) 6%, var(--surface));
 }
 
-/* Distinct color scheme per knock status — scannable at a glance. */
+/* Left stripe still carries knock status (muted/green/amber) — a separate
+ * signal from the violet "this is focused" framing above. */
 .located-card.card-not-knocked {
   border-left-color: var(--text-muted);
 }
 
 .located-card.card-reached {
   border-left-color: var(--success);
-  background: color-mix(in srgb, var(--success) 8%, var(--surface));
 }
 
 .located-card.card-not-reached {
   border-left-color: var(--warning);
-  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+}
+
+.located-card .result-name {
+  color: var(--located-accent);
 }
 
 .results-list {
