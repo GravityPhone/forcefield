@@ -1,10 +1,27 @@
 import { importLibrary, setOptions } from '@googlemaps/js-api-loader'
+import { ref } from 'vue'
 import { GOOGLE_MAPS_API_KEY } from './config'
+
+/** Set when Google rejects the API key at runtime (quota, billing, referrer
+ * restriction…) — the "This page can't load Google Maps correctly" dialog.
+ * Google logs the specific reason code to the console; this just lets the
+ * UI acknowledge it instead of leaving only the cryptic built-in dialog. */
+export const mapsAuthError = ref(false)
 
 let configured = false
 
 function configure() {
   if (configured) return
+  // Google calls this global (if defined) instead of only showing its own
+  // error dialog. The precise cause (OverQuotaMapError, RefererNotAllowed…)
+  // is in the console right above this message.
+  ;(window as Window & { gm_authFailure?: () => void }).gm_authFailure = () => {
+    mapsAuthError.value = true
+    console.error(
+      'Forcefield: Google Maps rejected the API key — see the error code logged above ' +
+        '(quota/billing/referrer restriction) and check the key in Google Cloud Console.',
+    )
+  }
   setOptions({ key: GOOGLE_MAPS_API_KEY, v: 'weekly' })
   configured = true
 }

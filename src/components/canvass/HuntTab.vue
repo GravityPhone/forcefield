@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { MarkerClusterer } from '@googlemaps/markerclusterer'
-import { loadMaps } from '@/lib/googleMaps'
+import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
 import { geocodeAndCache } from '@/lib/geocode'
 import { supabase } from '@/lib/supabase'
+import { useAuthStore } from '@/stores/auth'
 import { useTalkStore } from '@/stores/talk'
 import { OUTCOME_HEX, PIN_DEFAULT_HEX, knockButtonHex } from '@/lib/outcomes'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
@@ -25,6 +26,7 @@ interface PersonHit extends Person {
 }
 
 const talk = useTalkStore()
+const auth = useAuthStore()
 
 const mapEl = ref<HTMLElement | null>(null)
 const listQuery = ref('')
@@ -124,10 +126,32 @@ function addOrUpdateMarker(a: AddressWithRoster) {
   marker.setIcon(pinIcon(a.id))
 }
 
+/** Where the map should open: the door this canvasser most recently knocked
+ * — they're usually still working that same street when the app reloads.
+ * Null when they've never knocked anywhere geocoded. */
+async function lastKnockCenter(): Promise<{ lat: number; lng: number } | null> {
+  if (!auth.profile) return null
+  const { data } = await supabase
+    .from('knock_logs')
+    .select('occurred_at, addresses!inner(lat, lng)')
+    .eq('canvasser_id', auth.profile.id)
+    .not('addresses.lat', 'is', null)
+    .not('addresses.lng', 'is', null)
+    .order('occurred_at', { ascending: false })
+    .limit(1)
+  const loc = (data?.[0] as { addresses: { lat: number; lng: number } } | undefined)?.addresses
+  return loc ? { lat: loc.lat, lng: loc.lng } : null
+}
+
 async function initialize() {
   let mapAddresses: AddressWithRoster[] = []
+  let lastCenter: { lat: number; lng: number } | null = null
   try {
-    ;[mapAddresses] = await Promise.all([fetchMapData(), loadMaps()])
+    ;[mapAddresses, , lastCenter] = await Promise.all([
+      fetchMapData(),
+      loadMaps(),
+      lastKnockCenter(),
+    ])
   } catch {
     loadError.value = 'Could not load the map or address data. Check your connection.'
     initStarted = false
@@ -136,12 +160,13 @@ async function initialize() {
   if (!mapEl.value) return
 
   map = new google.maps.Map(mapEl.value, {
-    center: FALLBACK_CENTER,
-    zoom: currentZoom,
+    center: lastCenter ?? FALLBACK_CENTER,
+    zoom: lastCenter ? 16 : currentZoom,
     streetViewControl: false,
     mapTypeControl: false,
     fullscreenControl: false,
   })
+  currentZoom = map.getZoom() ?? currentZoom
   map.addListener('zoom_changed', () => {
     currentZoom = map!.getZoom() ?? currentZoom
     refreshAllPinScales()
@@ -154,7 +179,10 @@ async function initialize() {
     addOrUpdateMarker(a)
     bounds.extend({ lat: a.lat, lng: a.lng })
   }
-  if (!bounds.isEmpty()) map.fitBounds(bounds, 48)
+  // Only auto-fit to every pin when there's no personal last-knock anchor —
+  // fitting all ~2k county-wide pins zooms way out and looks like the map
+  // "doesn't know where to start".
+  if (!lastCenter && !bounds.isEmpty()) map.fitBounds(bounds, 48)
 }
 
 /** Re-pull statuses/summaries and recolor existing pins (cheap: two view
@@ -321,6 +349,10 @@ onUnmounted(() => {
 
     <div ref="mapEl" class="map"></div>
     <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
+    <p v-if="mapsAuthError" class="muted map-error">
+      Google rejected the Maps API key — usually quota, billing, or a referrer restriction on the
+      key. The exact reason is logged in the browser console. Search and knock logging still work.
+    </p>
     <p v-if="locating" class="muted map-error">Locating nearby doors…</p>
 
     <input
