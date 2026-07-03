@@ -31,34 +31,51 @@ const MAPS_KEY = process.env.GOOGLE_MAPS_API_KEY ?? ''
 
 const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 
-const SYSTEM_PROMPT =
-  'You are the AI assistant inside Forcefield, a door-to-door canvassing app for a ' +
-  'UBI (universal basic income) campaign, talking to an org admin. You have tools to ' +
-  'query the live canvassing database and to geocode addresses / compute distances via ' +
-  'Google Maps. Private user-to-user chat messages are intentionally not accessible to ' +
-  'you, even via the database tool — if asked about them, say so. The database tool ' +
-  'only accepts read-only SELECT queries (writes are rejected) and is capped at 500 ' +
-  'rows per call — aggregate with COUNT/GROUP BY server-side rather than pulling raw ' +
-  'rows when you can. This runs on a tight time budget: get the schema right on the ' +
-  'first query rather than exploring with information_schema, and prefer one joined ' +
-  'query over several round trips. Schema:\n' +
-  '- addresses(id, street, unit, city, county, zip, lat, lng, turf_id, registered_voter)\n' +
-  '- persons(id, name, household_id -> addresses.id, voter_file_id, registered_voter)\n' +
-  '- knock_logs(id, person_id -> persons.id, household_id -> addresses.id, ' +
-  'canvasser_id -> profiles.id, occurred_at, outcome, notes) — outcome is one of ' +
-  "'signed','didnt_sign','maybe','not_home','skip','hostile'; to get the address for a " +
-  'knock, join addresses on knock_logs.household_id = addresses.id\n' +
-  '- profiles(id, username, display_name, role, team_id) — role is canvasser/team_lead/admin\n' +
-  '- household_knock_summary(household_id -> addresses.id, total_knocks, signed_count, ' +
-  'didnt_sign_count, maybe_count, not_home_count, skip_count, hostile_count, reached)\n' +
-  '- household_latest_knock(household_id -> addresses.id, outcome, occurred_at)\n\n' +
-  'For statistical questions (trends, correlation, regression, clustering), pull the raw ' +
-  'numbers with query_database first, then pass them to compute_statistics rather than ' +
-  'computing by hand.'
+/** All timestamp columns (occurred_at, created_at) come back from
+ * query_database in UTC — Postgres's timestamptz is correctly stored and
+ * queried in UTC, that part isn't the bug. Without this, the model has no
+ * way to know the admin isn't also in UTC and will just repeat the raw
+ * value, which reads as hours off from what actually happened locally. The
+ * browser sends its current local time + IANA zone with every request so
+ * this can be rebuilt per-request instead of baked in once. */
+function buildSystemPrompt(timezone: string, localTime: string): string {
+  return (
+    'You are the AI assistant inside Forcefield, a door-to-door canvassing app for a ' +
+    'UBI (universal basic income) campaign, talking to an org admin. You have tools to ' +
+    'query the live canvassing database and to geocode addresses / compute distances via ' +
+    'Google Maps. Private user-to-user chat messages are intentionally not accessible to ' +
+    'you, even via the database tool — if asked about them, say so. The database tool ' +
+    'only accepts read-only SELECT queries (writes are rejected) and is capped at 500 ' +
+    'rows per call — aggregate with COUNT/GROUP BY server-side rather than pulling raw ' +
+    'rows when you can. This runs on a tight time budget: get the schema right on the ' +
+    'first query rather than exploring with information_schema, and prefer one joined ' +
+    'query over several round trips. Schema:\n' +
+    '- addresses(id, street, unit, city, county, zip, lat, lng, turf_id, registered_voter)\n' +
+    '- persons(id, name, household_id -> addresses.id, voter_file_id, registered_voter)\n' +
+    '- knock_logs(id, person_id -> persons.id, household_id -> addresses.id, ' +
+    'canvasser_id -> profiles.id, occurred_at, outcome, notes) — outcome is one of ' +
+    "'signed','didnt_sign','maybe','not_home','skip','hostile'; to get the address for a " +
+    'knock, join addresses on knock_logs.household_id = addresses.id\n' +
+    '- profiles(id, username, display_name, role, team_id) — role is canvasser/team_lead/admin\n' +
+    '- household_knock_summary(household_id -> addresses.id, total_knocks, signed_count, ' +
+    'didnt_sign_count, maybe_count, not_home_count, skip_count, hostile_count, reached)\n' +
+    '- household_latest_knock(household_id -> addresses.id, outcome, occurred_at)\n\n' +
+    'For statistical questions (trends, correlation, regression, clustering), pull the raw ' +
+    'numbers with query_database first, then pass them to compute_statistics rather than ' +
+    'computing by hand.\n\n' +
+    `The admin's current local time is ${localTime} (timezone: ${timezone}). Every ` +
+    'timestamp column returned by query_database (occurred_at, created_at) is stored in ' +
+    "UTC — always convert to the admin's timezone above before stating a time back to " +
+    'them, and note that it\'s local (e.g. "1:04 AM local time") rather than repeating ' +
+    'the raw UTC value. Never report a raw UTC timestamp as if it were their local time.'
+  )
+}
 
 interface ChatRequest {
   apiKey?: unknown
   messages?: unknown
+  timezone?: unknown
+  localTime?: unknown
 }
 
 interface WireMessage {
@@ -343,13 +360,28 @@ export default async (req: Request): Promise<Response> => {
     return json({ error: 'Invalid JSON body' }, 400)
   }
 
-  const { apiKey, messages: rawMessages } = body
+  const { apiKey, messages: rawMessages, timezone: rawTimezone, localTime: rawLocalTime } = body
   if (typeof apiKey !== 'string' || !apiKey.trim()) {
     return json({ error: 'Missing API key — add it in Settings.' }, 400)
   }
   if (!isValidMessages(rawMessages)) {
     return json({ error: 'Invalid messages payload' }, 400)
   }
+
+  // The browser's IANA zone name and current local clock reading — both
+  // best-effort, so a bad/missing value just falls back to UTC rather than
+  // rejecting the request.
+  let timezone = 'UTC'
+  if (typeof rawTimezone === 'string' && rawTimezone.length < 100) {
+    try {
+      new Intl.DateTimeFormat(undefined, { timeZone: rawTimezone })
+      timezone = rawTimezone
+    } catch {
+      // invalid IANA name — keep the UTC fallback
+    }
+  }
+  const localTime =
+    typeof rawLocalTime === 'string' && rawLocalTime.length < 100 ? rawLocalTime : 'unknown'
 
   // Pin the base URL explicitly — don't inherit ANTHROPIC_BASE_URL from the
   // function's environment. This is a BYO-key proxy for the admin's own
@@ -370,7 +402,7 @@ export default async (req: Request): Promise<Response> => {
       const response = await client.messages.create({
         model: MODEL,
         max_tokens: MAX_TOKENS,
-        system: SYSTEM_PROMPT,
+        system: buildSystemPrompt(timezone, localTime),
         messages,
         ...(useTools ? { tools: TOOLS } : {}),
       })

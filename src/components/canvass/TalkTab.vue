@@ -28,8 +28,7 @@ const talk = useTalkStore()
       <RosterList />
     </div>
     <p v-else class="muted walkup-hint">
-      Load an address (search above, or via Hunt) to log an outcome. Catch a name first? Put it
-      in notes.
+      Load an address (search above, or via Hunt) to log an outcome.
     </p>
 
     <label class="notes-label" for="talk-notes">Notes</label>

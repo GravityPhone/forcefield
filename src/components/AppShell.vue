@@ -37,6 +37,8 @@ async function handleLogout() {
     <nav v-if="auth.profile" class="admin-nav">
       <template v-if="auth.profile.role === 'admin'">
         <router-link to="/admin">Dashboard</router-link>
+        <!-- Admins often go out canvassing themselves, not just manage the org. -->
+        <router-link to="/canvass">Canvass</router-link>
         <router-link to="/admin/chat">AI Chat</router-link>
         <router-link to="/admin/settings">Settings</router-link>
       </template>

@@ -77,11 +77,20 @@ async function send() {
   const firstUser = history.findIndex((m) => m.role === 'user')
   const wireMessages = history.slice(firstUser).map((m) => ({ role: m.role, content: m.text }))
 
+  // Sent fresh with every request (not cached) so the assistant can convert
+  // any UTC timestamp it reads back (occurred_at, created_at) to the admin's
+  // actual local time instead of repeating the raw UTC value.
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  const localTime = new Date().toLocaleString(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'long',
+  })
+
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ apiKey: apiKey.value, messages: wireMessages }),
+      body: JSON.stringify({ apiKey: apiKey.value, messages: wireMessages, timezone, localTime }),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
