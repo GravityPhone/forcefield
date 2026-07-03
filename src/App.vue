@@ -1,7 +1,17 @@
 <script setup lang="ts">
+import { watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
+import { useThemeStore } from '@/stores/theme'
 
 const auth = useAuthStore()
+const theme = useThemeStore()
+
+theme.paintFromCache()
+watch(
+  () => auth.profile?.theme.scheme,
+  (scheme) => theme.loadForProfile(scheme),
+  { immediate: true },
+)
 </script>
 
 <template>

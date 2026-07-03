@@ -5,11 +5,20 @@ import AppShell from '@/components/AppShell.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import ChatMemberList from '@/components/chat/ChatMemberList.vue'
 import { useChatStore } from '@/stores/chat'
+import { useThemeStore } from '@/stores/theme'
+import { vacStyles } from '@/lib/themes'
 import type { ChatProfile } from '@/types'
 
 register()
 
 const chat = useChatStore()
+const theme = useThemeStore()
+
+// Re-skins the (shadow-DOM) chat widget to match the account's chosen
+// scheme — the library fills in anything not overridden from its own
+// light/dark preset, picked via `dark` on the current theme definition.
+const vacBaseTheme = computed(() => (theme.currentTheme.dark ? 'dark' : 'light'))
+const vacThemeStyles = computed(() => vacStyles(theme.currentTheme))
 
 // New-chat composer: pick people on the campaign, name it to make an open
 // squad, or leave it unnamed for a PM. Reused for "add people" too.
@@ -184,6 +193,8 @@ async function addPeople() {
       <vue-advanced-chat
         v-if="chat.myId"
         height="65dvh"
+        :theme="vacBaseTheme"
+        :styles.prop="vacThemeStyles"
         :current-user-id="chat.myId"
         :rooms.prop="vacRooms"
         :rooms-loaded="!chat.loadingChats"

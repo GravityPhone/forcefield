@@ -154,12 +154,15 @@ export const useTalkStore = defineStore('talk', {
       this.activeClientId = null
     },
 
-    /** Log an outcome for whatever is currently selected (a person, or the
-     * household if none is picked — or a fully anonymous walk-up if neither).
-     * Tapping the already-active button undoes it; tapping a different one
-     * swaps it in place (same DB row, via activeClientId); tapping with
-     * nothing active creates a new log. The button row itself never hides —
-     * this only changes which outcome is highlighted. */
+    /** Log an outcome for whatever is currently selected. Signed / Didn't
+     * Sign / Maybe require a person picked from the roster (OUTCOMES[].
+     * requiresPerson); Not Home / Skip / Hostile only require the household
+     * (selectedAddress) — OutcomeButtons.vue disables each button
+     * individually per that rule. Tapping the already-active button undoes
+     * it; tapping a different one swaps it in place (same DB row, via
+     * activeClientId); tapping with nothing active creates a new log. The
+     * button row itself never hides — this only changes which outcome is
+     * highlighted. */
     async logOutcome(outcome: KnockOutcome) {
       const auth = useAuthStore()
       if (!auth.profile) return

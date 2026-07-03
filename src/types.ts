@@ -1,12 +1,27 @@
 export type AppRole = 'canvasser' | 'team_lead' | 'admin'
 
+/** Cosmetic color scheme, saved per account. Deliberately independent of
+ * the knock-outcome colors (OUTCOMES in lib/outcomes.ts), the Hunt-mode
+ * indicator grid, and map pins — those stay fixed across every scheme. */
+export type ThemeId =
+  | 'light'
+  | 'dark'
+  | 'highContrast'
+  | 'eighties'
+  | 'nineties'
+  | 'forest'
+  | 'ocean'
+  | 'sunset'
+  | 'solarized'
+  | 'midnight'
+
 export interface Profile {
   id: string
   username: string
   display_name: string | null
   role: AppRole
   team_id: string | null
-  theme: { mode: 'light' | 'dark'; accent: string }
+  theme: { scheme: ThemeId }
   created_at: string
   updated_at: string
 }

@@ -5,27 +5,36 @@ import { useTalkStore } from '@/stores/talk'
 
 const talk = useTalkStore()
 
-// Buttons stay fully functional with no person picked (anonymous walk-ups
-// must work in two taps) — just visually muted as a hint that tapping will
-// log against the household (or fully anonymously, with no address either)
-// rather than a specific person.
-const hasTarget = computed(() => talk.selectedPerson !== null)
+// Not Home / Skip / Hostile describe the door interaction, so they only need
+// a household loaded. Signed / Didn't Sign / Maybe are a real answer from a
+// real person — those stay disabled until someone's actually picked from
+// the roster, even once an address is loaded.
+const hasHousehold = computed(() => talk.selectedAddress !== null)
+const hasPerson = computed(() => talk.selectedPerson !== null)
+function disabledFor(requiresPerson: boolean): boolean {
+  return requiresPerson ? !hasPerson.value : !hasHousehold.value
+}
 </script>
 
 <template>
   <div class="outcome-row">
-    <div class="outcome-grid" :class="{ muted: !hasTarget }">
+    <div class="outcome-grid">
       <button
         v-for="o in OUTCOMES"
         :key="o.value"
         class="btn outcome-btn"
         :class="{ active: talk.pendingOutcome === o.value }"
-        :style="{ '--outcome-color': o.color }"
+        :style="{ '--outcome-color': o.hex }"
+        :disabled="disabledFor(o.requiresPerson)"
         @click="talk.logOutcome(o.value)"
       >
         {{ o.label }}
       </button>
     </div>
+    <p v-if="hasHousehold && !hasPerson" class="muted person-hint">
+      Pick a person above for Signed / Didn't Sign / Maybe — Not Home, Skip, and Hostile don't
+      need one.
+    </p>
     <!-- Confirms before the screen clears — no silent auto-advance. Only
          appears once something is actually logged for the current target. -->
     <button v-if="talk.pendingOutcome" class="btn btn-primary next-btn" @click="talk.confirmNext()">
@@ -66,16 +75,9 @@ const hasTarget = computed(() => talk.selectedPerson !== null)
   color: var(--accent-contrast);
 }
 
-/* Muted (no person picked) — a near-black scrim over the whole button,
- * words included. Still fully clickable: anonymous walk-ups need this to
- * work in two taps, so the overlay never blocks pointer events. */
-.outcome-grid.muted .outcome-btn::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  background: rgba(10, 10, 10, 0.82);
-  pointer-events: none;
+.person-hint {
+  margin: 0;
+  font-size: 0.85rem;
 }
 
 .next-btn {

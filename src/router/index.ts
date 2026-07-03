@@ -27,6 +27,9 @@ const router = createRouter({
     { path: '/bulletin', name: 'bulletin', component: () => import('@/views/BulletinView.vue'), meta: { roles: [] } },
     { path: '/leaderboard', name: 'leaderboard', component: () => import('@/views/LeaderboardView.vue'), meta: { roles: [] } },
 
+    // Per-account cosmetic color scheme — every role can set their own.
+    { path: '/appearance', name: 'appearance', component: () => import('@/views/AppearanceView.vue'), meta: { roles: [] } },
+
     // Team lead home (admins can view too)
     { path: '/team', name: 'team', component: () => import('@/views/TeamLeadHomeView.vue'), meta: { roles: ['team_lead', 'admin'] } },
 

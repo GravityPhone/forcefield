@@ -44,6 +44,7 @@ async function handleLogout() {
       <router-link to="/chat">Chat</router-link>
       <router-link to="/bulletin">Bulletin</router-link>
       <router-link to="/leaderboard">Leaderboard</router-link>
+      <router-link to="/appearance">Appearance</router-link>
     </nav>
 
     <main class="shell-main">
