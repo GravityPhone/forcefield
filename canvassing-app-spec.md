@@ -1,5 +1,31 @@
 # Forcefield — Requirements & Specifications
 
+## 0. Current Status (as of 2026-07-03)
+
+This doc below is the original requirements/planning spec — left intact as a reference, but it now reads ahead of what's actually built in places. This section is the accurate summary.
+
+**Live:** https://f0rcef1eld.netlify.app — seed admin `admin` / `forcefield-admin`.
+
+**Built and working:**
+- **Stage 1** — auth, roles (canvasser/team_lead/admin), teams, RLS throughout, seeded admin account.
+- **Stage 2 canvassing core** — Talk mode (live search, full household roster, six-outcome logging with toggle/undo, always-visible notes, offline queue via Dexie); Hunt mode (map with dynamically-scaled pins, live search, "Locate" fills in every house on the same street up to 50, per-door "N/household-size signed" ratio + 6-outcome indicator grid, color-coded Knock button, a violet-highlighted "located" card above the map). "Next" in Talk mode auto-advances to the next house on the street, direction (ascending/descending) and side (both/evens/odds) configurable from a small menu in Hunt mode.
+- **Data** — ~22.7k Union County, OH addresses and ~43.5k persons imported from the voter file (`scripts/import-union-subset.ts`), geocoded on demand.
+- **User-to-user chat** (`vue-advanced-chat`) — global "Everyone" room, open squads, DMs, tabbed conversations, expandable member list (message-user / add-to-squad actions from both the member list and the per-message dropdown), realtime updates including new-membership pushes.
+- **Admin AI chat** — Claude Haiku, admin brings their own Anthropic API key (stored in that browser's localStorage, never the server), invisible to canvassers. Real tool use, not just a chat shell:
+  - `query_database` — arbitrary read-only SQL over the canvassing tables. Enforced at the Postgres level (`transaction_read_only` + a `REVOKE` on `service_role` for the chat tables specifically), not just prompt instructions — see `ai_readonly_query()` in `supabase/migrations/20260703110000_fix_ai_readonly_query.sql`.
+  - `geocode_address` / `reverse_geocode` / `distance_between` (Google Maps).
+  - `compute_statistics` (`simple-statistics`) — mean/median/mode/stddev/quantile/skewness/kurtosis/ckmeans clustering, plus two-array correlation/linear-regression/t-test.
+  - Bounded to an ~8s internal deadline (`netlify/functions/chat.ts`) so a multi-round tool-use loop never exceeds Netlify's ~10s function timeout, regardless of plan.
+
+**Not built yet** — the admin dashboard (`/admin`) is currently four "coming soon" placeholder cards:
+- User/role management UI (elevating accounts, creating admins)
+- Turf assignment UI (street-range based, per section 6/9 below)
+- Voter CSV import UI (the import itself only exists as the CLI script, not an admin-facing upload flow)
+- **Leaderboards** (doors knocked / signatures, per-canvasser and per-team, admin-configurable ranking metric — section 5.5 and 8 below)
+- **Campaign "bulletin"** — admin posts announcements to the team for a campaign (e.g., the UBI campaign this demo data is themed around). Mentioned early in the project but never designed — no schema, no UI. Natural shape: reuse the `chats`/`chat_messages` pattern (a read-mostly "announcements" room admins post to, everyone on the campaign can read) rather than inventing a separate system.
+
+---
+
 ## 1. Summary
 Forcefield is a Vue-based canvassing app for door-to-door and crowd petitioning, replacing/combining the useful parts of Reach and Minivan. Core goal: fast, single-screen data entry in the field, with real-time team sync, org-wide roles, and (phase 2) data-driven turf-cutting.
 
