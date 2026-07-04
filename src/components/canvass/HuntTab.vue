@@ -28,7 +28,9 @@ interface PersonHit extends Person {
 const talk = useTalkStore()
 const auth = useAuthStore()
 
+const mapWrapEl = ref<HTMLElement | null>(null)
 const mapEl = ref<HTMLElement | null>(null)
+const isFullscreen = ref(false)
 const listQuery = ref('')
 const searchResults = ref<{ persons: PersonHit[]; addresses: AddressWithRoster[] }>({
   persons: [],
@@ -405,18 +407,59 @@ function onThumbPointerDown(event: PointerEvent) {
 
 watch(searchResults, () => void nextTick(recomputeThumb))
 
+// --- Map fullscreen toggle. Safari (incl. iOS) only ever exposes the
+// webkit-prefixed API, so both directions need a fallback. Google Maps
+// doesn't notice its container resized on its own, so nudge it after the
+// browser finishes the transition (the 'fullscreenchange' event fires only
+// once the change has actually happened). ---
+
+type FullscreenableEl = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void
+}
+type FullscreenableDoc = Document & {
+  webkitExitFullscreen?: () => Promise<void> | void
+  webkitFullscreenElement?: Element | null
+}
+
+function toggleFullscreen() {
+  const doc = document as FullscreenableDoc
+  const isCurrentlyFullscreen = Boolean(document.fullscreenElement ?? doc.webkitFullscreenElement)
+  if (isCurrentlyFullscreen) {
+    if (document.exitFullscreen) void document.exitFullscreen()
+    else doc.webkitExitFullscreen?.()
+    return
+  }
+  const el = mapWrapEl.value as FullscreenableEl | null
+  if (!el) return
+  if (el.requestFullscreen) void el.requestFullscreen()
+  else el.webkitRequestFullscreen?.()
+}
+
+function onFullscreenChange() {
+  const doc = document as FullscreenableDoc
+  isFullscreen.value = Boolean(document.fullscreenElement ?? doc.webkitFullscreenElement)
+  setTimeout(() => {
+    if (!map) return
+    google.maps.event.trigger(map, 'resize')
+  }, 0)
+}
+
 onMounted(() => {
   if (resultsListEl.value) {
     resizeObserver = new ResizeObserver(recomputeThumb)
     resizeObserver.observe(resultsListEl.value)
   }
   recomputeThumb()
+  document.addEventListener('fullscreenchange', onFullscreenChange)
+  document.addEventListener('webkitfullscreenchange', onFullscreenChange)
 })
 
 onUnmounted(() => {
   resizeObserver?.disconnect()
   clusterer?.clearMarkers()
   markersByAddress.clear()
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
+  document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
 })
 </script>
 
@@ -443,7 +486,28 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <div ref="mapEl" class="map"></div>
+    <div ref="mapWrapEl" class="map-wrap" :class="{ 'map-wrap-fullscreen': isFullscreen }">
+      <div ref="mapEl" class="map"></div>
+      <button
+        type="button"
+        class="map-fullscreen-btn"
+        :aria-label="isFullscreen ? 'Exit fullscreen map' : 'View map fullscreen'"
+        @click="toggleFullscreen"
+      >
+        <!-- Four corner brackets pointing out (enter) / in (exit) — the
+             standard fullscreen-toggle glyph, drawn inline so it renders
+             identically everywhere instead of depending on font glyph
+             support for the unicode fullscreen arrows. -->
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <template v-if="isFullscreen">
+            <path d="M8 3v3a2 2 0 0 1-2 2H3M16 3v3a2 2 0 0 0 2 2h3M8 21v-3a2 2 0 0 0-2-2H3M16 21v-3a2 2 0 0 1 2-2h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </template>
+          <template v-else>
+            <path d="M3 9V5a2 2 0 0 1 2-2h4M21 9V5a2 2 0 0 0-2-2h-4M3 15v4a2 2 0 0 0 2 2h4M21 15v4a2 2 0 0 1-2 2h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </template>
+        </svg>
+      </button>
+    </div>
     <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
     <p v-if="mapsAuthError" class="muted map-error">
       Google rejected the Maps API key — usually quota, billing, or a referrer restriction on the
@@ -567,6 +631,10 @@ onUnmounted(() => {
   gap: 0.75rem;
 }
 
+.map-wrap {
+  position: relative;
+}
+
 .map {
   /* `svh` (small viewport height) instead of `dvh` — `dvh` shrinks/grows as
    * the on-screen keyboard opens/closes while typing in the search box
@@ -574,6 +642,41 @@ onUnmounted(() => {
   height: min(45svh, 420px);
   border-radius: var(--radius);
   border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+/* Actual Fullscreen API target — filling the screen only takes effect once
+ * the browser grants fullscreen, driven by the JS-toggled class below rather
+ * than the `:fullscreen` pseudo-class so old-Safari's webkit-prefixed event
+ * (no matching prefixed pseudo-class) still gets the right layout. */
+.map-wrap-fullscreen {
+  background: #000;
+}
+
+.map-wrap-fullscreen .map {
+  height: 100%;
+  border-radius: 0;
+  border: none;
+}
+
+.map-fullscreen-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.map-fullscreen-btn:hover {
   background: var(--surface-2);
 }
 
