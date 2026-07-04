@@ -18,6 +18,13 @@ export interface ThemeTokens {
   warning: string
   shadow: string
   radius: string
+  /** Hunt's custom results-list scrollbar thumb — deliberately its own set
+   * of knobs (not just reusing `accent`/`radius`) so each scheme can give it
+   * a distinct look: pill vs. chunky vs. beveled, glowing vs. flat. */
+  scrollbarColor: string
+  scrollbarWidth: string
+  scrollbarRadius: string
+  scrollbarShadow: string
 }
 
 export interface ThemeDefinition {
@@ -49,6 +56,10 @@ export const THEMES: ThemeDefinition[] = [
       warning: '#e0a02e',
       shadow: '0 1px 3px rgba(20, 24, 40, 0.08), 0 4px 16px rgba(20, 24, 40, 0.06)',
       radius: '12px',
+      scrollbarColor: '#2f6fed',
+      scrollbarWidth: '18px',
+      scrollbarRadius: '999px',
+      scrollbarShadow: 'none',
     },
   },
   {
@@ -69,6 +80,10 @@ export const THEMES: ThemeDefinition[] = [
       warning: '#fbbf24',
       shadow: '0 1px 3px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.3)',
       radius: '12px',
+      scrollbarColor: '#5b8cff',
+      scrollbarWidth: '18px',
+      scrollbarRadius: '999px',
+      scrollbarShadow: '0 0 6px rgba(91, 140, 255, 0.55)',
     },
   },
   {
@@ -89,6 +104,10 @@ export const THEMES: ThemeDefinition[] = [
       warning: '#ffb000',
       shadow: 'none',
       radius: '4px',
+      scrollbarColor: '#ffff00',
+      scrollbarWidth: '24px',
+      scrollbarRadius: '0px',
+      scrollbarShadow: 'none',
     },
   },
   {
@@ -109,6 +128,10 @@ export const THEMES: ThemeDefinition[] = [
       warning: '#ffd23f',
       shadow: '0 0 12px rgba(255, 46, 136, 0.45), 0 0 28px rgba(0, 230, 184, 0.2)',
       radius: '12px',
+      scrollbarColor: 'linear-gradient(180deg, #ff2e88, #00e6b8)',
+      scrollbarWidth: '20px',
+      scrollbarRadius: '999px',
+      scrollbarShadow: '0 0 10px rgba(255, 46, 136, 0.6), 0 0 16px rgba(0, 230, 184, 0.4)',
     },
   },
   {
@@ -129,6 +152,11 @@ export const THEMES: ThemeDefinition[] = [
       warning: '#cc9900',
       shadow: '2px 2px 0 rgba(0, 0, 0, 0.35)',
       radius: '2px',
+      scrollbarColor: '#c0c0c0',
+      scrollbarWidth: '28px',
+      scrollbarRadius: '0px',
+      scrollbarShadow:
+        'inset -2px -2px 0 rgba(0, 0, 0, 0.45), inset 2px 2px 0 rgba(255, 255, 255, 0.85)',
     },
   },
   {
@@ -149,6 +177,10 @@ export const THEMES: ThemeDefinition[] = [
       warning: '#c58a1f',
       shadow: '0 1px 3px rgba(30, 40, 20, 0.1), 0 4px 16px rgba(30, 40, 20, 0.08)',
       radius: '12px',
+      scrollbarColor: '#3f7d3a',
+      scrollbarWidth: '18px',
+      scrollbarRadius: '999px',
+      scrollbarShadow: 'none',
     },
   },
   {
@@ -169,6 +201,10 @@ export const THEMES: ThemeDefinition[] = [
       warning: '#d69a1f',
       shadow: '0 1px 3px rgba(10, 40, 50, 0.1), 0 4px 16px rgba(10, 40, 50, 0.08)',
       radius: '12px',
+      scrollbarColor: 'linear-gradient(180deg, #0e88a8, #4cc7e0)',
+      scrollbarWidth: '19px',
+      scrollbarRadius: '999px',
+      scrollbarShadow: 'none',
     },
   },
   {
@@ -189,6 +225,10 @@ export const THEMES: ThemeDefinition[] = [
       warning: '#e0932e',
       shadow: '0 1px 3px rgba(60, 30, 10, 0.1), 0 4px 16px rgba(60, 30, 10, 0.08)',
       radius: '12px',
+      scrollbarColor: 'linear-gradient(180deg, #ff6b3d, #ffb23d)',
+      scrollbarWidth: '19px',
+      scrollbarRadius: '999px',
+      scrollbarShadow: '0 0 8px rgba(255, 107, 61, 0.4)',
     },
   },
   {
@@ -209,6 +249,10 @@ export const THEMES: ThemeDefinition[] = [
       warning: '#b58900',
       shadow: '0 1px 3px rgba(0, 0, 0, 0.35), 0 4px 16px rgba(0, 0, 0, 0.25)',
       radius: '8px',
+      scrollbarColor: '#268bd2',
+      scrollbarWidth: '16px',
+      scrollbarRadius: '4px',
+      scrollbarShadow: 'none',
     },
   },
   {
@@ -229,6 +273,10 @@ export const THEMES: ThemeDefinition[] = [
       warning: '#f5c451',
       shadow: '0 1px 3px rgba(0, 0, 0, 0.5), 0 6px 20px rgba(0, 0, 0, 0.35)',
       radius: '12px',
+      scrollbarColor: '#7c8cff',
+      scrollbarWidth: '18px',
+      scrollbarRadius: '999px',
+      scrollbarShadow: '0 0 8px rgba(124, 140, 255, 0.65)',
     },
   },
 ]
@@ -255,6 +303,10 @@ const CSS_VAR_NAMES: Record<keyof ThemeTokens, string> = {
   warning: '--warning',
   shadow: '--shadow',
   radius: '--radius',
+  scrollbarColor: '--scrollbar-color',
+  scrollbarWidth: '--scrollbar-width',
+  scrollbarRadius: '--scrollbar-radius',
+  scrollbarShadow: '--scrollbar-shadow',
 }
 
 /** Paints the chosen scheme's tokens onto :root. Everything in style.css and

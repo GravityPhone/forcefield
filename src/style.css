@@ -13,6 +13,10 @@
   --warning: #e0a02e;
   --radius: 12px;
   --shadow: 0 1px 3px rgba(20, 24, 40, 0.08), 0 4px 16px rgba(20, 24, 40, 0.06);
+  --scrollbar-color: #2f6fed;
+  --scrollbar-width: 18px;
+  --scrollbar-radius: 999px;
+  --scrollbar-shadow: none;
 }
 
 * {

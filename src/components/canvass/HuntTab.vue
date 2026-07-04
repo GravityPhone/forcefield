@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
 import { geocodeAndCache } from '@/lib/geocode'
@@ -62,6 +62,21 @@ watch(
   },
   { immediate: true },
 )
+
+/** Ties page scroll position to intent, so getting to the top doesn't mean
+ * hunting for a strip of bare background to grab: typing a search means you
+ * want the results below, so jump there; tapping the map background means
+ * you want the map, so jump back up. Tapping a pin (locateAddress) leaves
+ * you at the bottom instead — you were already looking at the results. */
+function scrollHuntToBottom() {
+  const el = document.scrollingElement ?? document.documentElement
+  el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+}
+
+function scrollHuntToTop() {
+  const el = document.scrollingElement ?? document.documentElement
+  el.scrollTo({ top: 0, behavior: 'smooth' })
+}
 
 /** Only geocoded addresses get pins — a much smaller, growing-over-time set
  * (Talk mode, and now Hunt's "locate", both geocode on demand). */
@@ -165,12 +180,21 @@ async function initialize() {
     streetViewControl: false,
     mapTypeControl: false,
     fullscreenControl: false,
+    // Default "cooperative" handling requires two fingers to pan (one finger
+    // scrolls the page instead) — with our own tap-to-scroll behavior above,
+    // one-finger panning is what canvassers actually want here.
+    gestureHandling: 'greedy',
   })
   currentZoom = map.getZoom() ?? currentZoom
   map.addListener('zoom_changed', () => {
     currentZoom = map!.getZoom() ?? currentZoom
     refreshAllPinScales()
   })
+  // Tapping the map background (not a pin — markers fire their own 'click'
+  // instead of bubbling to this one) means "let me see the map", so bring
+  // it into view. Tapping a pin means "let me see the result", so that flow
+  // (locateAddress) scrolls to the bottom instead — see there.
+  map.addListener('click', scrollHuntToTop)
   clusterer = new MarkerClusterer({ map, markers: [] })
 
   const bounds = new google.maps.LatLngBounds()
@@ -265,6 +289,7 @@ function flatDistance(a: { lat: number; lng: number }, b: { lat: number; lng: nu
 async function locateAddress(address: AddressWithRoster) {
   if (locating.value) return
   locating.value = true
+  scrollHuntToBottom()
   try {
     if (address.lat == null || address.lng == null) {
       const loc = await geocodeAndCache(address)
@@ -318,7 +343,78 @@ function knock(addressId: string, personId?: string) {
   void talk.loadAddress(addressId, personId)
 }
 
+// --- Custom results-list scrollbar: the rows are buttons, so a touch-drag
+// starting on one scrolls unreliably (or just triggers the row). A dedicated
+// thumb gives a spot that's always just "grab and scroll", and staying custom
+// (rather than the native scrollbar) means it looks and behaves the same
+// whether this runs in a browser tab or an installed/PWA shell. ---
+
+const resultsListEl = ref<HTMLElement | null>(null)
+const thumbHeight = ref(0)
+const thumbTop = ref(0)
+const showThumb = ref(false)
+let resizeObserver: ResizeObserver | null = null
+
+const MIN_THUMB = 32
+
+function recomputeThumb() {
+  const el = resultsListEl.value
+  if (!el) return
+  const { scrollHeight, clientHeight, scrollTop } = el
+  if (scrollHeight <= clientHeight + 1) {
+    showThumb.value = false
+    return
+  }
+  showThumb.value = true
+  const height = Math.max(MIN_THUMB, (clientHeight / scrollHeight) * clientHeight)
+  const maxTop = clientHeight - height
+  const scrollableMax = scrollHeight - clientHeight
+  const top = scrollableMax > 0 ? (scrollTop / scrollableMax) * maxTop : 0
+  thumbHeight.value = height
+  thumbTop.value = top
+}
+
+function onResultsScroll() {
+  recomputeThumb()
+}
+
+function onThumbPointerDown(event: PointerEvent) {
+  const el = resultsListEl.value
+  if (!el) return
+  event.preventDefault()
+  const track = event.currentTarget as HTMLElement
+  track.setPointerCapture(event.pointerId)
+  const trackHeight = el.clientHeight
+  const scrollableMax = el.scrollHeight - el.clientHeight
+  const startY = event.clientY
+  const startScrollTop = el.scrollTop
+
+  function onMove(e: PointerEvent) {
+    const deltaY = e.clientY - startY
+    const maxTop = trackHeight - thumbHeight.value
+    const scrollDelta = maxTop > 0 ? (deltaY / maxTop) * scrollableMax : 0
+    el!.scrollTop = Math.min(scrollableMax, Math.max(0, startScrollTop + scrollDelta))
+  }
+  function onUp() {
+    track.removeEventListener('pointermove', onMove)
+    track.removeEventListener('pointerup', onUp)
+  }
+  track.addEventListener('pointermove', onMove)
+  track.addEventListener('pointerup', onUp)
+}
+
+watch(searchResults, () => void nextTick(recomputeThumb))
+
+onMounted(() => {
+  if (resultsListEl.value) {
+    resizeObserver = new ResizeObserver(recomputeThumb)
+    resizeObserver.observe(resultsListEl.value)
+  }
+  recomputeThumb()
+})
+
 onUnmounted(() => {
+  resizeObserver?.disconnect()
   clusterer?.clearMarkers()
   markersByAddress.clear()
 })
@@ -361,6 +457,7 @@ onUnmounted(() => {
       type="search"
       placeholder="Search a name or street…"
       aria-label="Search people or addresses"
+      @focus="scrollHuntToBottom"
       @input="onListInput(($event.target as HTMLInputElement).value)"
     />
 
@@ -389,7 +486,8 @@ onUnmounted(() => {
       </select>
     </div>
 
-    <div class="results-list">
+    <div class="results-list-wrap">
+    <div ref="resultsListEl" class="results-list" @scroll="onResultsScroll">
       <p v-if="listQuery.trim().length < 2" class="muted empty">
         Type at least 2 characters of a name or street.
       </p>
@@ -447,6 +545,18 @@ onUnmounted(() => {
         </button>
       </template>
     </div>
+
+    <div
+      v-if="showThumb"
+      class="scrollbar-track"
+      @pointerdown="onThumbPointerDown"
+    >
+      <div
+        class="scrollbar-thumb"
+        :style="{ height: thumbHeight + 'px', transform: `translateY(${thumbTop}px)` }"
+      ></div>
+    </div>
+    </div>
   </div>
 </template>
 
@@ -458,7 +568,10 @@ onUnmounted(() => {
 }
 
 .map {
-  height: min(45dvh, 420px);
+  /* `svh` (small viewport height) instead of `dvh` — `dvh` shrinks/grows as
+   * the on-screen keyboard opens/closes while typing in the search box
+   * below, and that live resize was what made the page jump on focus/blur. */
+  height: min(45svh, 420px);
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface-2);
@@ -541,12 +654,52 @@ onUnmounted(() => {
   color: var(--located-accent);
 }
 
+.results-list-wrap {
+  position: relative;
+}
+
 .results-list {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  max-height: 40dvh;
+  max-height: 40svh;
   overflow-y: auto;
+  /* Scrolling here is via touch/wheel plus the custom thumb beside it —
+   * the native scrollbar is hidden so behavior/look is consistent across
+   * browser tab vs installed PWA shell. */
+  scrollbar-width: none;
+  padding-right: max(0.6rem, calc(var(--scrollbar-width, 8px) + 0.6rem));
+}
+
+.results-list::-webkit-scrollbar {
+  display: none;
+}
+
+/* Wide invisible touch target with a visible thumb centered in it — easy to
+ * grab with a thumb (finger), sized/colored/shaped per the active appearance
+ * scheme (see lib/themes.ts) instead of one fixed look for every scheme. */
+.scrollbar-track {
+  position: absolute;
+  top: 0;
+  right: -0.1rem;
+  bottom: 0;
+  width: max(2.25rem, calc(var(--scrollbar-width, 8px) + 1.25rem));
+  touch-action: none;
+}
+
+.scrollbar-thumb {
+  position: absolute;
+  right: 0.4rem;
+  width: var(--scrollbar-width, 8px);
+  border-radius: var(--scrollbar-radius, 999px);
+  background: var(--scrollbar-color, var(--accent));
+  box-shadow: var(--scrollbar-shadow, none);
+  transition: filter 0.1s ease;
+}
+
+.scrollbar-track:hover .scrollbar-thumb,
+.scrollbar-track:active .scrollbar-thumb {
+  filter: brightness(1.15);
 }
 
 .result-row {
