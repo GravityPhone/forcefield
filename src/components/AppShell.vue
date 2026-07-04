@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore, roleHome } from '@/stores/auth'
 import { ROLE_LABELS } from '@/types'
+import EdgeScrollbar from '@/components/EdgeScrollbar.vue'
 
 defineProps<{ title?: string }>()
 
@@ -15,10 +16,42 @@ async function handleLogout() {
   await auth.logOut()
   router.push('/')
 }
+
+// --- Nav tabs scroll hints: the tab row scrolls sideways on narrow screens
+// (see .admin-nav below) but gave no sign there was more off to the side —
+// these arrows appear only on whichever edge still has more to scroll to. ---
+
+const navEl = ref<HTMLElement | null>(null)
+const canScrollNavLeft = ref(false)
+const canScrollNavRight = ref(false)
+let navResizeObserver: ResizeObserver | null = null
+
+function updateNavScrollHints() {
+  const el = navEl.value
+  if (!el) return
+  const maxScroll = el.scrollWidth - el.clientWidth
+  canScrollNavLeft.value = el.scrollLeft > 2
+  canScrollNavRight.value = el.scrollLeft < maxScroll - 2
+}
+
+onMounted(() => {
+  void nextTick(updateNavScrollHints)
+  if (navEl.value) {
+    navResizeObserver = new ResizeObserver(updateNavScrollHints)
+    navResizeObserver.observe(navEl.value)
+  }
+  window.addEventListener('resize', updateNavScrollHints)
+})
+
+onUnmounted(() => {
+  navResizeObserver?.disconnect()
+  window.removeEventListener('resize', updateNavScrollHints)
+})
 </script>
 
 <template>
   <div class="shell">
+    <EdgeScrollbar />
     <header class="shell-header">
       <div class="shell-header-inner">
         <div class="brand">
@@ -34,20 +67,24 @@ async function handleLogout() {
     </header>
 
     <!-- AI Chat stays admin-only; the user-to-user Chat link is for everyone. -->
-    <nav v-if="auth.profile" class="admin-nav">
-      <template v-if="auth.profile.role === 'admin'">
-        <router-link to="/admin">Dashboard</router-link>
-        <!-- Admins often go out canvassing themselves, not just manage the org. -->
-        <router-link to="/canvass">Canvass</router-link>
-        <router-link to="/admin/chat">AI Chat</router-link>
-        <router-link to="/admin/settings">Settings</router-link>
-      </template>
-      <router-link v-else :to="homePath">Home</router-link>
-      <router-link to="/chat">Chat</router-link>
-      <router-link to="/bulletin">Bulletin</router-link>
-      <router-link to="/leaderboard">Leaderboard</router-link>
-      <router-link to="/appearance">Appearance</router-link>
-    </nav>
+    <div v-if="auth.profile" class="admin-nav-wrap">
+      <nav ref="navEl" class="admin-nav" @scroll="updateNavScrollHints">
+        <template v-if="auth.profile.role === 'admin'">
+          <router-link to="/admin">Dashboard</router-link>
+          <!-- Admins often go out canvassing themselves, not just manage the org. -->
+          <router-link to="/canvass">Canvass</router-link>
+          <router-link to="/admin/chat">AI Chat</router-link>
+          <router-link to="/admin/settings">Settings</router-link>
+        </template>
+        <router-link v-else :to="homePath">Home</router-link>
+        <router-link to="/chat">Chat</router-link>
+        <router-link to="/bulletin">Bulletin</router-link>
+        <router-link to="/leaderboard">Leaderboard</router-link>
+        <router-link to="/appearance">Appearance</router-link>
+      </nav>
+      <span v-if="canScrollNavLeft" class="nav-scroll-hint nav-scroll-hint-left" aria-hidden="true">‹</span>
+      <span v-if="canScrollNavRight" class="nav-scroll-hint nav-scroll-hint-right" aria-hidden="true">›</span>
+    </div>
 
     <main class="shell-main">
       <div class="page page-wide">
@@ -103,6 +140,10 @@ async function handleLogout() {
   white-space: nowrap;
 }
 
+.admin-nav-wrap {
+  position: relative;
+}
+
 .admin-nav {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
@@ -116,6 +157,60 @@ async function handleLogout() {
    * instead of wrapping or squeezing. */
   overflow-x: auto;
   scrollbar-width: none;
+}
+
+/* Fades hint that the row scrolls even before the chevron catches the eye,
+ * and stops the last visible link's text looking abruptly cut off. */
+.admin-nav-wrap::before,
+.admin-nav-wrap::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 1px;
+  width: 1.75rem;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.admin-nav-wrap::before {
+  left: 0;
+  background: linear-gradient(90deg, var(--surface), transparent);
+}
+
+.admin-nav-wrap::after {
+  right: 0;
+  background: linear-gradient(270deg, var(--surface), transparent);
+}
+
+.admin-nav-wrap:has(.nav-scroll-hint-left)::before,
+.admin-nav-wrap:has(.nav-scroll-hint-right)::after {
+  opacity: 1;
+}
+
+.nav-scroll-hint {
+  position: absolute;
+  top: 0;
+  bottom: 1px;
+  display: flex;
+  align-items: center;
+  width: 1.5rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.nav-scroll-hint-left {
+  left: 0;
+  justify-content: flex-start;
+}
+
+.nav-scroll-hint-right {
+  right: 0;
+  justify-content: flex-end;
 }
 
 .admin-nav::-webkit-scrollbar {
