@@ -68,8 +68,9 @@ watch(
 /** Ties page scroll position to intent, so getting to the top doesn't mean
  * hunting for a strip of bare background to grab: typing a search means you
  * want the results below, so jump there; tapping the map background means
- * you want the map, so jump back up. Tapping a pin (locateAddress) leaves
- * you at the bottom instead — you were already looking at the results. */
+ * you want the map, so jump back up. Tapping a pin (locateAddress) doesn't
+ * scroll at all — the located-address bubble sits right above the map, so
+ * it's already in view without moving the page. */
 function scrollHuntToBottom() {
   const el = document.scrollingElement ?? document.documentElement
   el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
@@ -194,8 +195,7 @@ async function initialize() {
   })
   // Tapping the map background (not a pin — markers fire their own 'click'
   // instead of bubbling to this one) means "let me see the map", so bring
-  // it into view. Tapping a pin means "let me see the result", so that flow
-  // (locateAddress) scrolls to the bottom instead — see there.
+  // it into view. Tapping a pin doesn't hit this listener at all.
   map.addListener('click', scrollHuntToTop)
   clusterer = new MarkerClusterer({ map, markers: [] })
 
@@ -291,7 +291,6 @@ function flatDistance(a: { lat: number; lng: number }, b: { lat: number; lng: nu
 async function locateAddress(address: AddressWithRoster) {
   if (locating.value) return
   locating.value = true
-  scrollHuntToBottom()
   try {
     if (address.lat == null || address.lng == null) {
       const loc = await geocodeAndCache(address)
