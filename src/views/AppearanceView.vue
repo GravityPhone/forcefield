@@ -78,6 +78,12 @@ async function pick(id: ThemeId) {
   color: var(--text);
   overflow: hidden;
   text-align: left;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+
+.swatch-card:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  transform: translateY(-1px);
 }
 
 .swatch-card:disabled {

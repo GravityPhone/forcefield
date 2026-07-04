@@ -112,11 +112,14 @@ onUnmounted(() => {
         </button>
       </div>
 
-      <p v-if="loading" class="muted">Loading standings…</p>
+      <p v-if="loading" class="muted loading-row">
+        <span class="spinner" aria-hidden="true"></span> Loading standings…
+      </p>
 
       <template v-else>
         <div class="card">
           <h3>Canvassers — {{ METRIC_LABELS[primaryMetric] }}</h3>
+          <div class="board-scroll">
           <table class="board">
             <thead>
               <tr>
@@ -141,10 +144,15 @@ onUnmounted(() => {
               </tr>
             </tbody>
           </table>
+          </div>
+          <p v-if="!scopedCanvassers.length" class="muted empty-note">
+            No knocks logged yet — standings will fill in as doors get knocked.
+          </p>
         </div>
 
         <div v-if="showDoorsBoard" class="card">
           <h3>Canvassers — Doors knocked</h3>
+          <div class="board-scroll">
           <table class="board">
             <thead>
               <tr>
@@ -167,10 +175,12 @@ onUnmounted(() => {
               </tr>
             </tbody>
           </table>
+          </div>
         </div>
 
         <div class="card">
           <h3>Teams — {{ METRIC_LABELS[primaryMetric] }}</h3>
+          <div class="board-scroll">
           <table class="board">
             <thead>
               <tr>
@@ -195,7 +205,8 @@ onUnmounted(() => {
               </tr>
             </tbody>
           </table>
-          <p v-if="!teams.length" class="muted">No teams yet.</p>
+          </div>
+          <p v-if="!teams.length" class="muted empty-note">No teams yet.</p>
         </div>
       </template>
     </div>
@@ -214,10 +225,28 @@ onUnmounted(() => {
   gap: 0.4rem;
 }
 
+.loading-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+
+/* Long names + the org-wide Team column can outgrow a phone screen — scroll
+ * the table inside the card rather than the whole page sideways. */
+.board-scroll {
+  overflow-x: auto;
+}
+
 .board {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.92rem;
+}
+
+.empty-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.9rem;
 }
 
 .board th {

@@ -1,3 +1,7 @@
+<script lang="ts">
+export default { name: 'CanvasserHomeView' }
+</script>
+
 <script setup lang="ts">
 import AppShell from '@/components/AppShell.vue'
 import TalkTab from '@/components/canvass/TalkTab.vue'
@@ -58,6 +62,12 @@ const talk = useTalkStore()
   background: var(--surface);
   color: var(--text-muted);
   cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.tab:not(.active):hover {
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .tab.active {

@@ -125,7 +125,9 @@ async function send() {
           <div class="bubble">{{ m.text }}</div>
         </div>
         <div v-if="loading" class="msg assistant">
-          <div class="bubble muted">Thinking…</div>
+          <div class="bubble muted thinking">
+            Thinking<span class="dots"><span>.</span><span>.</span><span>.</span></span>
+          </div>
         </div>
       </div>
       <form class="chat-input" @submit.prevent="send">
@@ -194,9 +196,33 @@ async function send() {
 }
 
 .msg.error .bubble {
-  background: #fdecec;
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
   border: 1px solid var(--danger);
   color: var(--danger);
+}
+
+.dots span {
+  animation: dot-pulse 1.2s infinite;
+  opacity: 0.25;
+}
+
+.dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes dot-pulse {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+  }
+  30% {
+    opacity: 1;
+  }
 }
 
 .chat-input {

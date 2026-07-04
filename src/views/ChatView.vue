@@ -340,6 +340,7 @@ async function addPeople() {
   justify-content: center;
   padding: 1rem;
   z-index: 50;
+  animation: overlay-in 0.15s ease-out;
 }
 
 .dialog {
@@ -349,6 +350,20 @@ async function addPeople() {
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
+  animation: dialog-in 0.15s ease-out;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
 }
 
 .dialog-actions {

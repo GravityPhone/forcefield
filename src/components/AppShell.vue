@@ -97,6 +97,10 @@ async function handleLogout() {
 .username {
   font-weight: 600;
   font-size: 0.92rem;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .admin-nav {
@@ -108,6 +112,14 @@ async function handleLogout() {
   max-width: 860px;
   margin: 0 auto;
   width: 100%;
+  /* Six links don't fit a narrow phone — let the row scroll sideways
+   * instead of wrapping or squeezing. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.admin-nav::-webkit-scrollbar {
+  display: none;
 }
 
 .admin-nav a {
@@ -116,6 +128,13 @@ async function handleLogout() {
   font-size: 0.92rem;
   color: var(--text-muted);
   border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: color 0.12s ease;
+}
+
+.admin-nav a:hover {
+  color: var(--text);
 }
 
 .admin-nav a.router-link-exact-active {

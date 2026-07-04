@@ -340,7 +340,7 @@ onUnmounted(() => {
       />
       <button
         class="btn btn-sm knock-btn"
-        :style="{ background: knockColorFor(locatedAddress.id), color: 'var(--accent-contrast)' }"
+        :style="{ background: knockColorFor(locatedAddress.id), color: '#fff' }"
         @click="knock(locatedAddress.id)"
       >
         Knock
@@ -419,7 +419,7 @@ onUnmounted(() => {
           <button
             v-if="p.household_id"
             class="btn btn-sm knock-btn"
-            :style="{ background: knockColorFor(p.household_id), color: 'var(--accent-contrast)' }"
+            :style="{ background: knockColorFor(p.household_id), color: '#fff' }"
             @click.stop="knock(p.household_id!, p.id)"
           >
             Knock
@@ -439,7 +439,7 @@ onUnmounted(() => {
           <OutcomeIndicatorGrid :summary="summaryFor(a.id)" :household-size="householdSize(a)" />
           <button
             class="btn btn-sm knock-btn"
-            :style="{ background: knockColorFor(a.id), color: 'var(--accent-contrast)' }"
+            :style="{ background: knockColorFor(a.id), color: '#fff' }"
             @click.stop="knock(a.id)"
           >
             Knock
@@ -564,6 +564,10 @@ onUnmounted(() => {
   font: inherit;
   color: inherit;
   text-align: left;
+}
+
+.result-row:hover {
+  background: var(--surface-2);
 }
 
 .result-row.result-active {

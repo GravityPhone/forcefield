@@ -116,7 +116,9 @@ onUnmounted(() => {
         </form>
       </div>
 
-      <p v-if="loading" class="muted">Loading announcements…</p>
+      <p v-if="loading" class="muted loading-row">
+        <span class="spinner" aria-hidden="true"></span> Loading announcements…
+      </p>
       <p v-else-if="!bulletins.length" class="muted">
         No announcements yet{{ isAdmin ? ' — post the first one above.' : '.' }}
       </p>
@@ -147,13 +149,26 @@ onUnmounted(() => {
   gap: 0.75rem;
 }
 
+.bulletin-head h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .meta {
   font-size: 0.85rem;
   margin: 0.15rem 0 0.6rem;
 }
 
+.loading-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+}
+
 .body {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   margin: 0;
 }
 

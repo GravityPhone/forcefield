@@ -68,7 +68,9 @@ function pickAddress(a: Address) {
         </div>
       </template>
       <div v-else-if="talk.searching" class="empty muted">Searching…</div>
-      <div v-else class="empty muted">No matches — log the outcome anyway and use notes.</div>
+      <!-- Anonymous walk-up logging was removed (outcomes need a loaded
+           address), so don't suggest "log it anyway" here. -->
+      <div v-else class="empty muted">No matches — try fewer letters, or find the door in Hunt.</div>
     </div>
   </div>
 </template>

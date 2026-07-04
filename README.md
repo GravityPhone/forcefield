@@ -15,6 +15,8 @@ npm run dev
 
 Supabase URL and publishable anon key are baked in as public-safe defaults ([src/lib/config.ts](src/lib/config.ts)) — safe to expose, access is controlled by RLS. `VITE_GOOGLE_MAPS_API_KEY` has **no fallback** (a hardcoded Maps key in source trips Netlify's build-time secret scanner once the same value is also set as an env var) — put it in a local `.env` for `npm run dev` to render the map. Values for all of these live in the gitignored `KEYS-AND-ACCESS.md`.
 
+**"This page can't load Google Maps correctly" in local dev but not on the live site?** That's a missing/invalid `VITE_GOOGLE_MAPS_API_KEY` — Netlify injects it at deploy time, but a fresh local checkout has no `.env` at all, so the Hunt-mode map has no key to load with. Add it to `.env` and restart `npm run dev` (Vite only reads env vars at startup). The app also surfaces this itself: if Google rejects the key at *runtime* (quota/billing/referrer restriction, not just a missing key), a message appears under the map pointing at the browser console for the specific reason (see `gm_authFailure` in [src/lib/googleMaps.ts](src/lib/googleMaps.ts)).
+
 To test the AI chat's Netlify Function locally (`/api/chat` — not served by plain `npm run dev`), run `netlify dev --offline` instead, with `.env` also containing `SUPABASE_SERVICE_ROLE_KEY` and `GOOGLE_MAPS_API_KEY` (server-side, no `VITE_` prefix).
 
 ## One-time Supabase setup (required before auth works)
@@ -50,8 +52,8 @@ An env var change alone doesn't redeploy — trigger a new deploy (or push any c
 
 | Role | Home screen |
 |---|---|
-| Admin | `/admin` — dashboard (mostly "coming soon" — see spec status), AI chat with live data tools, settings |
+| Admin | `/admin` — dashboard (leaderboard config, bulletin, mostly-"coming soon" cards otherwise — see spec status), AI chat with live data tools, settings. Also has a **Canvass** nav link to `/canvass` (Talk/Hunt), since admins often go out canvassing themselves. |
 | Team Lead | `/team` |
 | Canvasser | `/canvass` — Talk/Hunt tabs |
 
-Everyone (any role) also gets `/chat` — the user-to-user chat (global room, squads, DMs).
+Every role also gets: `/chat` (user-to-user chat — global room, squads, DMs), `/bulletin` (admin-post, everyone-read announcements), `/leaderboard` (per-canvasser/per-team standings), `/appearance` (10 cosmetic color schemes, saved per account).

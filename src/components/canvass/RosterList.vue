@@ -79,6 +79,10 @@ function contactSummary(personId: string): string | null {
   text-align: left;
 }
 
+.person:hover {
+  background: var(--surface-2);
+}
+
 .person.selected {
   border-color: var(--accent);
   outline: 2px solid var(--accent);
