@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
+import { fadeUp } from '@/lib/motion'
 import { useSquadsStore, type SquadListItem } from '@/stores/squads'
 import type { ChatProfile } from '@/types'
 
@@ -68,7 +69,12 @@ function memberNames(squad: SquadListItem): string {
         No squads yet today. Start one and invite whoever you're knocking with.
       </p>
 
-      <div v-for="s in squads.squads" :key="s.id" class="card squad-card">
+      <div
+        v-for="(s, i) in squads.squads"
+        :key="s.id"
+        v-motion="fadeUp(Math.min(i, 8) * 45)"
+        class="card squad-card"
+      >
         <div class="squad-info">
           <span class="squad-name">👥 {{ s.name }}</span>
           <span class="muted squad-members">

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
+import { fadeUp, popIn } from '@/lib/motion'
 import { supabase } from '@/lib/supabase'
 import { localToday } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
@@ -223,7 +224,13 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
       <p v-else-if="!filtered.length" class="muted">No users match.</p>
 
       <div v-else class="user-list card">
-        <button v-for="u in filtered" :key="u.id" class="user-row" @click="openSheet(u)">
+        <button
+          v-for="(u, i) in filtered"
+          :key="u.id"
+          v-motion="fadeUp(Math.min(i, 10) * 30)"
+          class="user-row"
+          @click="openSheet(u)"
+        >
           <span class="avatar" :style="avatarStyle(u)" aria-hidden="true">{{ initialsOf(u) }}</span>
           <span class="user-main">
             <span class="user-name-line">
@@ -267,7 +274,7 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
             <div class="section-head">
               <span class="section-label">Role</span>
               <Transition name="fade">
-                <span v-if="savedSection === 'role'" class="saved">Saved ✓</span>
+                <span v-if="savedSection === 'role'" v-motion="popIn()" class="saved">Saved ✓</span>
               </Transition>
             </div>
             <div class="segmented" role="group" aria-label="Role">
@@ -290,7 +297,7 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
             <div class="section-head">
               <span class="section-label">Team</span>
               <Transition name="fade">
-                <span v-if="savedSection === 'team'" class="saved">Saved ✓</span>
+                <span v-if="savedSection === 'team'" v-motion="popIn()" class="saved">Saved ✓</span>
               </Transition>
             </div>
             <div class="option-list">
@@ -319,7 +326,7 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
             <div class="section-head">
               <span class="section-label">Today's squad</span>
               <Transition name="fade">
-                <span v-if="savedSection === 'squad'" class="saved">Saved ✓</span>
+                <span v-if="savedSection === 'squad'" v-motion="popIn()" class="saved">Saved ✓</span>
               </Transition>
             </div>
             <div v-if="squads.length" class="option-list">

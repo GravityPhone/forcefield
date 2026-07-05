@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { OUTCOMES } from '@/lib/outcomes'
+import { popIn } from '@/lib/motion'
 import { hapticNotify, hapticTap } from '@/lib/native'
 import { useTalkStore } from '@/stores/talk'
 import type { KnockOutcome } from '@/types'
@@ -52,7 +53,12 @@ function disabledFor(requiresPerson: boolean): boolean {
     </p>
     <!-- Confirms before the screen clears — no silent auto-advance. Only
          appears once something is actually logged for the current target. -->
-    <button v-if="talk.pendingOutcome" class="btn btn-primary next-btn" @click="confirmNext">
+    <button
+      v-if="talk.pendingOutcome"
+      v-motion="popIn()"
+      class="btn btn-primary next-btn"
+      @click="confirmNext"
+    >
       Next
     </button>
   </div>

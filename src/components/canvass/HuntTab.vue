@@ -14,6 +14,7 @@ import { OUTCOME_HEX, PIN_DEFAULT_HEX, knockButtonHex } from '@/lib/outcomes'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import OutcomeIndicatorGrid from './OutcomeIndicatorGrid.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
+import { fadeUp } from '@/lib/motion'
 import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockLog, KnockOutcome, Person } from '@/types'
 
 // Walk-order options (Talk mode's Next button follows these).
@@ -656,7 +657,7 @@ onUnmounted(() => {
   <div class="hunt">
     <!-- Whatever was last clicked — a pin on the map or a result below —
          always surfaces here, whether or not it matches the current search. -->
-    <div v-if="locatedAddress" class="card located-card" :class="locatedStatusClass">
+    <div v-if="locatedAddress" v-motion="fadeUp()" class="card located-card" :class="locatedStatusClass">
       <span class="result-left">
         <span class="result-name">
           {{ locatedAddress.street }}{{ locatedAddress.unit ? ' ' + locatedAddress.unit : '' }}
