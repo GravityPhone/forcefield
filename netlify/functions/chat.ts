@@ -56,7 +56,8 @@ function buildSystemPrompt(timezone: string, localTime: string): string {
     'canvasser_id -> profiles.id, occurred_at, outcome, notes) — outcome is one of ' +
     "'signed','didnt_sign','maybe','not_home','skip','hostile'; to get the address for a " +
     'knock, join addresses on knock_logs.household_id = addresses.id\n' +
-    '- profiles(id, username, display_name, role, team_id) — role is canvasser/team_lead/admin\n' +
+    '- profiles(id, username, display_name, role, team_id) — role is ' +
+    'canvasser/team_lead/campaign_manager/admin (team_lead displays as "Squad Leader")\n' +
     '- household_knock_summary(household_id -> addresses.id, total_knocks, signed_count, ' +
     'didnt_sign_count, maybe_count, not_home_count, skip_count, hostile_count, reached)\n' +
     '- household_latest_knock(household_id -> addresses.id, outcome, occurred_at)\n\n' +

@@ -163,14 +163,23 @@ export const useChatStore = defineStore('chat', {
           created_by: row.created_by,
           created_at: row.created_at,
           members,
-          // Global and team rooms have no member rows — RLS already scoped
-          // team chats to your team (or admin), so seeing one means you're in.
+          // Global and team-scoped rooms have no member rows — RLS already
+          // scoped them by team/role, so seeing one means you're in it.
           isMember:
-            row.kind === 'global' || row.kind === 'team' || members.some((m) => m.id === this.myId),
+            row.kind !== 'squad' && row.kind !== 'dm'
+              ? true
+              : members.some((m) => m.id === this.myId),
         }
       })
-      // Team room first, then squads (today's crews), global, PMs.
-      const rank: Record<ChatKind, number> = { team: 0, squad: 1, global: 2, dm: 3 }
+      // Team room first, leadership rooms, squads (today's crews), global, PMs.
+      const rank: Record<ChatKind, number> = {
+        team: 0,
+        team_leads: 1,
+        team_managers: 2,
+        squad: 3,
+        global: 4,
+        dm: 5,
+      }
       this.chats.sort((a, b) => rank[a.kind] - rank[b.kind] || a.created_at.localeCompare(b.created_at))
     },
 
@@ -518,7 +527,7 @@ export const useChatStore = defineStore('chat', {
     async loadOrgMembers() {
       const { data } = await supabase
         .from('profiles')
-        .select('id, username, display_name, avatar')
+        .select('id, username, display_name, avatar, role')
         .order('username')
       this.orgMembers = (data ?? []) as ChatProfile[]
     },

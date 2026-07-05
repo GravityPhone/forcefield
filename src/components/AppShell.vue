@@ -38,7 +38,17 @@ const barItems = computed<NavItem[]>(() => {
   if (!auth.profile) return []
   // Chat is deliberately NOT a tab — it lives in the pull-out drawer
   // (ChatDrawer), reachable from every screen via the right-edge handle.
+  // Admins get oversight tabs only; campaign managers run the day-to-day
+  // and hold what used to be the admin nav.
   if (auth.profile.role === 'admin') {
+    return [
+      { to: '/admin/users', label: 'Users', icon: 'squads' },
+      { to: '/admin/campaigns', label: 'Campaigns', icon: 'dashboard' },
+      { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
+      { to: '/leaderboard', label: 'Boards', icon: 'trophy' },
+    ]
+  }
+  if (auth.profile.role === 'campaign_manager') {
     return [
       { to: '/admin', label: 'Dashboard', icon: 'dashboard' },
       { to: '/canvass', label: 'Canvass', icon: 'pin' },
@@ -58,6 +68,9 @@ const moreItems = computed<NavItem[]>(() => {
   if (!auth.profile) return []
   const appearance: NavItem = { to: '/appearance', label: 'Appearance', icon: 'palette' }
   if (auth.profile.role === 'admin') {
+    return [{ to: '/squads', label: 'Squads', icon: 'squads' }, appearance]
+  }
+  if (auth.profile.role === 'campaign_manager') {
     return [
       { to: '/admin/chat', label: 'AI Chat', icon: 'sparkle' },
       { to: '/turf', label: 'Turf', icon: 'map' },
@@ -153,8 +166,12 @@ onUnmounted(() => {
     <div v-if="auth.profile" class="admin-nav-wrap">
       <nav ref="navEl" class="admin-nav" @scroll="updateNavScrollHints">
         <template v-if="auth.profile.role === 'admin'">
+          <router-link to="/admin/users">Users</router-link>
+          <router-link to="/admin/campaigns">Campaigns</router-link>
+        </template>
+        <template v-else-if="auth.profile.role === 'campaign_manager'">
           <router-link to="/admin">Dashboard</router-link>
-          <!-- Admins often go out canvassing themselves, not just manage the org. -->
+          <!-- Managers go out canvassing themselves, not just run the org. -->
           <router-link to="/canvass">Canvass</router-link>
           <router-link to="/turf">Turf</router-link>
           <router-link to="/admin/chat">AI Chat</router-link>

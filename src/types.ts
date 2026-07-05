@@ -1,4 +1,8 @@
-export type AppRole = 'canvasser' | 'team_lead' | 'admin'
+/** Hierarchy: admin > campaign_manager > team_lead (shown as "Squad
+ * Leader") > canvasser. Campaign managers hold the full day-to-day feature
+ * set (turf, AI chat, settings, dashboards); admins manage users/teams and
+ * view campaigns at a high level. */
+export type AppRole = 'canvasser' | 'team_lead' | 'campaign_manager' | 'admin'
 
 /** Cosmetic color scheme, saved per account. Deliberately independent of
  * the knock-outcome colors (OUTCOMES in lib/outcomes.ts), the Hunt-mode
@@ -68,6 +72,7 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   // Displayed as "Squad Leader" (user's preferred term) — the DB enum value
   // stays team_lead; renaming a Postgres enum isn't worth the migration.
   team_lead: 'Squad Leader',
+  campaign_manager: 'Campaign Manager',
   admin: 'Admin',
 }
 
@@ -183,7 +188,7 @@ export interface TurfSegment {
   created_at: string
 }
 
-export type ChatKind = 'global' | 'squad' | 'dm' | 'team'
+export type ChatKind = 'global' | 'squad' | 'dm' | 'team' | 'team_leads' | 'team_managers'
 
 export interface Chat {
   id: string
@@ -235,6 +240,8 @@ export interface ChatProfile {
   username: string
   display_name: string | null
   avatar: string | null
+  /** Present where role matters (leadership-room member lists). */
+  role?: AppRole
 }
 
 export interface Bulletin {

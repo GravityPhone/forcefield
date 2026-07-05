@@ -48,18 +48,19 @@ const router = createRouter({
     // Per-account cosmetic color scheme — every role can set their own.
     { path: '/appearance', name: 'appearance', component: () => import('@/views/AppearanceView.vue'), meta: { roles: [] } },
 
-    // Team lead home (admins can view too)
-    { path: '/team', name: 'team', component: () => import('@/views/TeamLeadHomeView.vue'), meta: { roles: ['team_lead', 'admin'] } },
+    // Squad leader home (managers/admins can view too)
+    { path: '/team', name: 'team', component: () => import('@/views/TeamLeadHomeView.vue'), meta: { roles: ['team_lead', 'campaign_manager', 'admin'] } },
 
-    // Turf cutting/assignment — leads and admins cut turf; canvassers see
-    // their own turf on the Hunt map instead.
-    { path: '/turf', name: 'turf', component: () => import('@/views/TurfView.vue'), meta: { roles: ['team_lead', 'admin'] } },
+    // Turf cutting/assignment — squad leaders and up cut turf; canvassers
+    // see their own turf on the Hunt map instead.
+    { path: '/turf', name: 'turf', component: () => import('@/views/TurfView.vue'), meta: { roles: ['team_lead', 'campaign_manager', 'admin'] } },
 
-    // Admin area
-    { path: '/admin', name: 'admin', component: () => import('@/views/AdminHomeView.vue'), meta: { roles: ['admin'] } },
-    { path: '/admin/chat', name: 'admin-chat', component: () => import('@/views/AdminChatView.vue'), meta: { roles: ['admin'] } },
-    { path: '/admin/settings', name: 'admin-settings', component: () => import('@/views/AdminSettingsView.vue'), meta: { roles: ['admin'] } },
-    { path: '/admin/campaigns', name: 'admin-campaigns', component: () => import('@/views/AdminCampaignsView.vue'), meta: { roles: ['admin'] } },
+    // Management area. Campaign managers run the day-to-day (dashboard, AI
+    // chat, settings); true admins keep user management to themselves.
+    { path: '/admin', name: 'admin', component: () => import('@/views/AdminHomeView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
+    { path: '/admin/chat', name: 'admin-chat', component: () => import('@/views/AdminChatView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
+    { path: '/admin/settings', name: 'admin-settings', component: () => import('@/views/AdminSettingsView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
+    { path: '/admin/campaigns', name: 'admin-campaigns', component: () => import('@/views/AdminCampaignsView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
     { path: '/admin/users', name: 'admin-users', component: () => import('@/views/AdminUsersView.vue'), meta: { roles: ['admin'] } },
 
     { path: '/:pathMatch(.*)*', redirect: '/' },

@@ -11,10 +11,14 @@ interface AuthState {
   ready: boolean
 }
 
-/** Where each role lands after login. */
+/** Where each role lands after login. Campaign managers get the full
+ * dashboard (the old admin home); admins land on user management — their
+ * job is users/teams/campaign oversight, not day-to-day team controls. */
 export function roleHome(role: AppRole): string {
   switch (role) {
     case 'admin':
+      return '/admin/users'
+    case 'campaign_manager':
       return '/admin'
     case 'team_lead':
       return '/team'

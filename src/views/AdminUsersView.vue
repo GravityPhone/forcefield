@@ -60,7 +60,7 @@ async function loadAll() {
 onMounted(() => void loadAll())
 
 const roleCounts = computed(() => {
-  const counts: Record<RoleFilter, number> = { all: profiles.value.length, canvasser: 0, team_lead: 0, admin: 0 }
+  const counts: Record<RoleFilter, number> = { all: profiles.value.length, canvasser: 0, team_lead: 0, campaign_manager: 0, admin: 0 }
   for (const p of profiles.value) counts[p.role]++
   return counts
 })
@@ -189,7 +189,8 @@ function closeSheet() {
 const FILTERS: { value: RoleFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'admin', label: 'Admins' },
-  { value: 'team_lead', label: 'Leads' },
+  { value: 'campaign_manager', label: 'Managers' },
+  { value: 'team_lead', label: 'Squad Leaders' },
   { value: 'canvasser', label: 'Canvassers' },
 ]
 </script>

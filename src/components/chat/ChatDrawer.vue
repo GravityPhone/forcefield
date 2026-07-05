@@ -173,24 +173,40 @@ function roomIcon(c: ChatListItem): { img: string; fallback: string } {
     const other = c.members.find((m) => m.id !== chat.myId)
     return { img: avatarUrl(other?.avatar), fallback: '💬' }
   }
-  return { img: '', fallback: c.kind === 'global' ? '🌐' : c.kind === 'team' ? '🛡️' : '👥' }
+  const fallbacks: Record<string, string> = {
+    global: '🌐',
+    team: '🛡️',
+    team_leads: '🎖️',
+    team_managers: '⭐',
+    squad: '👥',
+  }
+  return { img: '', fallback: fallbacks[c.kind] ?? '👥' }
 }
 
 const KIND_LABELS: Record<string, string> = {
   global: 'Everyone on the campaign',
   team: 'Your team',
+  team_leads: 'Squad leaders + managers',
+  team_managers: 'Campaign managers',
   squad: 'Squad',
   dm: 'Private message',
 }
 
-// Global and team rooms have no chat_members rows (membership is implicit),
-// so their member list is every org user instead of the room's own roster.
-// (One team org — the org list IS the team list.)
-const currentMembers = computed(() =>
-  chat.activeChat?.kind === 'global' || chat.activeChat?.kind === 'team'
-    ? chat.orgMembers
-    : (chat.activeChat?.members ?? []),
-)
+// Global and team-scoped rooms have no chat_members rows (membership is
+// implicit), so their member list comes from the org roster — filtered by
+// role for the leadership rooms. (One team org — org list IS team list.)
+const LEADERSHIP_ROLES: Record<string, string[]> = {
+  team_leads: ['team_lead', 'campaign_manager', 'admin'],
+  team_managers: ['campaign_manager', 'admin'],
+}
+
+const currentMembers = computed(() => {
+  const kind = chat.activeChat?.kind
+  if (kind === 'global' || kind === 'team') return chat.orgMembers
+  const roles = kind ? LEADERSHIP_ROLES[kind] : undefined
+  if (roles) return chat.orgMembers.filter((m) => m.role && roles.includes(m.role))
+  return chat.activeChat?.members ?? []
+})
 
 // --- Widget sizing: the message list + composer get exactly the leftover
 // panel space, measured for real (visualViewport shrinks when the phone
@@ -439,7 +455,7 @@ async function addPeople() {
           {{ view === 'room' && chat.activeChat ? chat.chatTitle(chat.activeChat) : 'Chat' }}
         </span>
         <button
-          v-if="view === 'room' && chat.activeChat && chat.activeChat.kind !== 'global' && chat.activeChat.kind !== 'team'"
+          v-if="view === 'room' && (chat.activeChat?.kind === 'squad' || chat.activeChat?.kind === 'dm')"
           class="head-btn"
           @click="addingPeople = true; pickedToAdd = []"
         >
