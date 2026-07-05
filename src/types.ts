@@ -242,6 +242,8 @@ export interface ChatProfile {
   avatar: string | null
   /** Present where role matters (leadership-room member lists). */
   role?: AppRole
+  /** Present where team scoping matters (team-room member lists, pickers). */
+  team_id?: string | null
 }
 
 export interface Bulletin {

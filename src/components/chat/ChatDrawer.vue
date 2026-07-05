@@ -193,19 +193,26 @@ const KIND_LABELS: Record<string, string> = {
 }
 
 // Global and team-scoped rooms have no chat_members rows (membership is
-// implicit), so their member list comes from the org roster — filtered by
-// role for the leadership rooms. (One team org — org list IS team list.)
+// implicit), so their member list comes from the org roster — the org has
+// multiple teams, so team rooms filter to that room's team (and by role for
+// the leadership rooms).
 const LEADERSHIP_ROLES: Record<string, string[]> = {
   team_leads: ['team_lead', 'campaign_manager', 'admin'],
   team_managers: ['campaign_manager', 'admin'],
 }
 
 const currentMembers = computed(() => {
-  const kind = chat.activeChat?.kind
-  if (kind === 'global' || kind === 'team') return chat.orgMembers
-  const roles = kind ? LEADERSHIP_ROLES[kind] : undefined
-  if (roles) return chat.orgMembers.filter((m) => m.role && roles.includes(m.role))
-  return chat.activeChat?.members ?? []
+  const room = chat.activeChat
+  if (!room) return []
+  if (room.kind === 'global') return chat.orgMembers
+  if (room.kind === 'team' || room.kind === 'team_leads' || room.kind === 'team_managers') {
+    const roles = LEADERSHIP_ROLES[room.kind]
+    return chat.orgMembers.filter(
+      (m) =>
+        m.team_id === room.team_id && (!roles || (m.role && roles.includes(m.role))),
+    )
+  }
+  return room.members
 })
 
 // --- Widget sizing: the message list + composer get exactly the leftover

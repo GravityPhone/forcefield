@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useChatStore } from '@/stores/chat'
+import { useAuthStore } from '@/stores/auth'
 import { avatarUrl } from '@/lib/avatars'
 import type { ChatProfile } from '@/types'
 
@@ -17,8 +18,8 @@ const results = ref<ChatProfile[]>([])
 const searching = ref(false)
 let timer: ReturnType<typeof setTimeout> | undefined
 
-// "Show everyone" — browse the whole team without typing a search. One org,
-// one team, so the org member list is the team roster.
+// "Show everyone" — browse without typing a search. Scoped to your own team
+// (the org has several); admins have no team and browse the whole org.
 const browsing = ref(false)
 
 function toggleBrowse() {
@@ -26,13 +27,19 @@ function toggleBrowse() {
   if (browsing.value && !chat.orgMembers.length) void chat.loadOrgMembers()
 }
 
+const myTeamId = computed(() => useAuthStore().profile?.team_id ?? null)
+
+const browseLabel = computed(() => (myTeamId.value ? 'everyone on your team' : 'everyone'))
+
 const browseList = computed(() => {
   const hidden = new Set([
     chat.myId ?? '',
     ...(props.exclude ?? []),
     ...props.modelValue.map((p) => p.id),
   ])
-  return chat.orgMembers.filter((p) => !hidden.has(p.id))
+  return chat.orgMembers.filter(
+    (p) => !hidden.has(p.id) && (!myTeamId.value || p.team_id === myTeamId.value),
+  )
 })
 
 function onInput(value: string) {
@@ -92,7 +99,7 @@ function remove(id: string) {
 
     <template v-else>
       <button class="browse-toggle" :aria-expanded="browsing" @click="toggleBrowse">
-        {{ browsing ? '▾' : '▸' }} {{ browsing ? 'Hide' : 'Show' }} everyone on the team
+        {{ browsing ? '▾' : '▸' }} {{ browsing ? 'Hide' : 'Show' }} {{ browseLabel }}
       </button>
       <div v-if="browsing" class="results">
         <button v-for="p in browseList" :key="p.id" class="result" @click="pick(p)">

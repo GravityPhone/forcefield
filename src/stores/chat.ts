@@ -522,12 +522,12 @@ export const useChatStore = defineStore('chat', {
       await this.loadChats()
     },
 
-    /** All org members, for the global room's member list (which has no
-     * chat_members rows of its own). */
+    /** Every org member, with role + team so team-scoped rooms and pickers
+     * can filter down — the org has multiple teams, this is NOT a team list. */
     async loadOrgMembers() {
       const { data } = await supabase
         .from('profiles')
-        .select('id, username, display_name, avatar, role')
+        .select('id, username, display_name, avatar, role, team_id')
         .order('username')
       this.orgMembers = (data ?? []) as ChatProfile[]
     },
