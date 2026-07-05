@@ -181,12 +181,14 @@ export interface TurfSegment {
   created_at: string
 }
 
-export type ChatKind = 'global' | 'squad' | 'dm'
+export type ChatKind = 'global' | 'squad' | 'dm' | 'team'
 
 export interface Chat {
   id: string
   kind: ChatKind
   name: string | null
+  /** Set on kind 'team' only — membership is profiles.team_id, no member rows. */
+  team_id?: string | null
   created_by: string | null
   created_at: string
 }

@@ -29,9 +29,11 @@ async function addToSquad(member: ChatProfile) {
 }
 
 /** Only offer "add to squad/PM" when there's an actual membership list to
- * add them to (not the global room, which has none) and they're not in it. */
+ * add them to (not global/team rooms, whose membership is implicit) and
+ * they're not already in it. */
 function canAdd(member: ChatProfile): boolean {
-  if (!props.activeChat || props.activeChat.kind === 'global') return false
+  if (!props.activeChat || props.activeChat.kind === 'global' || props.activeChat.kind === 'team')
+    return false
   return !props.activeChat.members.some((m) => m.id === member.id)
 }
 </script>

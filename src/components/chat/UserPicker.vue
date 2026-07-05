@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import { avatarUrl } from '@/lib/avatars'
 import type { ChatProfile } from '@/types'
@@ -16,6 +16,24 @@ const query = ref('')
 const results = ref<ChatProfile[]>([])
 const searching = ref(false)
 let timer: ReturnType<typeof setTimeout> | undefined
+
+// "Show everyone" — browse the whole team without typing a search. One org,
+// one team, so the org member list is the team roster.
+const browsing = ref(false)
+
+function toggleBrowse() {
+  browsing.value = !browsing.value
+  if (browsing.value && !chat.orgMembers.length) void chat.loadOrgMembers()
+}
+
+const browseList = computed(() => {
+  const hidden = new Set([
+    chat.myId ?? '',
+    ...(props.exclude ?? []),
+    ...props.modelValue.map((p) => p.id),
+  ])
+  return chat.orgMembers.filter((p) => !hidden.has(p.id))
+})
 
 function onInput(value: string) {
   query.value = value
@@ -71,6 +89,20 @@ function remove(id: string) {
       </button>
       <p v-if="!results.length && !searching" class="muted empty">No one found.</p>
     </div>
+
+    <template v-else>
+      <button class="browse-toggle" :aria-expanded="browsing" @click="toggleBrowse">
+        {{ browsing ? '▾' : '▸' }} {{ browsing ? 'Hide' : 'Show' }} everyone on the team
+      </button>
+      <div v-if="browsing" class="results">
+        <button v-for="p in browseList" :key="p.id" class="result" @click="pick(p)">
+          <img v-if="avatarUrl(p.avatar)" class="result-avatar" :src="avatarUrl(p.avatar)" alt="" />
+          <span class="result-name">{{ p.display_name || p.username }}</span>
+          <span class="muted">@{{ p.username }}</span>
+        </button>
+        <p v-if="!browseList.length" class="muted empty">No one else to add.</p>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -119,6 +151,24 @@ function remove(id: string) {
   gap: 0.2rem;
   max-height: 180px;
   overflow-y: auto;
+}
+
+.browse-toggle {
+  align-self: flex-start;
+  min-height: 40px;
+  padding: 0.4rem 0.6rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.browse-toggle:hover {
+  background: var(--surface-2);
 }
 
 .result-avatar {

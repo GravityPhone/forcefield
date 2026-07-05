@@ -32,6 +32,29 @@ let dragStartX = 0
 let dragStartTop = 58
 let dragMode: 'none' | 'move' | 'open' = 'none'
 
+// Horizontal pull: the drawer follows the finger in real time (no snap-open
+// jump), then settles open or closed on release.
+const dragPx = ref(0)
+const draggingOpen = ref(false)
+const drawerWidth = () => Math.min(430, window.innerWidth)
+
+// A tap opens on pointerup, then the browser fires the tap's `click` on
+// whatever is under the finger by then — which is the backdrop that just
+// appeared, instantly closing the drawer again ("tapping does nothing").
+// Ignore backdrop clicks right after opening.
+let openedAt = 0
+watch(
+  () => chat.drawerOpen,
+  (open) => {
+    if (open) openedAt = Date.now()
+  },
+)
+
+function onBackdropClick() {
+  if (Date.now() - openedAt < 400) return
+  chat.closeDrawer()
+}
+
 function onHandleDown(e: PointerEvent) {
   ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
   dragStartY = e.clientY
@@ -45,14 +68,13 @@ function onHandleMove(e: PointerEvent) {
   const dy = e.clientY - dragStartY
   if (dragMode === 'none' && Math.hypot(dx, dy) > 8) {
     dragMode = Math.abs(dy) >= Math.abs(dx) ? 'move' : 'open'
+    if (dragMode === 'open') draggingOpen.value = true
   }
   if (dragMode === 'move') {
     const pct = dragStartTop + (dy / window.innerHeight) * 100
     handleTopPct.value = Math.min(85, Math.max(12, pct))
-  } else if (dragMode === 'open' && dx < -24) {
-    hapticTap('light')
-    chat.openDrawer()
-    dragMode = 'move' // swallow the rest of the gesture
+  } else if (dragMode === 'open') {
+    dragPx.value = Math.min(drawerWidth(), Math.max(0, -dx))
   }
 }
 
@@ -60,11 +82,32 @@ function onHandleUp() {
   if (dragMode === 'none') {
     hapticTap('light')
     chat.drawerOpen ? chat.closeDrawer() : chat.openDrawer()
-  } else {
+  } else if (dragMode === 'move') {
     localStorage.setItem(HANDLE_POS_KEY, String(Math.round(handleTopPct.value)))
+  } else if (dragMode === 'open') {
+    // Settle: pulled past a quarter of the panel = open, else spring shut.
+    if (dragPx.value > drawerWidth() * 0.25) {
+      hapticTap('light')
+      chat.openDrawer()
+    }
+    draggingOpen.value = false
+    dragPx.value = 0
   }
   dragMode = 'none'
 }
+
+function onHandleCancel() {
+  dragMode = 'none'
+  draggingOpen.value = false
+  dragPx.value = 0
+}
+
+/** Mid-drag the panel tracks the finger; otherwise CSS classes handle it. */
+const drawerStyle = computed(() =>
+  draggingOpen.value
+    ? { transform: `translateX(${drawerWidth() - dragPx.value}px)`, transition: 'none' }
+    : undefined,
+)
 
 // --- Drawer views: room list first (Dana's rule — land on what's waiting,
 // not wherever you last were), then a single room. ---
@@ -126,13 +169,23 @@ function roomIcon(c: ChatListItem): { img: string; fallback: string } {
     const other = c.members.find((m) => m.id !== chat.myId)
     return { img: avatarUrl(other?.avatar), fallback: '💬' }
   }
-  return { img: '', fallback: c.kind === 'global' ? '🌐' : '👥' }
+  return { img: '', fallback: c.kind === 'global' ? '🌐' : c.kind === 'team' ? '🛡️' : '👥' }
 }
 
-// The global room has no chat_members rows (everyone's implicitly in it),
-// so its member list is every org user instead of the room's own roster.
+const KIND_LABELS: Record<string, string> = {
+  global: 'Everyone on the campaign',
+  team: 'Your team',
+  squad: 'Squad',
+  dm: 'Private message',
+}
+
+// Global and team rooms have no chat_members rows (membership is implicit),
+// so their member list is every org user instead of the room's own roster.
+// (One team org — the org list IS the team list.)
 const currentMembers = computed(() =>
-  chat.activeChat?.kind === 'global' ? chat.orgMembers : (chat.activeChat?.members ?? []),
+  chat.activeChat?.kind === 'global' || chat.activeChat?.kind === 'team'
+    ? chat.orgMembers
+    : (chat.activeChat?.members ?? []),
 )
 
 // --- Widget sizing: the message list + composer get exactly the leftover
@@ -344,14 +397,14 @@ async function addPeople() {
   <template v-if="auth.profile">
     <!-- Edge handle — the drawer's always-there front door -->
     <button
-      v-show="!chat.drawerOpen"
+      v-show="!chat.drawerOpen || draggingOpen"
       class="drawer-handle"
       :style="{ top: `${handleTopPct}dvh` }"
       aria-label="Open chat"
       @pointerdown="onHandleDown"
       @pointermove="onHandleMove"
       @pointerup="onHandleUp"
-      @pointercancel="dragMode = 'none'"
+      @pointercancel="onHandleCancel"
     >
       <span class="handle-grip" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -364,10 +417,10 @@ async function addPeople() {
     </button>
 
     <!-- Backdrop -->
-    <div v-if="chat.drawerOpen" class="drawer-backdrop" @click="chat.closeDrawer()"></div>
+    <div v-if="chat.drawerOpen" class="drawer-backdrop" @click="onBackdropClick"></div>
 
     <!-- Drawer panel -->
-    <aside class="drawer" :class="{ open: chat.drawerOpen }" aria-label="Chat">
+    <aside class="drawer" :class="{ open: chat.drawerOpen }" :style="drawerStyle" aria-label="Chat">
       <header class="drawer-head">
         <button v-if="view === 'room'" class="head-btn" aria-label="All chats" @click="backToList">
           ‹ Chats
@@ -376,7 +429,7 @@ async function addPeople() {
           {{ view === 'room' && chat.activeChat ? chat.chatTitle(chat.activeChat) : 'Chat' }}
         </span>
         <button
-          v-if="view === 'room' && chat.activeChat && chat.activeChat.kind !== 'global'"
+          v-if="view === 'room' && chat.activeChat && chat.activeChat.kind !== 'global' && chat.activeChat.kind !== 'team'"
           class="head-btn"
           @click="addingPeople = true; pickedToAdd = []"
         >
@@ -394,15 +447,17 @@ async function addPeople() {
           </span>
           <span class="room-text">
             <span class="room-name">{{ chat.chatTitle(c) }}</span>
-            <span class="room-kind muted">
-              {{ c.kind === 'global' ? 'Everyone on the campaign' : c.kind === 'squad' ? 'Squad' : 'Private message' }}
-            </span>
+            <span class="room-kind muted">{{ KIND_LABELS[c.kind] }}</span>
           </span>
           <span v-if="chat.unread[c.id]" class="room-unread">
             {{ chat.unread[c.id] > 99 ? '99+' : chat.unread[c.id] }}
           </span>
         </button>
-        <p v-if="!myRooms.length && !chat.loadingChats" class="muted room-empty">
+        <div v-if="chat.chatsError" class="rooms-error">
+          <p>{{ chat.chatsError }}</p>
+          <button class="btn btn-sm" @click="chat.loadChats()">Try again</button>
+        </div>
+        <p v-else-if="!myRooms.length && !chat.loadingChats" class="muted room-empty">
           No chats yet — start one below.
         </p>
         <button class="btn btn-primary btn-block new-chat-btn" @click="openComposer">
@@ -500,19 +555,20 @@ async function addPeople() {
 .drawer-handle {
   position: fixed;
   right: 0;
-  z-index: 45;
+  z-index: 47; /* above the panel so it stays grabbable mid-drag */
   display: flex;
   align-items: center;
   justify-content: center;
   width: 2.6rem;
   height: 3.4rem;
   padding: 0;
-  border: 1px solid var(--border);
-  border-right: none;
+  border: none;
   border-radius: 14px 0 0 14px;
-  background: var(--surface);
-  color: var(--accent);
-  box-shadow: -2px 2px 10px rgba(0, 0, 0, 0.14);
+  /* Deliberately theme-independent (like the outcome colors): bright neon
+   * orange so the chat handle is findable at a glance in any scheme/sun. */
+  background: #ff6d00;
+  color: #fff;
+  box-shadow: -2px 2px 10px rgba(0, 0, 0, 0.25);
   cursor: pointer;
   touch-action: none; /* we run the drag ourselves */
   -webkit-tap-highlight-color: transparent;
@@ -536,6 +592,7 @@ async function addPeople() {
   justify-content: center;
   border-radius: 999px;
   background: var(--danger);
+  border: 2px solid #fff; /* separates the red badge from the orange handle */
   color: #fff;
   font-size: 0.7rem;
   font-weight: 800;
@@ -693,6 +750,21 @@ async function addPeople() {
 
 .room-empty {
   padding: 0.6rem 0.2rem;
+}
+
+.rooms-error {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.7rem;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  color: var(--danger);
+  font-size: 0.88rem;
+}
+
+.rooms-error p {
+  margin: 0;
 }
 
 .new-chat-btn {

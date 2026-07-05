@@ -23,6 +23,9 @@ export interface OutgoingFile {
 interface ChatState {
   chats: ChatListItem[]
   loadingChats: boolean
+  /** Set when the chat list itself failed to load (e.g. migrations not yet
+   * applied) — the drawer shows this instead of a misleading "no chats". */
+  chatsError: string
   activeChatId: string | null
   messages: ChatMessage[]
   /** emoji -> user ids, per message id, for the active chat. */
@@ -62,6 +65,7 @@ export const useChatStore = defineStore('chat', {
   state: (): ChatState => ({
     chats: [],
     loadingChats: false,
+    chatsError: '',
     activeChatId: null,
     messages: [],
     reactions: {},
@@ -137,7 +141,13 @@ export const useChatStore = defineStore('chat', {
         )
         .order('created_at')
       this.loadingChats = false
-      if (error || !data) return
+      if (error || !data) {
+        this.chatsError = error
+          ? `Couldn't load chats: ${error.message}`
+          : "Couldn't load chats — check your connection."
+        return
+      }
+      this.chatsError = ''
 
       type Row = Chat & { chat_members: { user_id: string; profiles: ChatProfile | null }[] }
       this.chats = (data as Row[]).map((row) => {
@@ -149,14 +159,18 @@ export const useChatStore = defineStore('chat', {
           id: row.id,
           kind: row.kind,
           name: row.name,
+          team_id: row.team_id,
           created_by: row.created_by,
           created_at: row.created_at,
           members,
-          isMember: row.kind === 'global' || members.some((m) => m.id === this.myId),
+          // Global and team rooms have no member rows — RLS already scoped
+          // team chats to your team (or admin), so seeing one means you're in.
+          isMember:
+            row.kind === 'global' || row.kind === 'team' || members.some((m) => m.id === this.myId),
         }
       })
-      // Squads first (today's working rooms), then the global room, then PMs.
-      const rank: Record<ChatKind, number> = { squad: 0, global: 1, dm: 2 }
+      // Team room first, then squads (today's crews), global, PMs.
+      const rank: Record<ChatKind, number> = { team: 0, squad: 1, global: 2, dm: 3 }
       this.chats.sort((a, b) => rank[a.kind] - rank[b.kind] || a.created_at.localeCompare(b.created_at))
     },
 
