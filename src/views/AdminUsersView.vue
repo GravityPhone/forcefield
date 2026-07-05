@@ -294,7 +294,12 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
             <p v-if="isSelf" class="muted hint">You can't change your own role.</p>
           </div>
 
-          <div class="section">
+          <!-- Admins run the org — they're never on a team or in a squad. -->
+          <p v-if="editing.role === 'admin'" class="muted hint">
+            Admins aren't part of a campaign, team, or squad.
+          </p>
+
+          <div v-if="editing.role !== 'admin'" class="section">
             <div class="section-head">
               <span class="section-label">Team</span>
               <Transition name="fade">
@@ -323,7 +328,7 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
             </div>
           </div>
 
-          <div class="section">
+          <div v-if="editing.role !== 'admin'" class="section">
             <div class="section-head">
               <span class="section-label">Today's squad</span>
               <Transition name="fade">

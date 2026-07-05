@@ -40,12 +40,11 @@ const barItems = computed<NavItem[]>(() => {
   // (ChatDrawer), reachable from every screen via the right-edge handle.
   // Admins get oversight tabs only; campaign managers run the day-to-day
   // and hold what used to be the admin nav.
+  // Admins run the org, not a campaign — no Bulletin/Boards/Squads for them.
   if (auth.profile.role === 'admin') {
     return [
       { to: '/admin/users', label: 'Users', icon: 'squads' },
       { to: '/admin/campaigns', label: 'Campaigns', icon: 'dashboard' },
-      { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
-      { to: '/leaderboard', label: 'Boards', icon: 'trophy' },
     ]
   }
   if (auth.profile.role === 'campaign_manager') {
@@ -68,7 +67,7 @@ const moreItems = computed<NavItem[]>(() => {
   if (!auth.profile) return []
   const appearance: NavItem = { to: '/appearance', label: 'Appearance', icon: 'palette' }
   if (auth.profile.role === 'admin') {
-    return [{ to: '/squads', label: 'Squads', icon: 'squads' }, appearance]
+    return [appearance]
   }
   if (auth.profile.role === 'campaign_manager') {
     return [
@@ -179,9 +178,12 @@ onUnmounted(() => {
         </template>
         <router-link v-else :to="homePath">Home</router-link>
         <router-link v-if="auth.profile.role === 'team_lead'" to="/turf">Turf</router-link>
-        <router-link to="/squads">Squads</router-link>
-        <router-link to="/bulletin">Bulletin</router-link>
-        <router-link to="/leaderboard">Leaderboard</router-link>
+        <!-- Campaign-life links — admins oversee, they don't participate. -->
+        <template v-if="auth.profile.role !== 'admin'">
+          <router-link to="/squads">Squads</router-link>
+          <router-link to="/bulletin">Bulletin</router-link>
+          <router-link to="/leaderboard">Leaderboard</router-link>
+        </template>
         <router-link to="/appearance">Appearance</router-link>
       </nav>
       <span v-if="canScrollNavLeft" class="nav-scroll-hint nav-scroll-hint-left" aria-hidden="true">‹</span>

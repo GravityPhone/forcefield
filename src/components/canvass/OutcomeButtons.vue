@@ -47,10 +47,6 @@ function disabledFor(requiresPerson: boolean): boolean {
         {{ o.label }}
       </button>
     </div>
-    <p v-if="hasHousehold && !hasPerson" class="muted person-hint">
-      Pick a person above for Signed / Didn't Sign / Maybe — Not Home, Skip, and Hostile don't
-      need one.
-    </p>
     <!-- Confirms before the screen clears — no silent auto-advance. Only
          appears once something is actually logged for the current target. -->
     <button
@@ -94,11 +90,6 @@ function disabledFor(requiresPerson: boolean): boolean {
 .outcome-btn.active {
   background: var(--outcome-color);
   color: var(--accent-contrast);
-}
-
-.person-hint {
-  margin: 0;
-  font-size: 0.85rem;
 }
 
 /* The single most-tapped button in the app — full width, can't miss it

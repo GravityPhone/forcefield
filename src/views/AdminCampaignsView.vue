@@ -111,80 +111,86 @@ const campaignOptions = computed(() => [
       <p v-if="loading" class="muted">Loading…</p>
 
       <template v-else>
-        <div class="card">
-          <h3>New campaign</h3>
-          <div class="field">
-            <label for="campaign-name">Name</label>
-            <input id="campaign-name" v-model="newCampaignName" placeholder="e.g. UBI" />
+        <!-- Assignment first: teams on the left (each with its campaign
+             picker), the campaign list on the right. Stacks on phones. -->
+        <div class="columns">
+          <div class="card">
+            <h3>Teams</h3>
+            <p class="muted desc">Assign each team to the campaign it works.</p>
+            <p v-if="!teams.length" class="muted desc">No teams yet — create one below.</p>
+            <div v-for="t in teams" :key="t.id" class="team-row">
+              <span class="team-name">{{ t.name }}</span>
+              <AppSelect
+                small
+                :model-value="t.campaign_id ?? 'none'"
+                :options="campaignOptions"
+                :aria-label="`Campaign for ${t.name}`"
+                @update:model-value="assignTeam(t, $event === 'none' ? '' : $event)"
+              />
+            </div>
           </div>
-          <div class="field">
-            <label for="campaign-desc">Description (optional)</label>
-            <input
-              id="campaign-desc"
-              v-model="newCampaignDescription"
-              placeholder="e.g. Universal Basic Income ballot initiative"
-            />
-          </div>
-          <button
-            class="btn btn-primary btn-sm"
-            :disabled="creatingCampaign || !newCampaignName.trim()"
-            @click="createCampaign"
-          >
-            {{ creatingCampaign ? 'Creating…' : 'Create campaign' }}
-          </button>
-        </div>
 
-        <div class="card">
-          <h3>New team</h3>
-          <div class="field">
-            <label for="team-name">Name</label>
-            <input id="team-name" v-model="newTeamName" placeholder="e.g. Richwood Team" />
-          </div>
-          <div class="field">
-            <label id="team-campaign-label">Campaign</label>
-            <AppSelect
-              :model-value="newTeamCampaignId || 'none'"
-              :options="campaignOptions"
-              aria-labelledby="team-campaign-label"
-              @update:model-value="newTeamCampaignId = $event === 'none' ? '' : $event"
-            />
-          </div>
-          <button
-            class="btn btn-primary btn-sm"
-            :disabled="creatingTeam || !newTeamName.trim()"
-            @click="createTeam"
-          >
-            {{ creatingTeam ? 'Creating…' : 'Create team' }}
-          </button>
-        </div>
-
-        <div v-for="c in campaigns" :key="c.id" class="card">
-          <h3>{{ c.name }}</h3>
-          <p v-if="c.description" class="muted desc">{{ c.description }}</p>
-          <p v-if="!teamsIn(c.id).length" class="muted desc">No teams assigned yet.</p>
-          <div v-for="t in teamsIn(c.id)" :key="t.id" class="team-row">
-            <span class="team-name">{{ t.name }}</span>
-            <AppSelect
-              small
-              :model-value="t.campaign_id ?? 'none'"
-              :options="campaignOptions"
-              :aria-label="`Campaign for ${t.name}`"
-              @update:model-value="assignTeam(t, $event === 'none' ? '' : $event)"
-            />
+          <div class="card">
+            <h3>Campaigns</h3>
+            <p v-if="!campaigns.length" class="muted desc">No campaigns yet — create one below.</p>
+            <div v-for="c in campaigns" :key="c.id" class="campaign-row">
+              <span class="team-name">{{ c.name }}</span>
+              <p v-if="c.description" class="muted desc">{{ c.description }}</p>
+              <p class="muted desc">
+                {{ teamsIn(c.id).length
+                  ? `Teams: ${teamsIn(c.id).map((t) => t.name).join(', ')}`
+                  : 'No teams assigned yet.' }}
+              </p>
+            </div>
           </div>
         </div>
 
-        <div v-if="teamsIn(null).length" class="card">
-          <h3>Unassigned teams</h3>
-          <div v-for="t in teamsIn(null)" :key="t.id" class="team-row">
-            <span class="team-name">{{ t.name }}</span>
-            <AppSelect
-              small
-              :model-value="t.campaign_id ?? 'none'"
-              :options="campaignOptions"
-              :aria-label="`Campaign for ${t.name}`"
-              @update:model-value="assignTeam(t, $event === 'none' ? '' : $event)"
-            />
+        <div class="columns">
+          <div class="card">
+            <h3>New team</h3>
+            <div class="field">
+              <label for="team-name">Name</label>
+              <input id="team-name" v-model="newTeamName" placeholder="e.g. Richwood Team" />
+            </div>
+            <div class="field">
+              <label id="team-campaign-label">Campaign</label>
+              <AppSelect
+                :model-value="newTeamCampaignId || 'none'"
+                :options="campaignOptions"
+                aria-labelledby="team-campaign-label"
+                @update:model-value="newTeamCampaignId = $event === 'none' ? '' : $event"
+              />
+            </div>
+            <button
+              class="btn btn-primary btn-sm"
+              :disabled="creatingTeam || !newTeamName.trim()"
+              @click="createTeam"
+            >
+              {{ creatingTeam ? 'Creating…' : 'Create team' }}
+            </button>
+          </div>
+
+          <div class="card">
+            <h3>New campaign</h3>
+            <div class="field">
+              <label for="campaign-name">Name</label>
+              <input id="campaign-name" v-model="newCampaignName" placeholder="e.g. UBI" />
+            </div>
+            <div class="field">
+              <label for="campaign-desc">Description (optional)</label>
+              <input
+                id="campaign-desc"
+                v-model="newCampaignDescription"
+                placeholder="e.g. Universal Basic Income ballot initiative"
+              />
+            </div>
+            <button
+              class="btn btn-primary btn-sm"
+              :disabled="creatingCampaign || !newCampaignName.trim()"
+              @click="createCampaign"
+            >
+              {{ creatingCampaign ? 'Creating…' : 'Create campaign' }}
+            </button>
           </div>
         </div>
       </template>
@@ -197,6 +203,28 @@ const campaignOptions = computed(() => [
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 640px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.campaign-row {
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.campaign-row:last-child {
+  border-bottom: none;
 }
 
 .intro {
