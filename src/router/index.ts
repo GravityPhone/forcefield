@@ -36,6 +36,10 @@ const router = createRouter({
     // Team lead home (admins can view too)
     { path: '/team', name: 'team', component: () => import('@/views/TeamLeadHomeView.vue'), meta: { roles: ['team_lead', 'admin'] } },
 
+    // Turf cutting/assignment — leads and admins cut turf; canvassers see
+    // their own turf on the Hunt map instead.
+    { path: '/turf', name: 'turf', component: () => import('@/views/TurfView.vue'), meta: { roles: ['team_lead', 'admin'] } },
+
     // Admin area
     { path: '/admin', name: 'admin', component: () => import('@/views/AdminHomeView.vue'), meta: { roles: ['admin'] } },
     { path: '/admin/chat', name: 'admin-chat', component: () => import('@/views/AdminChatView.vue'), meta: { roles: ['admin'] } },

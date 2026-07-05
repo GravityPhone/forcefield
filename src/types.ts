@@ -143,6 +143,42 @@ export interface HouseholdKnockSummary {
   reached: boolean
 }
 
+/** Which side(s) of the street a turf segment covers. */
+export type TurfParity = 'both' | 'even' | 'odd'
+
+export const PARITY_LABELS: Record<TurfParity, string> = {
+  both: 'Both sides',
+  even: 'Even side',
+  odd: 'Odd side',
+}
+
+/** Named cut of geography, assigned to a squad or an individual canvasser
+ * (never both). Its member addresses carry turf_id (stamped by the
+ * set_turf_segments RPC), so lookup is a plain column read. */
+export interface Turf {
+  id: string
+  name: string
+  color: string
+  squad_id: string | null
+  assignee_id: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** One street range inside a turf — "100–298 of WALNUT ST, even side".
+ * street_name is normalized like streetNameOf() (no house number, uppercase). */
+export interface TurfSegment {
+  id: string
+  turf_id: string
+  street_name: string
+  city: string | null
+  range_start: number
+  range_end: number
+  parity: TurfParity
+  created_at: string
+}
+
 export type ChatKind = 'global' | 'squad' | 'dm'
 
 export interface Chat {
@@ -203,16 +239,6 @@ export interface CanvasserLeaderboardRow {
   canvasser_id: string
   username: string
   display_name: string | null
-  team_id: string | null
-  team_name: string | null
-  doors_knocked: number
-  signatures: number
-}
-
-export interface TeamLeaderboardRow {
-  team_id: string
-  team_name: string
-  member_count: number
   doors_knocked: number
   signatures: number
 }

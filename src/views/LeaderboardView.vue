@@ -6,12 +6,7 @@ import { supabase } from '@/lib/supabase'
 import { localDayRangeISO, localToday } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
 import { METRIC_LABELS } from '@/types'
-import type {
-  CanvasserLeaderboardRow,
-  LeaderboardMetric,
-  LeaderboardSettings,
-  TeamLeaderboardRow,
-} from '@/types'
+import type { CanvasserLeaderboardRow, LeaderboardMetric, LeaderboardSettings } from '@/types'
 
 /** Aggregated client-side: squads are tiny (a day's crews) and a single
  * day's knocks are a cheap filtered query, so no SQL view is needed. */
@@ -26,20 +21,14 @@ interface SquadBoardRow {
 
 const auth = useAuthStore()
 const myId = auth.profile?.id ?? null
-const myTeamId = auth.profile?.team_id ?? null
 const today = localToday()
 
 const settings = ref<LeaderboardSettings | null>(null)
 const canvassersAllTime = ref<CanvasserLeaderboardRow[]>([])
-const teamsAllTime = ref<TeamLeaderboardRow[]>([])
 const canvassersForDay = ref<CanvasserLeaderboardRow[]>([])
-const teamsForDay = ref<TeamLeaderboardRow[]>([])
 const squadRows = ref<SquadBoardRow[]>([])
 const loading = ref(true)
 const dayLoading = ref(false)
-// Spec default: your own team, with an org-wide toggle. Teamless users
-// (e.g. the seed admin) start org-wide.
-const scope = ref<'team' | 'org'>(myTeamId ? 'team' : 'org')
 // null = all-time career totals; a YYYY-MM-DD string = that day's history.
 const selectedDate = ref<string | null>(null)
 
@@ -48,32 +37,21 @@ let refetchTimer: ReturnType<typeof setTimeout> | null = null
 
 const effectiveDay = computed(() => selectedDate.value ?? today)
 
-/** Career totals, straight off the SQL views. */
+/** Career totals, straight off the SQL views. Everyone works one campaign
+ * as one team in practice, so there's no team board and no team scoping —
+ * canvassers and squads are the two rankings that mean anything. */
 async function loadAllTime() {
-  const [s, c, t] = await Promise.all([
+  const [s, c] = await Promise.all([
     supabase.from('leaderboard_settings').select('*').eq('id', true).single(),
     supabase.from('canvasser_leaderboard').select('*'),
-    supabase.from('team_leaderboard').select('*'),
   ])
   if (s.data) settings.value = s.data as LeaderboardSettings
   if (c.data) canvassersAllTime.value = c.data as CanvasserLeaderboardRow[]
-  if (t.data) teamsAllTime.value = t.data as TeamLeaderboardRow[]
 }
 
-/** Team roster size doesn't depend on which day is being viewed — a
- * canvasser's current team assignment stands in for their team on any past
- * day too, same limitation the all-time team board already has. */
-const teamMemberCounts = computed(() => {
-  const m = new Map<string, number>()
-  for (const c of canvassersAllTime.value) {
-    if (c.team_id) m.set(c.team_id, (m.get(c.team_id) ?? 0) + 1)
-  }
-  return m
-})
-
 /** One day's standings: that day's squads (squad_date scopes squads to a
- * single workday already) plus canvasser/team totals rebuilt from that
- * day's knocks alone — the "career totals" views have no day dimension. */
+ * single workday already) plus canvasser totals rebuilt from that day's
+ * knocks alone — the "career totals" view has no day dimension. */
 async function loadDayBoard(dateStr: string) {
   dayLoading.value = true
   const { startISO, endISO } = localDayRangeISO(dateStr)
@@ -118,22 +96,6 @@ async function loadDayBoard(dateStr: string) {
       doors_knocked: doorsBy.get(c.canvasser_id) ?? 0,
       signatures: signaturesBy.get(c.canvasser_id) ?? 0,
     }))
-
-  const teamAgg = new Map<string, { team_name: string; doors_knocked: number; signatures: number }>()
-  for (const c of canvassersForDay.value) {
-    if (!c.team_id) continue
-    const entry = teamAgg.get(c.team_id) ?? { team_name: c.team_name ?? '—', doors_knocked: 0, signatures: 0 }
-    entry.doors_knocked += c.doors_knocked
-    entry.signatures += c.signatures
-    teamAgg.set(c.team_id, entry)
-  }
-  teamsForDay.value = [...teamAgg.entries()].map(([team_id, v]) => ({
-    team_id,
-    team_name: v.team_name,
-    member_count: teamMemberCounts.value.get(team_id) ?? 0,
-    doors_knocked: v.doors_knocked,
-    signatures: v.signatures,
-  }))
   dayLoading.value = false
 }
 
@@ -171,13 +133,6 @@ const showDoorsBoard = computed(
 )
 
 const canvassers = computed(() => (selectedDate.value ? canvassersForDay.value : canvassersAllTime.value))
-const teams = computed(() => (selectedDate.value ? teamsForDay.value : teamsAllTime.value))
-
-const scopedCanvassers = computed(() =>
-  scope.value === 'team' && myTeamId
-    ? canvassers.value.filter((r) => r.team_id === myTeamId)
-    : canvassers.value,
-)
 
 const dateSuffix = computed(() => (selectedDate.value ? ` — ${formatDay(selectedDate.value)}` : ''))
 
@@ -197,7 +152,6 @@ const canvassersEmptyNote = computed(() =>
     ? `No knocks logged on ${formatDay(selectedDate.value)}.`
     : 'No knocks logged yet — standings will fill in as doors get knocked.',
 )
-const teamsEmptyNote = computed(() => (selectedDate.value ? 'No team activity that day.' : 'No teams yet.'))
 
 function metricOf(row: { doors_knocked: number; signatures: number }, metric: LeaderboardMetric) {
   return metric === 'doors' ? row.doors_knocked : row.signatures
@@ -239,23 +193,6 @@ onUnmounted(() => {
 <template>
   <AppShell title="Leaderboard">
     <div class="stack">
-      <div class="toolbar" v-if="myTeamId">
-        <button
-          class="btn btn-sm"
-          :class="scope === 'team' ? 'btn-primary' : 'btn-ghost'"
-          @click="scope = 'team'"
-        >
-          My team
-        </button>
-        <button
-          class="btn btn-sm"
-          :class="scope === 'org' ? 'btn-primary' : 'btn-ghost'"
-          @click="scope = 'org'"
-        >
-          Org-wide
-        </button>
-      </div>
-
       <p v-if="loading" class="muted loading-row">
         <span class="spinner" aria-hidden="true"></span> Loading standings…
       </p>
@@ -299,27 +236,25 @@ onUnmounted(() => {
               <tr>
                 <th class="rank">#</th>
                 <th>Canvasser</th>
-                <th v-if="scope === 'org'">Team</th>
                 <th class="num">{{ METRIC_LABELS[primaryMetric] }}</th>
                 <th class="num">{{ METRIC_LABELS[primaryMetric === 'doors' ? 'signatures' : 'doors'] }}</th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="(r, i) in ranked(scopedCanvassers, primaryMetric)"
+                v-for="(r, i) in ranked(canvassers, primaryMetric)"
                 :key="r.canvasser_id"
                 :class="{ me: r.canvasser_id === myId }"
               >
                 <td class="rank">{{ i + 1 }}</td>
                 <td>{{ canvasserName(r) }}{{ r.canvasser_id === myId ? ' (you)' : '' }}</td>
-                <td v-if="scope === 'org'" class="muted">{{ r.team_name ?? '—' }}</td>
                 <td class="num">{{ metricOf(r, primaryMetric) }}</td>
                 <td class="num muted">{{ metricOf(r, primaryMetric === 'doors' ? 'signatures' : 'doors') }}</td>
               </tr>
             </tbody>
           </table>
           </div>
-          <p v-if="!scopedCanvassers.length" class="muted empty-note">{{ canvassersEmptyNote }}</p>
+          <p v-if="!canvassers.length" class="muted empty-note">{{ canvassersEmptyNote }}</p>
         </div>
 
         <div v-if="showDoorsBoard" class="card">
@@ -330,19 +265,17 @@ onUnmounted(() => {
               <tr>
                 <th class="rank">#</th>
                 <th>Canvasser</th>
-                <th v-if="scope === 'org'">Team</th>
                 <th class="num">Doors knocked</th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="(r, i) in ranked(scopedCanvassers, 'doors')"
+                v-for="(r, i) in ranked(canvassers, 'doors')"
                 :key="r.canvasser_id"
                 :class="{ me: r.canvasser_id === myId }"
               >
                 <td class="rank">{{ i + 1 }}</td>
                 <td>{{ canvasserName(r) }}{{ r.canvasser_id === myId ? ' (you)' : '' }}</td>
-                <td v-if="scope === 'org'" class="muted">{{ r.team_name ?? '—' }}</td>
                 <td class="num">{{ r.doors_knocked }}</td>
               </tr>
             </tbody>
@@ -383,37 +316,6 @@ onUnmounted(() => {
           </template>
           <p v-else class="muted empty-note">{{ squadsEmptyNote }}</p>
         </div>
-
-        <div class="card">
-          <h3>Teams — {{ METRIC_LABELS[primaryMetric] }}{{ dateSuffix }}</h3>
-          <div class="board-scroll">
-          <table class="board">
-            <thead>
-              <tr>
-                <th class="rank">#</th>
-                <th>Team</th>
-                <th class="num">Members</th>
-                <th class="num">{{ METRIC_LABELS[primaryMetric] }}</th>
-                <th class="num">{{ METRIC_LABELS[primaryMetric === 'doors' ? 'signatures' : 'doors'] }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr
-                v-for="(t, i) in ranked(teams, primaryMetric)"
-                :key="t.team_id"
-                :class="{ me: t.team_id === myTeamId }"
-              >
-                <td class="rank">{{ i + 1 }}</td>
-                <td>{{ t.team_name }}{{ t.team_id === myTeamId ? ' (your team)' : '' }}</td>
-                <td class="num muted">{{ t.member_count }}</td>
-                <td class="num">{{ metricOf(t, primaryMetric) }}</td>
-                <td class="num muted">{{ metricOf(t, primaryMetric === 'doors' ? 'signatures' : 'doors') }}</td>
-              </tr>
-            </tbody>
-          </table>
-          </div>
-          <p v-if="!teams.length" class="muted empty-note">{{ teamsEmptyNote }}</p>
-        </div>
       </template>
     </div>
   </AppShell>
@@ -424,11 +326,6 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-}
-
-.toolbar {
-  display: flex;
-  gap: 0.4rem;
 }
 
 .loading-row {
@@ -466,8 +363,8 @@ onUnmounted(() => {
   outline-offset: -1px;
 }
 
-/* Long names + the org-wide Team column can outgrow a phone screen — scroll
- * the table inside the card rather than the whole page sideways. */
+/* Long names can outgrow a phone screen — scroll the table inside the card
+ * rather than the whole page sideways. */
 .board-scroll {
   overflow-x: auto;
 }

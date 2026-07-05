@@ -60,10 +60,14 @@ const moreItems = computed<NavItem[]>(() => {
   if (auth.profile.role === 'admin') {
     return [
       { to: '/admin/chat', label: 'AI Chat', icon: 'sparkle' },
+      { to: '/turf', label: 'Turf', icon: 'map' },
       { to: '/leaderboard', label: 'Leaderboard', icon: 'trophy' },
       ...common,
       { to: '/admin/settings', label: 'Settings', icon: 'sliders' },
     ]
+  }
+  if (auth.profile.role === 'team_lead') {
+    return [{ to: '/turf', label: 'Turf', icon: 'map' }, ...common]
   }
   return common
 })
@@ -89,6 +93,7 @@ const ICONS = {
   bulletin: '<rect x="4" y="4" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5M12 18v2"/>',
   palette: '<path d="M12 3a9 9 0 1 0 0 18c1.5 0 2-1 1.5-2s0-2 1.5-2h2a3 3 0 0 0 3-3 9 9 0 0 0-8-11z"/><circle cx="8" cy="10" r="1.2"/><circle cx="12" cy="7.5" r="1.2"/><circle cx="16" cy="10" r="1.2"/>',
   sparkle: '<path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/>',
+  map: '<path d="M9 4l6 2 6-2v14l-6 2-6-2-6 2V6z"/><path d="M9 4v14M15 6v14"/>',
   sliders: '<path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>',
   more: '<circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>',
   logout: '<path d="M14 4h-8a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h8M10 12h11M18 8.5L21.5 12 18 15.5"/>',
@@ -151,10 +156,12 @@ onUnmounted(() => {
           <router-link to="/admin">Dashboard</router-link>
           <!-- Admins often go out canvassing themselves, not just manage the org. -->
           <router-link to="/canvass">Canvass</router-link>
+          <router-link to="/turf">Turf</router-link>
           <router-link to="/admin/chat">AI Chat</router-link>
           <router-link to="/admin/settings">Settings</router-link>
         </template>
         <router-link v-else :to="homePath">Home</router-link>
+        <router-link v-if="auth.profile.role === 'team_lead'" to="/turf">Turf</router-link>
         <router-link to="/chat">Chat</router-link>
         <router-link to="/squads">Squads</router-link>
         <router-link to="/bulletin">Bulletin</router-link>

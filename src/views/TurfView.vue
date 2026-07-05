@@ -1,0 +1,1167 @@
+<script setup lang="ts">
+// Turf cutter (team leads + admins): the same Google map as Hunt, but pins
+// are paint targets instead of knock targets. Cutting works like a
+// highlighter — tap one door to anchor a sweep, tap another door down the
+// same street to close it, and every door in that house-number range lights
+// up under a colored stroke. Sweeps stack into a draft turf that gets a
+// name and an assignee: a squad (the day crew sorts out who takes what) or
+// a single canvasser. Saving stamps addresses.turf_id server-side via the
+// set_turf_segments RPC, which is what Hunt reads to show "your turf".
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { MarkerClusterer } from '@googlemaps/markerclusterer'
+import AppShell from '@/components/AppShell.vue'
+import AppSelect from '@/components/ui/AppSelect.vue'
+import type { SelectOption } from '@/components/ui/AppSelect.vue'
+import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
+import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
+import { supabase } from '@/lib/supabase'
+import { houseNumber, streetNameOf } from '@/lib/streetWalk'
+import { useAuthStore } from '@/stores/auth'
+import { useSquadsStore } from '@/stores/squads'
+import { PARITY_LABELS } from '@/types'
+import type { ChatProfile, Turf, TurfParity, TurfSegment } from '@/types'
+
+// Same fallback as Hunt: Richwood, OH (the imported demo subset).
+const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
+
+/** Slim address row — everything turf cutting needs, nothing Talk-specific. */
+interface AddressLite {
+  id: string
+  street: string
+  unit: string | null
+  city: string
+  lat: number | null
+  lng: number | null
+  turf_id: string | null
+}
+
+interface TurfWithMeta extends Turf {
+  turf_segments: TurfSegment[]
+  assignee: ChatProfile | null
+  squad: { id: string; name: string; squad_date: string } | null
+}
+
+/** A sweep in the draft tray. memberIds/doorCount come from the full address
+ * table (not just geocoded pins), so the door count is exact. */
+interface DraftSegment {
+  key: string
+  street_name: string
+  city: string | null
+  range_start: number
+  range_end: number
+  parity: TurfParity
+  memberIds: string[]
+  doorCount: number
+  /** Doors matching the range but already claimed by a different turf —
+   * they stay where they are (first claim wins). */
+  takenCount: number
+}
+
+// Distinct map hues; a new turf takes the first color no existing turf uses.
+const PALETTE = [
+  '#7c3aed', '#0ea5e9', '#f97316', '#10b981', '#ef4444',
+  '#eab308', '#ec4899', '#14b8a6', '#6366f1', '#84cc16',
+]
+
+const auth = useAuthStore()
+const squadsStore = useSquadsStore()
+
+const mapEl = ref<HTMLElement | null>(null)
+const pinsLoading = ref(false)
+const loadError = ref('')
+const saveError = ref('')
+const saving = ref(false)
+
+const turfs = ref<TurfWithMeta[]>([])
+const people = ref<ChatProfile[]>([])
+
+// --- Draft turf state ---
+const draftName = ref('')
+const segments = ref<DraftSegment[]>([])
+const anchor = ref<AddressLite | null>(null)
+const parityChoice = ref<TurfParity>('both')
+const editingTurfId = ref<string | null>(null)
+// 'none' | 'squad:<id>' | 'user:<id>' — Reka's SelectItem forbids '' values.
+const assignChoice = ref('none')
+const sweepBusy = ref(false)
+
+let map: google.maps.Map | null = null
+let clusterer: MarkerClusterer | null = null
+let initStarted = false
+const markersByAddress = new Map<string, google.maps.marker.AdvancedMarkerElement>()
+const addressById = new Map<string, AddressLite>()
+const segPolylines = new Map<string, google.maps.Polyline>()
+/** Street rows already pulled for a sweep, so range tweaks don't re-query. */
+const streetCache = new Map<string, AddressLite[]>()
+let segKeyCounter = 0
+
+const turfColorById = computed(() => new Map(turfs.value.map((t) => [t.id, t.color])))
+
+const draftColor = computed(() => {
+  if (editingTurfId.value) {
+    return turfs.value.find((t) => t.id === editingTurfId.value)?.color ?? PALETTE[0]
+  }
+  const used = new Set(turfs.value.map((t) => t.color))
+  return PALETTE.find((c) => !used.has(c)) ?? PALETTE[turfs.value.length % PALETTE.length]
+})
+
+const draftMemberIds = computed(() => {
+  const all = new Set<string>()
+  for (const s of segments.value) for (const id of s.memberIds) all.add(id)
+  return all
+})
+
+const draftDoorCount = computed(() => draftMemberIds.value.size)
+const draftTakenCount = computed(() => segments.value.reduce((n, s) => n + s.takenCount, 0))
+
+const hint = computed(() => {
+  if (sweepBusy.value) return 'Sweeping…'
+  if (anchor.value) {
+    const a = anchor.value
+    return `Anchor down at ${a.street} — tap another door on ${streetNameOf(a.street)} to sweep the range (or tap the anchor again to cancel).`
+  }
+  return 'Tap a door to drop a sweep anchor, then tap a second door on the same street.'
+})
+
+// --- Assignment options: today's squads + every canvasser. A turf being
+// edited may point at a past day's squad that loadToday won't return — keep
+// it selectable so editing doesn't silently drop the assignment. ---
+const assignOptions = computed<SelectOption[]>(() => {
+  const opts: SelectOption[] = [{ value: 'none', label: 'Unassigned' }]
+  const squadIds = new Set<string>()
+  for (const s of squadsStore.squads) {
+    squadIds.add(s.id)
+    opts.push({ value: `squad:${s.id}`, label: `Squad — ${s.name}` })
+  }
+  if (editingTurfId.value) {
+    const t = turfs.value.find((x) => x.id === editingTurfId.value)
+    if (t?.squad && !squadIds.has(t.squad.id)) {
+      opts.push({ value: `squad:${t.squad.id}`, label: `Squad — ${t.squad.name} (${t.squad.squad_date})` })
+    }
+  }
+  for (const p of people.value) {
+    opts.push({ value: `user:${p.id}`, label: `Canvasser — ${p.display_name || p.username}` })
+  }
+  return opts
+})
+
+function personName(p: ChatProfile | null): string {
+  return p ? p.display_name || p.username : '—'
+}
+
+function assignmentLabel(t: TurfWithMeta): string {
+  if (t.squad) return `Squad: ${t.squad.name} (${t.squad.squad_date})`
+  if (t.assignee) return `Canvasser: ${personName(t.assignee)}`
+  return 'Unassigned'
+}
+
+function segmentLabel(s: { street_name: string; range_start: number; range_end: number; parity: TurfParity }): string {
+  const side = s.parity === 'both' ? '' : ` · ${PARITY_LABELS[s.parity].toLowerCase()}`
+  return `${s.street_name} ${s.range_start}–${s.range_end}${side}`
+}
+
+// --- Map + pins ---
+
+function styleMarker(marker: google.maps.marker.AdvancedMarkerElement, a: AddressLite) {
+  const el = marker.content as HTMLElement
+  const s = el.style
+  const isAnchor = anchor.value?.id === a.id
+  const inDraft = draftMemberIds.value.has(a.id)
+  // While editing, doors still stamped to the turf but swept OUT of the
+  // draft show as unclaimed — the map previews the save.
+  const stampedColor =
+    a.turf_id && !(editingTurfId.value && a.turf_id === editingTurfId.value)
+      ? turfColorById.value.get(a.turf_id)
+      : undefined
+
+  const color = inDraft ? draftColor.value : stampedColor ?? '#9aa0a6'
+  const size = isAnchor ? 24 : inDraft ? 17 : 13
+  s.boxSizing = 'border-box'
+  s.cursor = 'pointer'
+  s.width = `${size}px`
+  s.height = `${size}px`
+  s.borderRadius = '50%'
+  s.background = color
+  s.border = isAnchor ? '3px solid #111' : '1.5px solid #ffffff'
+  s.boxShadow = '0 0 3px rgba(0, 0, 0, 0.45)'
+  s.animation = isAnchor ? 'turf-anchor-pulse 1.1s ease-in-out infinite' : ''
+  marker.zIndex = isAnchor ? 1000 : inDraft ? 500 : 1
+}
+
+function restyleAll() {
+  for (const [id, marker] of markersByAddress) {
+    const a = addressById.get(id)
+    if (a) styleMarker(marker, a)
+  }
+}
+
+function upsertMarker(a: AddressLite) {
+  addressById.set(a.id, a)
+  if (a.lat == null || a.lng == null || !map) return
+  let marker = markersByAddress.get(a.id)
+  if (!marker) {
+    marker = new google.maps.marker.AdvancedMarkerElement({
+      position: { lat: a.lat, lng: a.lng },
+      title: `${a.street}${a.unit ? ' ' + a.unit : ''}`,
+      content: document.createElement('div'),
+      gmpClickable: true,
+    })
+    marker.addListener('gmp-click', () => void onPinTap(a.id))
+    markersByAddress.set(a.id, marker)
+    clusterer?.addMarker(marker)
+  }
+  styleMarker(marker, a)
+}
+
+async function fetchAddresses(): Promise<AddressLite[]> {
+  const { data, error } = await supabase
+    .from('addresses')
+    .select('id, street, unit, city, lat, lng, turf_id')
+    .not('lat', 'is', null)
+    .limit(2000)
+  if (error) throw error
+  return (data ?? []) as AddressLite[]
+}
+
+async function fetchTurfs() {
+  const { data } = await supabase
+    .from('turfs')
+    .select(
+      '*, turf_segments(*), assignee:profiles!turfs_assignee_id_fkey(id, username, display_name), squad:squads!turfs_squad_id_fkey(id, name, squad_date)',
+    )
+    .order('created_at')
+  turfs.value = (data ?? []) as TurfWithMeta[]
+}
+
+async function initialize() {
+  pinsLoading.value = true
+  let rows: AddressLite[] = []
+  try {
+    ;[rows] = await Promise.all([
+      fetchAddresses(),
+      fetchTurfs(),
+      loadMaps(),
+      squadsStore.loadToday(),
+      supabase
+        .from('profiles')
+        .select('id, username, display_name')
+        .order('username')
+        .then((res) => {
+          people.value = (res.data ?? []) as ChatProfile[]
+        }),
+    ])
+  } catch {
+    loadError.value = 'Could not load the map or address data. Check your connection.'
+    initStarted = false
+    pinsLoading.value = false
+    return
+  }
+  if (!mapEl.value) {
+    pinsLoading.value = false
+    return
+  }
+
+  map = new google.maps.Map(mapEl.value, {
+    center: FALLBACK_CENTER,
+    zoom: 14,
+    mapId: GOOGLE_MAPS_MAP_ID,
+    streetViewControl: false,
+    mapTypeControl: false,
+    fullscreenControl: false,
+    gestureHandling: 'greedy',
+  })
+  clusterer = new MarkerClusterer({ map, markers: [] })
+
+  const bounds = new google.maps.LatLngBounds()
+  for (const a of rows) {
+    upsertMarker(a)
+    if (a.lat != null && a.lng != null) bounds.extend({ lat: a.lat, lng: a.lng })
+  }
+  if (!bounds.isEmpty()) map.fitBounds(bounds, 48)
+  pinsLoading.value = false
+}
+
+/** Re-pull addresses + turfs after a save/delete (turf_id stamps changed
+ * server-side) and repaint. */
+async function reloadAll() {
+  const [rows] = await Promise.all([fetchAddresses(), fetchTurfs()])
+  for (const a of rows) upsertMarker(a)
+  streetCache.clear()
+  restyleAll()
+}
+
+// --- Sweeping ---
+
+async function onPinTap(addressId: string) {
+  const a = addressById.get(addressId)
+  if (!a || sweepBusy.value) return
+  if (!anchor.value) {
+    anchor.value = a
+    restyleAll()
+    return
+  }
+  if (anchor.value.id === a.id) {
+    anchor.value = null
+    restyleAll()
+    return
+  }
+  const from = anchor.value
+  if (streetNameOf(from.street) !== streetNameOf(a.street)) {
+    // Different street: move the anchor rather than erroring — tapping around
+    // to find the right starting door shouldn't require a cancel step.
+    anchor.value = a
+    restyleAll()
+    return
+  }
+  const lo = Math.min(houseNumber(from.street), houseNumber(a.street))
+  const hi = Math.max(houseNumber(from.street), houseNumber(a.street))
+  anchor.value = null
+  await addSegment(streetNameOf(from.street), from.city, lo, hi, parityChoice.value)
+}
+
+async function fetchStreetRows(streetName: string, city: string | null): Promise<AddressLite[]> {
+  const cacheKey = `${streetName}|${city ?? ''}`
+  const cached = streetCache.get(cacheKey)
+  if (cached) return cached
+  // Suffix match ("%WALNUT ST") like Hunt's locate, then exact-name filter —
+  // this pulls EVERY row on the street (geocoded or not), so counts are real.
+  const { data } = await supabase
+    .from('addresses')
+    .select('id, street, unit, city, lat, lng, turf_id')
+    .ilike('street', `%${streetName}`)
+  let rows = ((data ?? []) as AddressLite[]).filter((r) => streetNameOf(r.street) === streetName)
+  if (city) rows = rows.filter((r) => r.city.toUpperCase() === city.toUpperCase())
+  streetCache.set(cacheKey, rows)
+  return rows
+}
+
+function matchesSegment(a: AddressLite, seg: Pick<DraftSegment, 'range_start' | 'range_end' | 'parity'>): boolean {
+  const n = houseNumber(a.street)
+  if (n < seg.range_start || n > seg.range_end) return false
+  return seg.parity === 'both' || (n % 2 === 0) === (seg.parity === 'even')
+}
+
+/** (Re)derive a segment's members from its street rows, refresh its
+ * highlighter stroke, and repaint pins. */
+async function computeSegment(seg: DraftSegment) {
+  const rows = await fetchStreetRows(seg.street_name, seg.city)
+  const members = rows.filter((a) => matchesSegment(a, seg))
+  const free = members.filter(
+    (a) => !a.turf_id || a.turf_id === editingTurfId.value,
+  )
+  seg.memberIds = free.map((a) => a.id)
+  seg.doorCount = free.length
+  seg.takenCount = members.length - free.length
+
+  // Newly-discovered geocoded doors on this street get pins too, so the
+  // stroke never floats over empty map.
+  for (const a of members) if (!markersByAddress.has(a.id)) upsertMarker(a)
+
+  segPolylines.get(seg.key)?.setMap(null)
+  segPolylines.delete(seg.key)
+  const path = free
+    .filter((a) => a.lat != null && a.lng != null)
+    .sort((a, b) => houseNumber(a.street) - houseNumber(b.street))
+    .map((a) => ({ lat: a.lat!, lng: a.lng! }))
+  if (path.length >= 2 && map) {
+    segPolylines.set(
+      seg.key,
+      new google.maps.Polyline({
+        map,
+        path,
+        strokeColor: draftColor.value,
+        strokeOpacity: 0.7,
+        strokeWeight: 6,
+        clickable: false,
+      }),
+    )
+  }
+  restyleAll()
+}
+
+async function addSegment(
+  streetName: string,
+  city: string | null,
+  lo: number,
+  hi: number,
+  parity: TurfParity,
+) {
+  sweepBusy.value = true
+  try {
+    // reactive(): computeSegment fills memberIds/doorCount in AFTER the push,
+    // and those writes must invalidate draftMemberIds/draftDoorCount.
+    const seg: DraftSegment = reactive({
+      key: `seg-${++segKeyCounter}`,
+      street_name: streetName,
+      city,
+      range_start: lo,
+      range_end: hi,
+      parity,
+      memberIds: [],
+      doorCount: 0,
+      takenCount: 0,
+    })
+    segments.value.push(seg)
+    await computeSegment(seg)
+  } finally {
+    sweepBusy.value = false
+  }
+}
+
+function removeSegment(seg: DraftSegment) {
+  segments.value = segments.value.filter((s) => s.key !== seg.key)
+  segPolylines.get(seg.key)?.setMap(null)
+  segPolylines.delete(seg.key)
+  restyleAll()
+}
+
+async function onSegmentRangeChange(seg: DraftSegment) {
+  if (seg.range_end < seg.range_start) {
+    ;[seg.range_start, seg.range_end] = [seg.range_end, seg.range_start]
+  }
+  await computeSegment(seg)
+}
+
+async function onSegmentParityChange(seg: DraftSegment, parity: string) {
+  seg.parity = parity as TurfParity
+  await computeSegment(seg)
+}
+
+function clearDraft() {
+  segments.value = []
+  for (const line of segPolylines.values()) line.setMap(null)
+  segPolylines.clear()
+  anchor.value = null
+  editingTurfId.value = null
+  draftName.value = ''
+  assignChoice.value = 'none'
+  saveError.value = ''
+  restyleAll()
+}
+
+// --- Street search: the non-map way in. Typing "walnut" lists matching
+// streets with their door counts and number spans; tapping one sweeps the
+// whole street (trim the range in the tray afterwards). Also the only way
+// to grab streets whose doors haven't been geocoded onto the map yet. ---
+
+const streetQuery = ref('')
+const streetMatches = ref<{ street_name: string; city: string; count: number; lo: number; hi: number }[]>([])
+const streetSearching = ref(false)
+let streetTimer: ReturnType<typeof setTimeout> | undefined
+
+function onStreetInput(value: string) {
+  streetQuery.value = value
+  clearTimeout(streetTimer)
+  const q = value.trim()
+  if (q.length < 2) {
+    streetMatches.value = []
+    streetSearching.value = false
+    return
+  }
+  streetSearching.value = true
+  streetTimer = setTimeout(async () => {
+    const { data } = await supabase
+      .from('addresses')
+      .select('street, city')
+      .ilike('street', `%${q}%`)
+      .limit(600)
+    if (streetQuery.value.trim() !== q) return
+    const groups = new Map<string, { street_name: string; city: string; count: number; lo: number; hi: number }>()
+    for (const r of (data ?? []) as { street: string; city: string }[]) {
+      const name = streetNameOf(r.street)
+      if (!name) continue
+      const key = `${name}|${r.city.toUpperCase()}`
+      const n = houseNumber(r.street)
+      const g = groups.get(key)
+      if (!g) groups.set(key, { street_name: name, city: r.city, count: 1, lo: n, hi: n })
+      else {
+        g.count++
+        g.lo = Math.min(g.lo, n)
+        g.hi = Math.max(g.hi, n)
+      }
+    }
+    streetMatches.value = [...groups.values()].sort((a, b) => b.count - a.count).slice(0, 8)
+    streetSearching.value = false
+  }, 250)
+}
+
+async function addWholeStreet(m: { street_name: string; city: string; lo: number; hi: number }) {
+  streetQuery.value = ''
+  streetMatches.value = []
+  await addSegment(m.street_name, m.city, m.lo, m.hi, parityChoice.value)
+  focusDraft()
+}
+
+// --- Save / edit / delete ---
+
+async function saveTurf() {
+  saveError.value = ''
+  const name = draftName.value.trim()
+  if (!name) {
+    saveError.value = 'Give the turf a name.'
+    return
+  }
+  if (!segments.value.length) {
+    saveError.value = 'Sweep at least one street range first.'
+    return
+  }
+  saving.value = true
+  try {
+    const [kind, id] = assignChoice.value.split(':')
+    const assignment = {
+      squad_id: kind === 'squad' ? id : null,
+      assignee_id: kind === 'user' ? id : null,
+    }
+    let turfId = editingTurfId.value
+    if (turfId) {
+      const { error } = await supabase
+        .from('turfs')
+        .update({ name, ...assignment, updated_at: new Date().toISOString() })
+        .eq('id', turfId)
+      if (error) throw error
+    } else {
+      const { data, error } = await supabase
+        .from('turfs')
+        .insert({ name, color: draftColor.value, ...assignment, created_by: auth.profile?.id })
+        .select('id')
+        .single()
+      if (error || !data) throw error ?? new Error('insert failed')
+      turfId = data.id as string
+    }
+    const { error: rpcError } = await supabase.rpc('set_turf_segments', {
+      target_turf_id: turfId,
+      segments: segments.value.map((s) => ({
+        street_name: s.street_name,
+        city: s.city,
+        range_start: s.range_start,
+        range_end: s.range_end,
+        parity: s.parity,
+      })),
+    })
+    if (rpcError) throw rpcError
+    clearDraft()
+    await reloadAll()
+  } catch {
+    saveError.value = 'Could not save the turf — try again.'
+  } finally {
+    saving.value = false
+  }
+}
+
+async function editTurf(t: TurfWithMeta) {
+  clearDraft()
+  editingTurfId.value = t.id
+  draftName.value = t.name
+  assignChoice.value = t.squad_id ? `squad:${t.squad_id}` : t.assignee_id ? `user:${t.assignee_id}` : 'none'
+  for (const s of t.turf_segments) {
+    await addSegment(s.street_name, s.city, s.range_start, s.range_end, s.parity)
+  }
+  focusTurf(t.id)
+  focusDraft()
+}
+
+async function deleteTurf(t: TurfWithMeta) {
+  if (!window.confirm(`Delete turf "${t.name}"? Its doors become unassigned.`)) return
+  if (editingTurfId.value === t.id) clearDraft()
+  await supabase.from('turfs').delete().eq('id', t.id)
+  await reloadAll()
+}
+
+function focusTurf(turfId: string) {
+  if (!map) return
+  const bounds = new google.maps.LatLngBounds()
+  for (const a of addressById.values()) {
+    if (a.turf_id === turfId && a.lat != null && a.lng != null) {
+      bounds.extend({ lat: a.lat, lng: a.lng })
+    }
+  }
+  if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
+}
+
+const draftCardEl = ref<HTMLElement | null>(null)
+
+function focusDraft() {
+  draftCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+}
+
+onMounted(() => {
+  if (!initStarted) {
+    initStarted = true
+    void initialize()
+  }
+})
+
+onUnmounted(() => {
+  clusterer?.clearMarkers()
+  markersByAddress.clear()
+  for (const line of segPolylines.values()) line.setMap(null)
+  segPolylines.clear()
+})
+</script>
+
+<template>
+  <AppShell title="Turf">
+    <div class="stack">
+      <!-- Sweep status + side filter: the "controls" of the highlighter. -->
+      <div class="sweep-bar" :style="{ '--draft-color': draftColor }">
+        <span class="sweep-dot" :class="{ armed: !!anchor }" aria-hidden="true"></span>
+        <p class="sweep-hint">{{ hint }}</p>
+        <div class="parity-toggle" role="group" aria-label="Which side of the street to sweep">
+          <button
+            v-for="p in (['both', 'even', 'odd'] as const)"
+            :key="p"
+            class="parity-btn"
+            :class="{ active: parityChoice === p }"
+            @click="parityChoice = p"
+          >
+            {{ p === 'both' ? 'Both' : p === 'even' ? 'Even' : 'Odd' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="map-wrap">
+        <div ref="mapEl" class="map"></div>
+        <div v-if="pinsLoading" class="pins-loading" role="status" aria-live="polite">
+          <span class="pins-loading-spinner" aria-hidden="true"></span>
+          Loading pins…
+        </div>
+      </div>
+      <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
+      <p v-if="mapsAuthError" class="muted map-error">
+        Google rejected the Maps API key — usually quota, billing, or a referrer restriction on
+        the key. The exact reason is logged in the browser console.
+      </p>
+
+      <!-- Non-map entry point: sweep a whole street by name. -->
+      <input
+        :value="streetQuery"
+        class="street-search"
+        type="search"
+        placeholder="…or search a street to sweep it whole"
+        aria-label="Search streets to add to the turf"
+        @input="onStreetInput(($event.target as HTMLInputElement).value)"
+      />
+      <div v-if="streetSearching" class="muted search-note">Searching…</div>
+      <div v-else-if="streetMatches.length" class="street-matches">
+        <button v-for="m in streetMatches" :key="m.street_name + m.city" class="street-match" @click="addWholeStreet(m)">
+          <span class="street-match-name">{{ m.street_name }}</span>
+          <span class="muted">{{ m.city }} · {{ m.count }} doors · {{ m.lo }}–{{ m.hi }}</span>
+        </button>
+      </div>
+
+      <!-- Draft tray: the turf being cut. -->
+      <div ref="draftCardEl" class="card draft-card" :style="{ '--draft-color': draftColor }">
+        <h3 class="draft-title">
+          <span class="draft-swatch" aria-hidden="true"></span>
+          {{ editingTurfId ? 'Editing turf' : 'New turf' }}
+          <span v-if="draftDoorCount" class="draft-count">{{ draftDoorCount }} doors</span>
+        </h3>
+
+        <template v-if="segments.length">
+          <div class="seg-list">
+            <div v-for="seg in segments" :key="seg.key" class="seg-chip">
+              <div class="seg-chip-main">
+                <span class="seg-street">{{ seg.street_name }}</span>
+                <span class="muted seg-city">{{ seg.city ?? 'any city' }}</span>
+              </div>
+              <div class="seg-chip-controls">
+                <input
+                  type="number"
+                  class="seg-num"
+                  :value="seg.range_start"
+                  min="0"
+                  aria-label="Range start"
+                  @change="seg.range_start = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(seg)"
+                />
+                <span class="muted">–</span>
+                <input
+                  type="number"
+                  class="seg-num"
+                  :value="seg.range_end"
+                  min="0"
+                  aria-label="Range end"
+                  @change="seg.range_end = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(seg)"
+                />
+                <AppSelect
+                  class="seg-parity"
+                  small
+                  :options="[
+                    { value: 'both', label: 'Both sides' },
+                    { value: 'even', label: 'Even side' },
+                    { value: 'odd', label: 'Odd side' },
+                  ]"
+                  :model-value="seg.parity"
+                  aria-label="Which side of the street"
+                  @update:model-value="onSegmentParityChange(seg, $event)"
+                />
+                <span class="seg-doors" :class="{ 'seg-doors-empty': !seg.doorCount }">
+                  {{ seg.doorCount }} doors
+                </span>
+                <button class="btn btn-ghost btn-sm seg-remove" aria-label="Remove this street range" @click="removeSegment(seg)">
+                  ✕
+                </button>
+              </div>
+              <p v-if="seg.takenCount" class="muted seg-taken">
+                {{ seg.takenCount }} of these doors already belong to another turf and stay there.
+              </p>
+            </div>
+          </div>
+        </template>
+        <p v-else class="muted empty-note">
+          No streets swept yet — tap two doors on a street above, or search a street by name.
+        </p>
+
+        <div class="draft-form">
+          <input
+            v-model="draftName"
+            class="draft-name"
+            type="text"
+            maxlength="80"
+            placeholder="Turf name (e.g. Walnut &amp; Maple loop)"
+            aria-label="Turf name"
+          />
+          <AppSelect v-model="assignChoice" :options="assignOptions" aria-label="Assign this turf to" />
+          <div class="draft-actions">
+            <button class="btn btn-primary" :disabled="saving" @click="saveTurf">
+              {{ saving ? 'Saving…' : editingTurfId ? 'Save changes' : 'Create turf' }}
+            </button>
+            <button v-if="segments.length || editingTurfId" class="btn btn-ghost" :disabled="saving" @click="clearDraft">
+              {{ editingTurfId ? 'Cancel edit' : 'Clear' }}
+            </button>
+          </div>
+          <p v-if="draftTakenCount" class="muted">
+            {{ draftTakenCount }} swept doors stay with their current turf (first claim wins).
+          </p>
+          <p v-if="saveError" class="error">{{ saveError }}</p>
+        </div>
+      </div>
+
+      <!-- Existing turfs -->
+      <div class="card">
+        <h3>Turfs</h3>
+        <p v-if="!turfs.length" class="muted empty-note">
+          No turf cut yet. Squads without turf just pick their own streets.
+        </p>
+        <div v-else class="turf-list">
+          <div v-for="t in turfs" :key="t.id" class="turf-row">
+            <button class="turf-row-main" @click="focusTurf(t.id)">
+              <span class="turf-swatch" :style="{ background: t.color }" aria-hidden="true"></span>
+              <span class="turf-row-text">
+                <span class="turf-name">{{ t.name }}</span>
+                <span class="muted turf-assignment">{{ assignmentLabel(t) }}</span>
+                <span class="muted turf-segments">
+                  {{ t.turf_segments.map(segmentLabel).join(' · ') || 'No street ranges' }}
+                </span>
+              </span>
+            </button>
+            <div class="turf-row-actions">
+              <button class="btn btn-ghost btn-sm" @click="editTurf(t)">Edit</button>
+              <button class="btn btn-ghost btn-sm turf-delete" @click="deleteTurf(t)">Delete</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </AppShell>
+</template>
+
+<style scoped>
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* --- Sweep bar --- */
+
+.sweep-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 6px solid var(--draft-color);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--draft-color) 6%, var(--surface));
+}
+
+.sweep-dot {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--draft-color);
+  border: 2px solid #fff;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.4);
+}
+
+.sweep-dot.armed {
+  animation: turf-anchor-pulse 1.1s ease-in-out infinite;
+}
+
+.sweep-hint {
+  margin: 0;
+  flex: 1;
+  font-size: 0.88rem;
+}
+
+.parity-toggle {
+  display: flex;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.parity-btn {
+  min-height: 36px;
+  padding: 0 0.6rem;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.parity-btn + .parity-btn {
+  border-left: 1px solid var(--border);
+}
+
+.parity-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* --- Map --- */
+
+.map-wrap {
+  position: relative;
+}
+
+.map {
+  height: min(50svh, 480px);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.pins-loading {
+  position: absolute;
+  top: 0.6rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+.pins-loading-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: turf-spin 0.7s linear infinite;
+}
+
+.map-error {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+/* --- Street search --- */
+
+.street-search {
+  width: 100%;
+  min-height: 48px;
+  padding: 0.7rem 0.9rem;
+  font-size: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.street-search:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.search-note {
+  font-size: 0.88rem;
+}
+
+.street-matches {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.street-match {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+.street-match:hover {
+  background: var(--surface-2);
+}
+
+.street-match-name {
+  font-weight: 600;
+}
+
+/* --- Draft tray --- */
+
+.draft-card {
+  border-left: 6px solid var(--draft-color);
+}
+
+.draft-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.draft-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--draft-color);
+  border: 2px solid #fff;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.35);
+}
+
+.draft-count {
+  margin-left: auto;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--draft-color);
+}
+
+.seg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.seg-chip {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--draft-color);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.seg-chip-main {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.seg-street {
+  font-weight: 700;
+}
+
+.seg-city {
+  font-size: 0.82rem;
+}
+
+.seg-chip-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.seg-num {
+  width: 5.2rem;
+  min-height: 40px;
+  padding: 0.3rem 0.5rem;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.seg-num:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.seg-parity {
+  width: auto;
+  min-width: 8.5rem;
+}
+
+.seg-doors {
+  font-size: 0.85rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.seg-doors-empty {
+  color: var(--danger);
+}
+
+.seg-remove {
+  margin-left: auto;
+}
+
+.seg-taken {
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+}
+
+.draft-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.draft-name {
+  width: 100%;
+  min-height: 48px;
+  padding: 0.7rem 0.9rem;
+  font-size: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.draft-name:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.draft-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.empty-note {
+  margin: 0 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+/* --- Turf list --- */
+
+.turf-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.turf-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 0.5rem 0.65rem;
+}
+
+.turf-row-main {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+
+.turf-swatch {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.35);
+}
+
+.turf-row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.turf-name {
+  font-weight: 700;
+}
+
+.turf-assignment,
+.turf-segments {
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turf-row-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.25rem;
+}
+
+.turf-delete {
+  color: var(--danger);
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+@keyframes turf-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+</style>
+
+<!-- Unscoped: marker content divs live in Google's map DOM, outside this
+     component's subtree, so the anchor pulse keyframes must be global. -->
+<style>
+@keyframes turf-anchor-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.25);
+  }
+}
+</style>

@@ -7,7 +7,7 @@ import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import { geocodeAndCache } from '@/lib/geocode'
 import { supabase } from '@/lib/supabase'
-import { startOfLocalDayISO } from '@/lib/day'
+import { localToday, startOfLocalDayISO } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
 import { useTalkStore } from '@/stores/talk'
 import { OUTCOME_HEX, PIN_DEFAULT_HEX, knockButtonHex } from '@/lib/outcomes'
@@ -76,6 +76,10 @@ const summaryByHousehold = ref<Map<string, HouseholdKnockSummary>>(new Map())
  * already here today" signal on pins and result rows, so crews working the
  * same turf don't double-knock. Kept live via the realtime feed below. */
 const knockedToday = ref<Set<string>>(new Set())
+/** Turf assigned to this canvasser — directly, or via a squad they're in
+ * today. Member doors get a colored ring on the map plus a jump-to chip. */
+const myTurfs = ref<{ id: string; name: string; color: string }[]>([])
+const turfByAddress = ref<Map<string, string>>(new Map())
 const loadError = ref('')
 
 let map: google.maps.Map | null = null
@@ -128,6 +132,24 @@ async function fetchMapData() {
   return (addressesRes.data ?? []) as AddressWithRoster[]
 }
 
+/** Turf assigned to me directly, or to any squad I'm in today. */
+async function fetchMyTurfs() {
+  if (!auth.profile) return
+  const me = auth.profile.id
+  const { data: sm } = await supabase
+    .from('squad_members')
+    .select('squad_id, squads!inner(squad_date)')
+    .eq('user_id', me)
+    .eq('squads.squad_date', localToday())
+  const squadIds = (sm ?? []).map((r) => r.squad_id as string)
+  const orParts = [`assignee_id.eq.${me}`]
+  if (squadIds.length) orParts.push(`squad_id.in.(${squadIds.join(',')})`)
+  const { data } = await supabase.from('turfs').select('id, name, color').or(orParts.join(','))
+  myTurfs.value = (data ?? []) as { id: string; name: string; color: string }[]
+}
+
+const myTurfColorById = computed(() => new Map(myTurfs.value.map((t) => [t.id, t.color])))
+
 async function fetchKnockedToday(): Promise<Set<string>> {
   const { data } = await supabase
     .from('knock_logs')
@@ -169,7 +191,13 @@ function styleMarker(marker: google.maps.marker.AdvancedMarkerElement, addressId
   // "don't re-knock" cue, distinct from the located pin's solid dark border.
   s.outline = knockedToday.value.has(addressId) ? '2px solid #111' : ''
   s.outlineOffset = '1.5px'
-  s.boxShadow = '0 0 3px rgba(0, 0, 0, 0.45)'
+  // "Your turf" ring: the turf's own color, so multiple turfs (yours vs your
+  // squad's) stay tellable apart. Layered under the usual drop shadow.
+  const turfId = turfByAddress.value.get(addressId)
+  const turfColor = turfId ? myTurfColorById.value.get(turfId) : undefined
+  s.boxShadow = turfColor
+    ? `0 0 0 3px ${turfColor}, 0 0 3px rgba(0, 0, 0, 0.45)`
+    : '0 0 3px rgba(0, 0, 0, 0.45)'
   s.color = '#ffffff'
   s.display = 'flex'
   s.alignItems = 'center'
@@ -205,6 +233,8 @@ function refreshAllPinStyles() {
 }
 
 function addOrUpdateMarker(a: AddressWithRoster) {
+  if (a.turf_id) turfByAddress.value.set(a.id, a.turf_id)
+  else turfByAddress.value.delete(a.id)
   if (a.lat == null || a.lng == null || !map) return
   let marker = markersByAddress.get(a.id)
   if (!marker) {
@@ -252,6 +282,7 @@ async function initialize() {
       fetchMapData(),
       loadMaps(),
       lastKnockCenter(),
+      fetchMyTurfs(),
     ])
   } catch {
     loadError.value = 'Could not load the map or address data. Check your connection.'
@@ -304,9 +335,22 @@ async function refreshStatuses() {
     supabase.from('household_latest_knock').select('*'),
     supabase.from('household_knock_summary').select('*'),
     fetchKnockedToday(),
+    fetchMyTurfs(),
   ])
   applyStatusAndSummary(statusRes.data, summaryRes.data, todayRes)
   refreshAllPinStyles()
+}
+
+/** Pan/zoom to a turf's doors (the chips above the map). */
+function focusTurf(turfId: string) {
+  if (!map) return
+  const bounds = new google.maps.LatLngBounds()
+  for (const [addressId, marker] of markersByAddress) {
+    if (turfByAddress.value.get(addressId) === turfId && marker.position) {
+      bounds.extend(marker.position)
+    }
+  }
+  if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
 }
 
 // --- Live teammate knocks: when anyone on the campaign logs a door, its pin
@@ -661,6 +705,22 @@ onUnmounted(() => {
       </button>
     </div>
 
+    <!-- Turf assigned to you (or a squad you're in today). Tapping a chip
+         jumps the map to that turf's doors, which carry a ring in the same
+         color. -->
+    <div v-if="myTurfs.length" class="turf-chips">
+      <button
+        v-for="t in myTurfs"
+        :key="t.id"
+        class="turf-chip"
+        :style="{ '--turf-color': t.color }"
+        @click="focusTurf(t.id)"
+      >
+        <span class="turf-chip-dot" aria-hidden="true"></span>
+        Your turf: {{ t.name }}
+      </button>
+    </div>
+
     <div ref="mapWrapEl" class="map-wrap" :class="{ 'map-wrap-fullscreen': isFullscreen }">
       <div ref="mapEl" class="map"></div>
       <div v-if="pinsLoading" class="pins-loading" role="status" aria-live="polite">
@@ -833,6 +893,42 @@ onUnmounted(() => {
 
 .map-wrap {
   position: relative;
+}
+
+/* "Your turf" chips — each in its turf's map color. */
+.turf-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.turf-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 36px;
+  padding: 0.3rem 0.7rem;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--text);
+  background: color-mix(in srgb, var(--turf-color) 10%, var(--surface));
+  border: 1.5px solid var(--turf-color);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.turf-chip:hover {
+  background: color-mix(in srgb, var(--turf-color) 18%, var(--surface));
+}
+
+.turf-chip-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--turf-color);
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
 }
 
 .map {

@@ -90,7 +90,8 @@ async function saveSettings() {
 
       <div class="card">
         <h3>Turf Assignment</h3>
-        <p class="muted">Assign street ranges to teams and canvassers. Coming soon.</p>
+        <p class="muted">Sweep street ranges on the map into turf for squads or canvassers.</p>
+        <router-link class="btn btn-primary btn-sm" to="/turf">Cut turf</router-link>
       </div>
 
       <div class="card">
