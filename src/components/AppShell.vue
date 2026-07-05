@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore, roleHome } from '@/stores/auth'
 import { ROLE_LABELS } from '@/types'
+import AppLogo from '@/components/AppLogo.vue'
 import EdgeScrollbar from '@/components/EdgeScrollbar.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import { hapticTap } from '@/lib/native'
@@ -131,7 +132,7 @@ onUnmounted(() => {
     <header class="shell-header">
       <div class="shell-header-inner">
         <div class="brand">
-          <span class="brand-mark">⚡</span>
+          <AppLogo class="brand-mark" size="1.25em" />
           <span class="brand-name">Forcefield</span>
         </div>
         <div class="user-area" v-if="auth.profile">
@@ -255,6 +256,10 @@ onUnmounted(() => {
   gap: 0.4rem;
   font-weight: 800;
   font-size: 1.05rem;
+}
+
+.brand-mark {
+  color: var(--accent);
 }
 
 .user-area {

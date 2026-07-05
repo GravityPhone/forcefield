@@ -1,8 +1,12 @@
+<script setup lang="ts">
+import AppLogo from '@/components/AppLogo.vue'
+</script>
+
 <template>
   <div class="landing">
     <div class="landing-inner">
       <div class="hero">
-        <div class="hero-mark">⚡</div>
+        <div class="hero-mark"><AppLogo size="1em" /></div>
         <h1>Forcefield</h1>
         <p class="muted tagline">
           Knock doors. Log outcomes fast. See where to go next.
@@ -33,8 +37,10 @@
 }
 
 .hero-mark {
-  font-size: 3.5rem;
+  font-size: 4.5rem;
   margin-bottom: 0.5rem;
+  color: var(--accent);
+  line-height: 1;
 }
 
 .hero h1 {
