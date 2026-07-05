@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
+import BottomSheet from '@/components/ui/BottomSheet.vue'
 import { supabase } from '@/lib/supabase'
 import { localToday } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
@@ -19,11 +20,19 @@ const query = ref('')
 type RoleFilter = 'all' | AppRole
 const roleFilter = ref<RoleFilter>('all')
 
-/** User whose editor sheet is open, and which section just saved (drives the
- * per-section "Saved ✓" flash inside the sheet). */
+/** User whose editor sheet shows, and which section just saved (drives the
+ * per-section "Saved ✓" flash inside the sheet). `editing` deliberately keeps
+ * its last user after closing so the sheet stays populated through the
+ * slide-down animation — `sheetOpen` alone controls visibility. */
 const editing = ref<Profile | null>(null)
+const sheetOpen = ref(false)
 const savedSection = ref<'role' | 'team' | 'squad' | null>(null)
 let savedTimer: ReturnType<typeof setTimeout> | undefined
+
+function openSheet(user: Profile) {
+  editing.value = user
+  sheetOpen.value = true
+}
 
 async function loadAll() {
   const [p, t, s] = await Promise.all([
@@ -171,7 +180,7 @@ async function setSquad(user: Profile, squadId: string | null) {
 }
 
 function closeSheet() {
-  editing.value = null
+  sheetOpen.value = false
   savedSection.value = null
   error.value = ''
 }
@@ -209,12 +218,12 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
         </button>
       </div>
 
-      <p v-if="error && !editing" class="error">{{ error }}</p>
+      <p v-if="error && !sheetOpen" class="error">{{ error }}</p>
       <p v-if="loading" class="muted">Loading users…</p>
       <p v-else-if="!filtered.length" class="muted">No users match.</p>
 
       <div v-else class="user-list card">
-        <button v-for="u in filtered" :key="u.id" class="user-row" @click="editing = u">
+        <button v-for="u in filtered" :key="u.id" class="user-row" @click="openSheet(u)">
           <span class="avatar" :style="avatarStyle(u)" aria-hidden="true">{{ initialsOf(u) }}</span>
           <span class="user-main">
             <span class="user-name-line">
@@ -233,24 +242,26 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
       </div>
     </div>
 
-    <!-- Editor sheet: slides up from the bottom, phone-first. -->
-    <Transition name="sheet">
-      <div v-if="editing" class="sheet-backdrop" @click.self="closeSheet">
-        <div class="sheet" role="dialog" :aria-label="`Edit ${editing.username}`">
-          <div class="sheet-grip" aria-hidden="true"></div>
-
-          <div class="sheet-head">
-            <span class="avatar avatar-lg" :style="avatarStyle(editing)" aria-hidden="true">
-              {{ initialsOf(editing) }}
-            </span>
-            <div class="sheet-names">
-              <span class="user-name">{{ editing.display_name || editing.username }}</span>
-              <span class="muted user-sub">@{{ editing.username }}</span>
-            </div>
-            <button class="sheet-close" aria-label="Close" @click="closeSheet">✕</button>
+    <!-- Editor sheet: slides up from the bottom, phone-first. Reka Dialog
+         underneath (focus trap, Esc, scroll lock) via the shared BottomSheet. -->
+    <BottomSheet
+      v-model:open="sheetOpen"
+      :aria-label="editing ? `Edit ${editing.username}` : 'Edit user'"
+    >
+      <template #header>
+        <div v-if="editing" class="sheet-head">
+          <span class="avatar avatar-lg" :style="avatarStyle(editing)" aria-hidden="true">
+            {{ initialsOf(editing) }}
+          </span>
+          <div class="sheet-names">
+            <span class="user-name">{{ editing.display_name || editing.username }}</span>
+            <span class="muted user-sub">@{{ editing.username }}</span>
           </div>
+        </div>
+      </template>
 
-          <p v-if="error" class="error">{{ error }}</p>
+      <template v-if="editing">
+        <p v-if="error" class="error">{{ error }}</p>
 
           <div class="section">
             <div class="section-head">
@@ -337,9 +348,8 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
               <router-link to="/squads">Squads</router-link> page and reset at midnight.
             </p>
           </div>
-        </div>
-      </div>
-    </Transition>
+      </template>
+    </BottomSheet>
   </AppShell>
 </template>
 
@@ -533,41 +543,7 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
   flex-shrink: 0;
 }
 
-/* --- Bottom sheet editor --- */
-
-.sheet-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 18, 30, 0.45);
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  z-index: 50;
-}
-
-.sheet {
-  width: min(520px, 100%);
-  max-height: 88dvh;
-  overflow-y: auto;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 18px 18px 0 0;
-  padding: 0.5rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.25);
-}
-
-.sheet-grip {
-  width: 40px;
-  height: 4px;
-  border-radius: 999px;
-  background: var(--border);
-  margin: 0.25rem auto 0;
-  flex-shrink: 0;
-}
+/* --- Bottom sheet editor (chrome lives in ui/BottomSheet.vue) --- */
 
 .sheet-head {
   display: flex;
@@ -581,25 +557,6 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
   gap: 0.1rem;
   min-width: 0;
   flex: 1;
-}
-
-.sheet-close {
-  width: 34px;
-  height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  background: var(--surface-2);
-  color: var(--text-muted);
-  font-size: 0.9rem;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.sheet-close:hover {
-  color: var(--text);
 }
 
 .section {
@@ -724,26 +681,6 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
 }
 
 /* --- Transitions --- */
-
-.sheet-enter-active,
-.sheet-leave-active {
-  transition: opacity 0.18s ease;
-}
-
-.sheet-enter-active .sheet,
-.sheet-leave-active .sheet {
-  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0.2, 1);
-}
-
-.sheet-enter-from,
-.sheet-leave-to {
-  opacity: 0;
-}
-
-.sheet-enter-from .sheet,
-.sheet-leave-to .sheet {
-  transform: translateY(100%);
-}
 
 .fade-enter-active,
 .fade-leave-active {
