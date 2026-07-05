@@ -31,6 +31,9 @@ async function fetchGifs(q: string) {
     : `https://g.tenor.com/v1/trending?key=${TENOR_KEY}&limit=24`
   try {
     const res = await fetch(url)
+    // Tenor's errors come back as JSON too — without this check they'd
+    // parse to zero results and read as a silent "Nothing found".
+    if (!res.ok) throw new Error(`Tenor ${res.status}`)
     const data = (await res.json()) as {
       results?: { id: string; media: Record<string, { url: string }>[] }[]
     }
@@ -47,6 +50,10 @@ async function fetchGifs(q: string) {
   } finally {
     if (seq === requestSeq) loading.value = false
   }
+}
+
+function retry() {
+  void fetchGifs(query.value)
 }
 
 function onInput(value: string) {
@@ -79,7 +86,10 @@ function pick(gif: GifResult) {
       autocomplete="off"
       @input="onInput(($event.target as HTMLInputElement).value)"
     />
-    <p v-if="failed" class="muted state">GIF search isn't reachable right now — try again.</p>
+    <div v-if="failed" class="state failed">
+      <p class="muted">GIF search isn't reachable right now.</p>
+      <button class="btn btn-sm" @click="retry">Try again</button>
+    </div>
     <p v-else-if="loading && !results.length" class="muted state">Loading…</p>
     <p v-else-if="!results.length" class="muted state">Nothing found.</p>
     <div v-else class="gif-grid">
@@ -109,6 +119,17 @@ function pick(gif: GifResult) {
 .state {
   margin: 0.6rem 0 0;
   font-size: 0.9rem;
+}
+
+.failed {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.failed p {
+  margin: 0;
 }
 
 .gif-grid {

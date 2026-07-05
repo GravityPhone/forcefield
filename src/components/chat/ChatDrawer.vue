@@ -524,15 +524,18 @@ async function addPeople() {
             :show-add-room="false"
             :show-audio="false"
             :single-room="true"
+            :textarea-action-enabled="true"
             @fetch-messages="onFetchMessages"
             @send-message="onSendMessage"
             @send-message-reaction="onMessageReaction"
             @message-action-handler="onMessageAction"
             @menu-action-handler="onMenuAction"
-          ></vue-advanced-chat>
-        </div>
-        <div class="composer-extras">
-          <button class="gif-btn" @click="gifOpen = true">GIF</button>
+            @textarea-action-handler="gifOpen = true"
+          >
+            <!-- The composer's extra action button (sits with emoji/attach)
+                 becomes our GIF button via the library's icon slot. -->
+            <span slot="custom-action-icon" class="gif-slot" aria-label="Send a GIF">GIF</span>
+          </vue-advanced-chat>
         </div>
         <p v-if="chat.sendError" class="send-error">{{ chat.sendError }}</p>
       </template>
@@ -818,27 +821,16 @@ async function addPeople() {
   min-height: 0;
 }
 
-.composer-extras {
-  display: flex;
-  justify-content: flex-start;
-}
-
-.gif-btn {
-  min-height: 36px;
-  padding: 0.25rem 0.8rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  font: inherit;
-  font-size: 0.8rem;
+.gif-slot {
+  display: inline-block;
+  padding: 0.1rem 0.3rem;
+  border: 2px solid currentColor;
+  border-radius: 6px;
+  font-size: 0.72rem;
   font-weight: 800;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
   color: var(--accent);
-  cursor: pointer;
-}
-
-.gif-btn:hover {
-  background: var(--surface-2);
 }
 
 .send-error {
