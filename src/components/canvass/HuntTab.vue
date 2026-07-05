@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
+import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import { geocodeAndCache } from '@/lib/geocode'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
@@ -14,6 +15,7 @@ import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockOutcome
 // Fallback map center: Richwood, OH (the imported demo subset).
 const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
 const NEARBY_CAP = 50
+const DEFAULT_ZOOM = 14
 
 /** `persons(count)` is a PostgREST aggregate embed — one row per address
  * with a single { count } entry, giving household roster size in the same
@@ -38,7 +40,31 @@ const searchResults = ref<{ persons: PersonHit[]; addresses: AddressWithRoster[]
 })
 const searching = ref(false)
 const locating = ref(false)
+const pinsLoading = ref(false)
+// Whether pins draw as colored dots or as labeled house-number chips. Persisted
+// so a canvasser's choice survives reloads/navigation.
+type PinMode = 'dots' | 'numbers'
+const pinMode = ref<PinMode>(readStoredPinMode())
 const locatedAddressId = ref<string | null>(null)
+
+function readStoredPinMode(): PinMode {
+  try {
+    return localStorage.getItem('hunt-pin-mode') === 'numbers' ? 'numbers' : 'dots'
+  } catch {
+    return 'dots'
+  }
+}
+
+function setPinMode(mode: PinMode) {
+  if (pinMode.value === mode) return
+  pinMode.value = mode
+  try {
+    localStorage.setItem('hunt-pin-mode', mode)
+  } catch {
+    /* private-mode / storage disabled — the toggle still works this session */
+  }
+  refreshAllPinStyles()
+}
 const locatedAddress = ref<AddressWithRoster | null>(null)
 const statusByHousehold = ref<Map<string, KnockOutcome>>(new Map())
 const summaryByHousehold = ref<Map<string, HouseholdKnockSummary>>(new Map())
@@ -46,10 +72,9 @@ const loadError = ref('')
 
 let map: google.maps.Map | null = null
 let clusterer: MarkerClusterer | null = null
-let markersByAddress = new Map<string, google.maps.Marker>()
+let markersByAddress = new Map<string, google.maps.marker.AdvancedMarkerElement>()
 let initStarted = false
 let searchTimer: ReturnType<typeof setTimeout> | undefined
-let currentZoom = 14
 
 watch(
   () => talk.activeTab,
@@ -102,46 +127,79 @@ function applyStatusAndSummary(
   summaryByHousehold.value = new Map((summaryData ?? []).map((s) => [s.household_id, s]))
 }
 
-/** Dynamic pin size: shrinks as you zoom out, grows as you zoom in, so the
- * map doesn't get cluttered with oversized dots when many doors are close
- * together. Located pin always stands out a bit larger than its neighbors. */
-function baseScale(zoom: number): number {
-  return Math.max(3, Math.min(8, zoom - 9))
-}
-
-function pinIcon(addressId: string): google.maps.Symbol {
+/** Each pin is a plain DOM dot (AdvancedMarkerElement content) rather than a
+ * classic google.maps.Symbol. On the vector map these are GPU-composited and
+ * far lighter than ~2k legacy Marker overlays. Fixed size — the clusterer
+ * handles decluttering when zoomed out, so there's no per-zoom rescale loop
+ * (that loop, running over every marker on every zoom tick, was the main
+ * thing making the map feel sluggish). Located pin stands out larger with a
+ * dark ring and sits above its neighbors. */
+function styleMarker(marker: google.maps.marker.AdvancedMarkerElement, addressId: string) {
+  const el = marker.content as HTMLElement
   const outcome = statusByHousehold.value.get(addressId)
   const isLocated = addressId === locatedAddressId.value
-  const scale = baseScale(currentZoom)
-  return {
-    path: google.maps.SymbolPath.CIRCLE,
-    scale: isLocated ? scale + 4 : scale,
-    fillColor: outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX,
-    fillOpacity: 1,
-    strokeColor: isLocated ? '#111' : '#ffffff',
-    strokeWeight: isLocated ? 3 : 1.5,
+  // Common look (shared by both modes): outcome color, white ring, dark ring
+  // + raised when it's the located pin.
+  const s = el.style
+  s.boxSizing = 'border-box'
+  s.cursor = 'pointer'
+  s.background = outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
+  s.border = isLocated ? '3px solid #111' : '1.5px solid #ffffff'
+  s.boxShadow = '0 0 3px rgba(0, 0, 0, 0.45)'
+  s.color = '#ffffff'
+  s.display = 'flex'
+  s.alignItems = 'center'
+  s.justifyContent = 'center'
+  s.fontWeight = '700'
+  s.lineHeight = '1'
+  marker.zIndex = isLocated ? 1000 : 1
+
+  // `data-house` is stamped in addOrUpdateMarker; fall back to a dot when a
+  // row has no parseable house number so those pins never render blank.
+  if (pinMode.value === 'numbers' && el.dataset.house) {
+    el.textContent = el.dataset.house
+    s.borderRadius = '7px'
+    s.width = 'auto'
+    s.height = isLocated ? '24px' : '19px'
+    s.minWidth = isLocated ? '24px' : '19px'
+    s.padding = '0 5px'
+    s.fontSize = isLocated ? '13px' : '11px'
+  } else {
+    el.textContent = ''
+    const size = isLocated ? 22 : 14
+    s.borderRadius = '50%'
+    s.width = `${size}px`
+    s.height = `${size}px`
+    s.minWidth = ''
+    s.padding = ''
+    s.fontSize = ''
   }
 }
 
-function refreshAllPinScales() {
-  for (const [id, marker] of markersByAddress) marker.setIcon(pinIcon(id))
+function refreshAllPinStyles() {
+  for (const [id, marker] of markersByAddress) styleMarker(marker, id)
 }
 
 function addOrUpdateMarker(a: AddressWithRoster) {
   if (a.lat == null || a.lng == null || !map) return
   let marker = markersByAddress.get(a.id)
   if (!marker) {
-    marker = new google.maps.Marker({
+    const content = document.createElement('div')
+    const num = houseNumber(a.street)
+    if (num > 0) content.dataset.house = String(num)
+    marker = new google.maps.marker.AdvancedMarkerElement({
       position: { lat: a.lat, lng: a.lng },
       title: `${a.street}${a.unit ? ' ' + a.unit : ''}`,
+      content,
+      gmpClickable: true,
     })
-    marker.addListener('click', () => void locateAddress(a))
+    marker.addListener('gmp-click', () => void locateAddress(a))
     markersByAddress.set(a.id, marker)
     clusterer?.addMarker(marker)
   } else {
-    marker.setPosition({ lat: a.lat, lng: a.lng })
+    marker.position = { lat: a.lat, lng: a.lng }
   }
-  marker.setIcon(pinIcon(a.id))
+  styleMarker(marker, a.id)
 }
 
 /** Where the map should open: the door this canvasser most recently knocked
@@ -162,6 +220,7 @@ async function lastKnockCenter(): Promise<{ lat: number; lng: number } | null> {
 }
 
 async function initialize() {
+  pinsLoading.value = true
   let mapAddresses: AddressWithRoster[] = []
   let lastCenter: { lat: number; lng: number } | null = null
   try {
@@ -173,13 +232,20 @@ async function initialize() {
   } catch {
     loadError.value = 'Could not load the map or address data. Check your connection.'
     initStarted = false
+    pinsLoading.value = false
     return
   }
-  if (!mapEl.value) return
+  if (!mapEl.value) {
+    pinsLoading.value = false
+    return
+  }
 
   map = new google.maps.Map(mapEl.value, {
     center: lastCenter ?? FALLBACK_CENTER,
-    zoom: lastCenter ? 16 : currentZoom,
+    zoom: lastCenter ? 16 : DEFAULT_ZOOM,
+    // Cloud-styled vector map. Also what lets pins render as AdvancedMarker
+    // elements instead of the heavier legacy Marker overlays.
+    mapId: GOOGLE_MAPS_MAP_ID,
     streetViewControl: false,
     mapTypeControl: false,
     fullscreenControl: false,
@@ -188,12 +254,7 @@ async function initialize() {
     // one-finger panning is what canvassers actually want here.
     gestureHandling: 'greedy',
   })
-  currentZoom = map.getZoom() ?? currentZoom
-  map.addListener('zoom_changed', () => {
-    currentZoom = map!.getZoom() ?? currentZoom
-    refreshAllPinScales()
-  })
-  // Tapping the map background (not a pin — markers fire their own 'click'
+  // Tapping the map background (not a pin — markers fire their own 'gmp-click'
   // instead of bubbling to this one) means "let me see the map", so bring
   // it into view. Tapping a pin doesn't hit this listener at all.
   map.addListener('click', scrollHuntToTop)
@@ -209,6 +270,7 @@ async function initialize() {
   // fitting all ~2k county-wide pins zooms way out and looks like the map
   // "doesn't know where to start".
   if (!lastCenter && !bounds.isEmpty()) map.fitBounds(bounds, 48)
+  pinsLoading.value = false
 }
 
 /** Re-pull statuses/summaries and recolor existing pins (cheap: two view
@@ -219,7 +281,7 @@ async function refreshStatuses() {
     supabase.from('household_knock_summary').select('*'),
   ])
   applyStatusAndSummary(statusRes.data, summaryRes.data)
-  refreshAllPinScales()
+  refreshAllPinStyles()
 }
 
 // --- Search (people + addresses, like Talk's search) ---
@@ -296,8 +358,15 @@ async function locateAddress(address: AddressWithRoster) {
       const loc = await geocodeAndCache(address)
       if (loc) Object.assign(address, loc)
     }
+    // Shrink the previously-located pin back to normal (the per-zoom restyle
+    // loop used to do this implicitly; it's gone now, so do it explicitly).
+    const prevLocatedId = locatedAddressId.value
     locatedAddressId.value = address.id
     locatedAddress.value = address
+    if (prevLocatedId && prevLocatedId !== address.id) {
+      const prev = markersByAddress.get(prevLocatedId)
+      if (prev) styleMarker(prev, prevLocatedId)
+    }
     addOrUpdateMarker(address)
 
     if (address.lat != null && address.lng != null && map) {
@@ -487,6 +556,38 @@ onUnmounted(() => {
 
     <div ref="mapWrapEl" class="map-wrap" :class="{ 'map-wrap-fullscreen': isFullscreen }">
       <div ref="mapEl" class="map"></div>
+      <div v-if="pinsLoading" class="pins-loading" role="status" aria-live="polite">
+        <span class="pins-loading-spinner" aria-hidden="true"></span>
+        Loading pins…
+      </div>
+      <!-- Flip every pin between a colored dot and its house number. Sits
+           top-left, inside the map, opposite the fullscreen button. -->
+      <div class="pin-mode-toggle" role="group" aria-label="Pin style">
+        <button
+          type="button"
+          class="pin-mode-btn"
+          :class="{ active: pinMode === 'dots' }"
+          :aria-pressed="pinMode === 'dots'"
+          aria-label="Show pins as dots"
+          title="Dots"
+          @click="setPinMode('dots')"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <circle cx="12" cy="12" r="6" fill="currentColor" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="pin-mode-btn"
+          :class="{ active: pinMode === 'numbers' }"
+          :aria-pressed="pinMode === 'numbers'"
+          aria-label="Show pins as house numbers"
+          title="House numbers"
+          @click="setPinMode('numbers')"
+        >
+          123
+        </button>
+      </div>
       <button
         type="button"
         class="map-fullscreen-btn"
@@ -677,6 +778,83 @@ onUnmounted(() => {
 
 .map-fullscreen-btn:hover {
   background: var(--surface-2);
+}
+
+/* Status pill while the initial pin set loads/renders. Top-center so it clears
+ * both the fullscreen button (top-right) and the pin-style toggle (top-left). */
+.pins-loading {
+  position: absolute;
+  top: 0.6rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+}
+
+/* Segmented dots/numbers control, styled to match the fullscreen button but
+ * as a two-button group in the opposite (top-left) corner. */
+.pin-mode-toggle {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.pin-mode-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pin-mode-btn + .pin-mode-btn {
+  border-left: 1px solid var(--border);
+}
+
+.pin-mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.pin-mode-btn:not(.active):hover {
+  background: var(--surface-2);
+}
+
+.pins-loading-spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: pins-spin 0.7s linear infinite;
+}
+
+@keyframes pins-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .map-error {
