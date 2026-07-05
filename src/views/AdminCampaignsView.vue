@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
+import CampaignProgress from '@/components/CampaignProgress.vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import type { Campaign, Team } from '@/types'
@@ -111,6 +112,9 @@ const campaignOptions = computed(() => [
       <p v-if="loading" class="muted">Loading…</p>
 
       <template v-else>
+        <!-- Org admins switch between campaigns here; campaign members see
+             the same numbers for their own campaign on the Leaderboard page. -->
+        <CampaignProgress switchable />
         <!-- Assignment first: teams on the left (each with its campaign
              picker), the campaign list on the right. Stacks on phones. -->
         <div class="columns">

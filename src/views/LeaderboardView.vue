@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import AppShell from '@/components/AppShell.vue'
+import CampaignProgress from '@/components/CampaignProgress.vue'
 import { supabase } from '@/lib/supabase'
 import { localDayRangeISO, localToday } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
@@ -192,6 +193,7 @@ onUnmounted(() => {
 
 <template>
   <AppShell title="Leaderboard">
+    <CampaignProgress />
     <div class="stack">
       <p v-if="loading" class="muted loading-row">
         <span class="spinner" aria-hidden="true"></span> Loading standings…
