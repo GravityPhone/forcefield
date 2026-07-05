@@ -65,7 +65,9 @@ export interface SquadMember {
 
 export const ROLE_LABELS: Record<AppRole, string> = {
   canvasser: 'Canvasser',
-  team_lead: 'Team Lead',
+  // Displayed as "Squad Leader" (user's preferred term) — the DB enum value
+  // stays team_lead; renaming a Postgres enum isn't worth the migration.
+  team_lead: 'Squad Leader',
   admin: 'Admin',
 }
 

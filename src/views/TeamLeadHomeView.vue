@@ -10,8 +10,8 @@ import AppShell from '@/components/AppShell.vue'
       <router-link class="btn btn-primary btn-sm" to="/turf">Cut turf</router-link>
     </div>
     <div class="card" style="margin-top: 1rem">
-      <h3>Team Lead dashboard</h3>
-      <p class="muted">Coming soon: your team's progress and canvasser-level detail.</p>
+      <h3>Squad Leader dashboard</h3>
+      <p class="muted">Coming soon: your squad's progress and canvasser-level detail.</p>
     </div>
   </AppShell>
 </template>

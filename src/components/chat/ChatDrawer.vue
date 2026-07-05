@@ -140,11 +140,14 @@ function openRoom(id: string) {
   void chat.openChat(id)
 }
 
+// Deliberately NO unread refetch here: the local counts are already right
+// (zeroed on open, incremented by realtime), and refetching races the
+// still-in-flight chat_reads upsert — the stale server count would
+// resurrect the badge for the room that was just read.
 function backToList() {
   view.value = 'list'
   membersExpanded.value = false
   chat.closeChat()
-  void chat.loadUnreadCounts()
 }
 
 // Deep links (router /chat guard, Squads page) open the drawer with a room
