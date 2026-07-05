@@ -15,8 +15,14 @@ const squads = ref<(Squad & { memberIds: string[] })[]>([])
 const loading = ref(true)
 const error = ref('')
 const query = ref('')
-/** Row-scoped "Saved ✓" flash so feedback lands next to what was changed. */
-const savedUserId = ref<string | null>(null)
+
+type RoleFilter = 'all' | AppRole
+const roleFilter = ref<RoleFilter>('all')
+
+/** User whose editor sheet is open, and which section just saved (drives the
+ * per-section "Saved ✓" flash inside the sheet). */
+const editing = ref<Profile | null>(null)
+const savedSection = ref<'role' | 'team' | 'squad' | null>(null)
 let savedTimer: ReturnType<typeof setTimeout> | undefined
 
 async function loadAll() {
@@ -43,54 +49,95 @@ async function loadAll() {
 
 onMounted(() => void loadAll())
 
-const filtered = computed(() => {
-  const q = query.value.trim().toLowerCase()
-  if (!q) return profiles.value
-  return profiles.value.filter(
-    (p) =>
-      p.username.toLowerCase().includes(q) ||
-      (p.display_name ?? '').toLowerCase().includes(q),
-  )
+const roleCounts = computed(() => {
+  const counts: Record<RoleFilter, number> = { all: profiles.value.length, canvasser: 0, team_lead: 0, admin: 0 }
+  for (const p of profiles.value) counts[p.role]++
+  return counts
 })
 
-function flashSaved(userId: string) {
-  savedUserId.value = userId
+const filtered = computed(() => {
+  const q = query.value.trim().toLowerCase()
+  return profiles.value.filter((p) => {
+    if (roleFilter.value !== 'all' && p.role !== roleFilter.value) return false
+    if (!q) return true
+    return (
+      p.username.toLowerCase().includes(q) || (p.display_name ?? '').toLowerCase().includes(q)
+    )
+  })
+})
+
+// --- Avatar: initials on a hue derived from the username, so every user
+// gets a stable identifying color without storing anything. ---
+
+function initialsOf(p: Profile): string {
+  const name = p.display_name || p.username
+  const parts = name.trim().split(/\s+/)
+  return ((parts[0]?.[0] ?? '') + (parts[1]?.[0] ?? '')).toUpperCase() || '?'
+}
+
+function hueOf(p: Profile): number {
+  let h = 0
+  for (const ch of p.username) h = (h * 31 + ch.charCodeAt(0)) % 360
+  return h
+}
+
+function avatarStyle(p: Profile) {
+  const h = hueOf(p)
+  return {
+    background: `linear-gradient(135deg, hsl(${h} 65% 52%), hsl(${(h + 40) % 360} 65% 40%))`,
+  }
+}
+
+function teamName(teamId: string | null): string | null {
+  return teams.value.find((t) => t.id === teamId)?.name ?? null
+}
+
+function squadOf(userId: string): (Squad & { memberIds: string[] }) | null {
+  return squads.value.find((s) => s.memberIds.includes(userId)) ?? null
+}
+
+const isSelf = computed(() => editing.value?.id === auth.profile?.id)
+
+// --- Saves: instant on tap, with a section-scoped flash. On failure the
+// list reloads so the UI never shows a state the DB doesn't hold. ---
+
+function flashSaved(section: 'role' | 'team' | 'squad') {
+  savedSection.value = section
   clearTimeout(savedTimer)
-  savedTimer = setTimeout(() => (savedUserId.value = null), 2000)
+  savedTimer = setTimeout(() => (savedSection.value = null), 1600)
 }
 
 function fail(message: string) {
   error.value = message
-  void loadAll() // resync the selects with what the DB actually holds
+  void loadAll()
 }
 
 async function setRole(user: Profile, role: AppRole) {
+  if (user.role === role) return
   error.value = ''
   const { error: err } = await supabase.from('profiles').update({ role }).eq('id', user.id)
   if (err) return fail(`Could not change ${user.username}'s role — try again.`)
   user.role = role
-  flashSaved(user.id)
+  flashSaved('role')
 }
 
-async function setTeam(user: Profile, teamId: string) {
+async function setTeam(user: Profile, teamId: string | null) {
+  if ((user.team_id ?? null) === teamId) return
   error.value = ''
   const { error: err } = await supabase
     .from('profiles')
-    .update({ team_id: teamId || null })
+    .update({ team_id: teamId })
     .eq('id', user.id)
   if (err) return fail(`Could not move ${user.username} — try again.`)
-  user.team_id = teamId || null
-  flashSaved(user.id)
-}
-
-function squadOf(userId: string): string {
-  return squads.value.find((s) => s.memberIds.includes(userId))?.id ?? ''
+  user.team_id = teamId
+  flashSaved('team')
 }
 
 /** Move a user between today's squads (or out of all of them). Squad and
  * squad-chat rosters move together, same as the join/leave RPCs — an
  * admin-placed member must land in the crew's chat too. */
-async function setSquad(user: Profile, squadId: string) {
+async function setSquad(user: Profile, squadId: string | null) {
+  if ((squadOf(user.id)?.id ?? null) === squadId) return
   error.value = ''
   const current = squads.value.filter((s) => s.memberIds.includes(user.id))
   for (const s of current) {
@@ -120,91 +167,179 @@ async function setSquad(user: Profile, squadId: string) {
   }
 
   await loadAll()
-  flashSaved(user.id)
+  flashSaved('squad')
 }
 
-function teamName(teamId: string | null): string {
-  return teams.value.find((t) => t.id === teamId)?.name ?? ''
+function closeSheet() {
+  editing.value = null
+  savedSection.value = null
+  error.value = ''
 }
+
+const FILTERS: { value: RoleFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'admin', label: 'Admins' },
+  { value: 'team_lead', label: 'Leads' },
+  { value: 'canvasser', label: 'Canvassers' },
+]
 </script>
 
 <template>
   <AppShell title="Users &amp; Roles">
     <div class="stack">
-      <p class="muted intro">
-        Change anyone's role, move them between teams, or place them in one of today's squads.
-        Squad placement also moves their squad-chat membership.
-      </p>
-      <p v-if="error" class="error">{{ error }}</p>
-
       <input
         v-model="query"
         class="user-search"
         type="search"
-        placeholder="Search by username or display name…"
+        placeholder="Search by name or username…"
         aria-label="Search users"
       />
 
+      <div class="filter-chips" role="group" aria-label="Filter by role">
+        <button
+          v-for="f in FILTERS"
+          :key="f.value"
+          class="chip"
+          :class="{ active: roleFilter === f.value }"
+          :aria-pressed="roleFilter === f.value"
+          @click="roleFilter = f.value"
+        >
+          {{ f.label }}
+          <span class="chip-count">{{ roleCounts[f.value] }}</span>
+        </button>
+      </div>
+
+      <p v-if="error && !editing" class="error">{{ error }}</p>
       <p v-if="loading" class="muted">Loading users…</p>
       <p v-else-if="!filtered.length" class="muted">No users match.</p>
 
-      <div v-for="u in filtered" :key="u.id" class="card user-card">
-        <div class="user-head">
-          <div class="user-names">
-            <span class="user-name">{{ u.display_name || u.username }}</span>
-            <span class="muted user-sub">
-              @{{ u.username }}{{ teamName(u.team_id) ? ` · ${teamName(u.team_id)}` : '' }}
+      <div v-else class="user-list card">
+        <button v-for="u in filtered" :key="u.id" class="user-row" @click="editing = u">
+          <span class="avatar" :style="avatarStyle(u)" aria-hidden="true">{{ initialsOf(u) }}</span>
+          <span class="user-main">
+            <span class="user-name-line">
+              <span class="user-name">{{ u.display_name || u.username }}</span>
+              <span v-if="u.id === auth.profile?.id" class="muted you-tag">you</span>
             </span>
+            <span class="muted user-sub">
+              @{{ u.username
+              }}<template v-if="teamName(u.team_id)"> · {{ teamName(u.team_id) }}</template>
+              <template v-if="squadOf(u.id)"> · 👥 {{ squadOf(u.id)!.name }}</template>
+            </span>
+          </span>
+          <span class="role-pill" :class="`role-${u.role}`">{{ ROLE_LABELS[u.role] }}</span>
+          <span class="chevron" aria-hidden="true">›</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Editor sheet: slides up from the bottom, phone-first. -->
+    <Transition name="sheet">
+      <div v-if="editing" class="sheet-backdrop" @click.self="closeSheet">
+        <div class="sheet" role="dialog" :aria-label="`Edit ${editing.username}`">
+          <div class="sheet-grip" aria-hidden="true"></div>
+
+          <div class="sheet-head">
+            <span class="avatar avatar-lg" :style="avatarStyle(editing)" aria-hidden="true">
+              {{ initialsOf(editing) }}
+            </span>
+            <div class="sheet-names">
+              <span class="user-name">{{ editing.display_name || editing.username }}</span>
+              <span class="muted user-sub">@{{ editing.username }}</span>
+            </div>
+            <button class="sheet-close" aria-label="Close" @click="closeSheet">✕</button>
           </div>
-          <span v-if="savedUserId === u.id" class="saved">Saved ✓</span>
-        </div>
 
-        <div class="controls">
-          <label class="control">
-            <span class="muted control-label">Role</span>
-            <!-- Your own role is locked here: demoting the account you're
-                 using would kick you out of this page mid-edit. -->
-            <select
-              :value="u.role"
-              :disabled="u.id === auth.profile?.id"
-              :title="u.id === auth.profile?.id ? 'You can\'t change your own role' : ''"
-              @change="setRole(u, ($event.target as HTMLSelectElement).value as AppRole)"
-            >
-              <option v-for="(label, value) in ROLE_LABELS" :key="value" :value="value">
+          <p v-if="error" class="error">{{ error }}</p>
+
+          <div class="section">
+            <div class="section-head">
+              <span class="section-label">Role</span>
+              <Transition name="fade">
+                <span v-if="savedSection === 'role'" class="saved">Saved ✓</span>
+              </Transition>
+            </div>
+            <div class="segmented" role="group" aria-label="Role">
+              <button
+                v-for="(label, value) in ROLE_LABELS"
+                :key="value"
+                class="segment"
+                :class="{ active: editing.role === value }"
+                :disabled="isSelf"
+                :aria-pressed="editing.role === value"
+                @click="setRole(editing, value as AppRole)"
+              >
                 {{ label }}
-              </option>
-            </select>
-          </label>
+              </button>
+            </div>
+            <p v-if="isSelf" class="muted hint">You can't change your own role.</p>
+          </div>
 
-          <label class="control">
-            <span class="muted control-label">Team</span>
-            <select
-              :value="u.team_id ?? ''"
-              @change="setTeam(u, ($event.target as HTMLSelectElement).value)"
-            >
-              <option value="">(no team)</option>
-              <option v-for="t in teams" :key="t.id" :value="t.id">{{ t.name }}</option>
-            </select>
-          </label>
+          <div class="section">
+            <div class="section-head">
+              <span class="section-label">Team</span>
+              <Transition name="fade">
+                <span v-if="savedSection === 'team'" class="saved">Saved ✓</span>
+              </Transition>
+            </div>
+            <div class="option-list">
+              <button
+                class="option"
+                :class="{ active: editing.team_id === null }"
+                @click="setTeam(editing, null)"
+              >
+                <span>No team</span>
+                <span v-if="editing.team_id === null" class="check">✓</span>
+              </button>
+              <button
+                v-for="t in teams"
+                :key="t.id"
+                class="option"
+                :class="{ active: editing.team_id === t.id }"
+                @click="setTeam(editing, t.id)"
+              >
+                <span>{{ t.name }}</span>
+                <span v-if="editing.team_id === t.id" class="check">✓</span>
+              </button>
+            </div>
+          </div>
 
-          <label class="control">
-            <span class="muted control-label">Today's squad</span>
-            <select
-              :value="squadOf(u.id)"
-              @change="setSquad(u, ($event.target as HTMLSelectElement).value)"
-            >
-              <option value="">(no squad)</option>
-              <option v-for="s in squads" :key="s.id" :value="s.id">{{ s.name }}</option>
-            </select>
-          </label>
+          <div class="section">
+            <div class="section-head">
+              <span class="section-label">Today's squad</span>
+              <Transition name="fade">
+                <span v-if="savedSection === 'squad'" class="saved">Saved ✓</span>
+              </Transition>
+            </div>
+            <div v-if="squads.length" class="option-list">
+              <button
+                class="option"
+                :class="{ active: !squadOf(editing.id) }"
+                @click="setSquad(editing, null)"
+              >
+                <span>No squad</span>
+                <span v-if="!squadOf(editing.id)" class="check">✓</span>
+              </button>
+              <button
+                v-for="s in squads"
+                :key="s.id"
+                class="option"
+                :class="{ active: squadOf(editing.id)?.id === s.id }"
+                @click="setSquad(editing, s.id)"
+              >
+                <span>👥 {{ s.name }}</span>
+                <span class="muted option-sub">{{ s.memberIds.length }} member{{ s.memberIds.length === 1 ? '' : 's' }}</span>
+                <span v-if="squadOf(editing.id)?.id === s.id" class="check">✓</span>
+              </button>
+            </div>
+            <p v-else class="muted hint">
+              No squads yet today — they form on the
+              <router-link to="/squads">Squads</router-link> page and reset at midnight.
+            </p>
+          </div>
         </div>
       </div>
-
-      <p v-if="!loading && !squads.length" class="muted squad-note">
-        No squads exist yet today — squads form on the
-        <router-link to="/squads">Squads</router-link> page and reset at midnight.
-      </p>
-    </div>
+    </Transition>
   </AppShell>
 </template>
 
@@ -215,11 +350,6 @@ function teamName(teamId: string | null): string {
   gap: 0.75rem;
 }
 
-.intro {
-  margin: 0;
-  font-size: 0.92rem;
-}
-
 .error {
   color: var(--danger, #c0392b);
   margin: 0;
@@ -228,11 +358,11 @@ function teamName(teamId: string | null): string {
 
 .user-search {
   width: 100%;
-  min-height: 44px;
-  padding: 0.6rem 0.8rem;
+  min-height: 46px;
+  padding: 0.6rem 0.9rem;
   font-size: 0.95rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 999px;
   background: var(--surface);
 }
 
@@ -241,75 +371,387 @@ function teamName(teamId: string | null): string {
   outline-offset: -1px;
 }
 
-.user-card {
+.filter-chips {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.75rem;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.chip:hover {
+  background: var(--surface-2);
+}
+
+.chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+
+.chip-count {
+  font-size: 0.75rem;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+/* --- User list: one card, divided rows --- */
+
+.user-list {
+  padding: 0.25rem;
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
 }
 
-.user-head {
+.user-row {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.6rem;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  min-height: 60px;
+  padding: 0.6rem 0.65rem;
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
 }
 
-.user-names {
+.user-row:hover {
+  background: var(--surface-2);
+}
+
+.user-row + .user-row {
+  border-top: 1px solid var(--border);
+}
+
+.avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.avatar-lg {
+  width: 46px;
+  height: 46px;
+  font-size: 0.95rem;
+}
+
+.user-main {
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.user-name-line {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
   min-width: 0;
 }
 
 .user-name {
   font-weight: 700;
-}
-
-.user-sub {
-  font-size: 0.85rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.saved {
-  color: var(--success, #2e7d32);
-  font-size: 0.85rem;
+.you-tag {
+  font-size: 0.72rem;
   font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   flex-shrink: 0;
 }
 
-.controls {
-  display: flex;
-  gap: 0.6rem;
-  flex-wrap: wrap;
+.user-sub {
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.control {
+/* Role pills: fixed identity colors (like the outcome colors, deliberately
+ * independent of the appearance scheme) so a role reads the same at a
+ * glance in every theme. */
+.role-pill {
+  padding: 0.22rem 0.6rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.role-admin {
+  background: #7c3aed;
+}
+
+.role-team_lead {
+  background: #0891b2;
+}
+
+.role-canvasser {
+  background: #64748b;
+}
+
+.chevron {
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* --- Bottom sheet editor --- */
+
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 18, 30, 0.45);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 50;
+}
+
+.sheet {
+  width: min(520px, 100%);
+  max-height: 88dvh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 18px 18px 0 0;
+  padding: 0.5rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 1rem;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.25);
+}
+
+.sheet-grip {
+  width: 40px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border);
+  margin: 0.25rem auto 0;
+  flex-shrink: 0;
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.sheet-names {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
   flex: 1;
-  min-width: 9rem;
 }
 
-.control-label {
+.sheet-close {
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sheet-close:hover {
+  color: var(--text);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  min-height: 1.1rem;
+}
+
+.section-label {
   font-size: 0.78rem;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
 }
 
-.control select {
-  min-height: 40px;
+.saved {
+  color: var(--success, #2e7d32);
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
-.control select:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.squad-note {
+.hint {
   margin: 0;
+  font-size: 0.85rem;
+}
+
+/* Segmented role control */
+.segmented {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.segment {
+  flex: 1;
+  min-height: 44px;
+  border: none;
+  background: transparent;
+  font: inherit;
   font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.segment + .segment {
+  border-left: 1px solid var(--border);
+}
+
+.segment.active {
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+
+.segment:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* Team / squad option lists */
+.option-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 46px;
+  padding: 0.55rem 0.8rem;
+  border: none;
+  background: var(--surface);
+  font: inherit;
+  font-size: 0.92rem;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.option:hover {
+  background: var(--surface-2);
+}
+
+.option + .option {
+  border-top: 1px solid var(--border);
+}
+
+.option.active {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  font-weight: 600;
+}
+
+.option-sub {
+  font-size: 0.8rem;
+  margin-left: auto;
+}
+
+.check {
+  margin-left: auto;
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.option .option-sub + .check {
+  margin-left: 0.5rem;
+}
+
+/* --- Transitions --- */
+
+.sheet-enter-active,
+.sheet-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.sheet-enter-active .sheet,
+.sheet-leave-active .sheet {
+  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0.2, 1);
+}
+
+.sheet-enter-from,
+.sheet-leave-to {
+  opacity: 0;
+}
+
+.sheet-enter-from .sheet,
+.sheet-leave-to .sheet {
+  transform: translateY(100%);
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>
