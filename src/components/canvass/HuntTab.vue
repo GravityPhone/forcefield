@@ -13,24 +13,8 @@ import { useTalkStore } from '@/stores/talk'
 import { OUTCOME_HEX, PIN_DEFAULT_HEX, knockButtonHex } from '@/lib/outcomes'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import OutcomeIndicatorGrid from './OutcomeIndicatorGrid.vue'
-import AppSelect from '@/components/ui/AppSelect.vue'
 import { fadeUp } from '@/lib/motion'
 import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockLog, KnockOutcome, Person } from '@/types'
-
-// Walk-order options (Talk mode's Next button follows these).
-const DIRECTION_OPTIONS = [
-  { value: 'ascending', label: 'Ascending' },
-  { value: 'descending', label: 'Descending' },
-]
-const PARITY_OPTIONS = [
-  { value: 'both', label: 'Both sides' },
-  { value: 'even', label: 'Evens only' },
-  { value: 'odd', label: 'Odds only' },
-]
-const PARTLY_SIGNED_OPTIONS = [
-  { value: 'knock', label: 'Knock partly-signed' },
-  { value: 'skip', label: 'Skip partly-signed' },
-]
 
 // Fallback map center: Richwood, OH (the imported demo subset).
 const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
@@ -764,33 +748,6 @@ onUnmounted(() => {
       @input="onListInput(($event.target as HTMLInputElement).value)"
     />
 
-    <!-- Governs Talk mode's "Next" auto-advance — which way to walk a
-         street once you start logging outcomes. -->
-    <div class="walk-order">
-      <span class="muted walk-label">Next house:</span>
-      <AppSelect
-        class="walk-select"
-        :model-value="talk.walkDirection"
-        :options="DIRECTION_OPTIONS"
-        aria-label="Walk direction"
-        @update:model-value="talk.setWalkDirection($event as 'ascending' | 'descending')"
-      />
-      <AppSelect
-        class="walk-select"
-        :model-value="talk.walkParity"
-        :options="PARITY_OPTIONS"
-        aria-label="Walk side of street"
-        @update:model-value="talk.setWalkParity($event as 'both' | 'even' | 'odd')"
-      />
-      <AppSelect
-        class="walk-select"
-        :model-value="talk.knockPartlySigned ? 'knock' : 'skip'"
-        :options="PARTLY_SIGNED_OPTIONS"
-        aria-label="Doors where someone already signed but others have not"
-        @update:model-value="talk.setKnockPartlySigned($event === 'knock')"
-      />
-    </div>
-
     <div class="results-list-wrap">
     <div ref="resultsListEl" class="results-list" @scroll="onResultsScroll">
       <p v-if="listQuery.trim().length < 2" class="muted empty">
@@ -1046,26 +1003,6 @@ onUnmounted(() => {
   outline-offset: -1px;
 }
 
-.walk-order {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.walk-label {
-  font-size: 0.85rem;
-  flex-shrink: 0;
-}
-
-/* AppSelect triggers share the row; the class lands on the trigger button
- * (attrs fall through) but parent-scoped rules don't, hence :deep. */
-.walk-order :deep(.walk-select) {
-  flex: 1;
-  min-width: 0;
-  width: auto;
-  font-size: 0.92rem;
-}
 
 /* A violet family, distinct from the list's blue accent highlight below —
  * this card is "what's currently focused on the map", a different concern
