@@ -104,7 +104,12 @@ const vacMessages = computed(() =>
 async function onFetchMessages(e: Event) {
   const detail = (e as CustomEvent).detail?.[0] as { room?: { roomId?: string } } | undefined
   const roomId = detail?.room?.roomId
-  if (roomId && roomId !== chat.activeChatId) await chat.openChat(roomId)
+  if (!roomId) return
+  if (roomId !== chat.activeChatId) {
+    await chat.openChat(roomId)
+  } else {
+    chat.reaffirmMessagesLoaded()
+  }
 }
 
 async function onSendMessage(e: Event) {

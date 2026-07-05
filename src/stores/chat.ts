@@ -126,6 +126,21 @@ export const useChatStore = defineStore('chat', {
       this.subscribe(chatId)
     },
 
+    /** vue-advanced-chat re-emits `fetch-messages` for the room that's
+     * already open (its internal `roomsCasted` watcher re-fires whenever the
+     * rooms list reference changes, e.g. after a membership refresh) and
+     * expects the loading state to be acknowledged again. If we don't toggle
+     * `loadingMessages`, our `messages-loaded` prop never changes value, so
+     * the library's own watcher for it never fires and its spinner is stuck
+     * on forever — most visible in an empty room, where there are no
+     * incoming messages to trigger its other clear-path. */
+    reaffirmMessagesLoaded() {
+      this.loadingMessages = true
+      void Promise.resolve().then(() => {
+        this.loadingMessages = false
+      })
+    },
+
     closeChat() {
       this.activeChatId = null
       this.messages = []
