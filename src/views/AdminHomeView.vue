@@ -80,7 +80,8 @@ async function saveSettings() {
 
       <div class="card">
         <h3>Users &amp; Roles</h3>
-        <p class="muted">Manage accounts, elevate roles, create admins. Coming soon.</p>
+        <p class="muted">Elevate roles, assign teams, place people in today's squads.</p>
+        <router-link class="btn btn-primary btn-sm" to="/admin/users">Manage</router-link>
       </div>
 
       <div class="card">
