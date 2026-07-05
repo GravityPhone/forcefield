@@ -99,7 +99,12 @@ const model = defineModel<string>({ required: true })
   color: var(--text-muted);
   flex-shrink: 0;
 }
+</style>
 
+<!-- Unscoped: SelectPortal teleports this content to <body>, outside the
+     component's DOM subtree, so Vue never attaches this SFC's scoped
+     data-v attribute to it — scoped rules for it would silently never match. -->
+<style>
 .sel-menu {
   z-index: 60;
   min-width: var(--reka-select-trigger-width);
