@@ -12,11 +12,15 @@ async function getGeocoder(): Promise<google.maps.Geocoder> {
   return geocoder
 }
 
+/** The slice of Address geocoding actually needs — lets callers pass slim
+ * row shapes (e.g. the turf cutter's AddressLite) without faking a full row. */
+export type GeocodableAddress = Pick<Address, 'id' | 'street' | 'unit' | 'city' | 'zip' | 'lat' | 'lng'>
+
 /** Geocode one address in the browser (Maps JS Geocoder — no CORS issue,
  * no server proxy needed) and persist the result via a narrow RPC that only
  * a security-definer function is allowed to write (see migration
  * 20260702140000_geocode_on_view.sql). No-ops if already geocoded. */
-export async function geocodeAndCache(address: Address): Promise<{ lat: number; lng: number } | null> {
+export async function geocodeAndCache(address: GeocodableAddress): Promise<{ lat: number; lng: number } | null> {
   if (address.lat != null && address.lng != null) return { lat: address.lat, lng: address.lng }
 
   try {

@@ -22,6 +22,7 @@ import {
   writeMapPref,
 } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
+import { geocodeAndCache } from '@/lib/geocode'
 import { supabase } from '@/lib/supabase'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import { useAuthStore } from '@/stores/auth'
@@ -38,6 +39,7 @@ interface AddressLite {
   street: string
   unit: string | null
   city: string
+  zip: string | null
   lat: number | null
   lng: number | null
   turf_id: string | null
@@ -144,13 +146,27 @@ const draftMemberIds = computed(() => {
 const draftDoorCount = computed(() => draftMemberIds.value.size)
 const draftTakenCount = computed(() => segments.value.reduce((n, s) => n + s.takenCount, 0))
 
+// Transient feedback line ("Added WALNUT ST — 41 doors") that temporarily
+// replaces the standing instructions in the sweep bar.
+const flashMsg = ref('')
+let flashTimer: ReturnType<typeof setTimeout> | undefined
+
+function flash(msg: string) {
+  flashMsg.value = msg
+  clearTimeout(flashTimer)
+  flashTimer = setTimeout(() => {
+    flashMsg.value = ''
+  }, 3500)
+}
+
 const hint = computed(() => {
   if (sweepBusy.value) return 'Sweeping…'
+  if (flashMsg.value) return flashMsg.value
   if (anchor.value) {
     const a = anchor.value
     return `Anchor down at ${a.street} — tap another door on ${streetNameOf(a.street)} to sweep the range (or tap the anchor again to cancel).`
   }
-  return 'Tap a door to drop a sweep anchor, then tap a second door on the same street.'
+  return 'Double-tap the map to add or remove a whole street. For part of a street, tap a door, then a second door on it.'
 })
 
 // --- Assignment options: today's squads + every canvasser. A turf being
@@ -246,7 +262,7 @@ function upsertMarker(a: AddressLite) {
 async function fetchAddresses(): Promise<AddressLite[]> {
   const { data, error } = await supabase
     .from('addresses')
-    .select('id, street, unit, city, lat, lng, turf_id')
+    .select('id, street, unit, city, zip, lat, lng, turf_id')
     .not('lat', 'is', null)
     .limit(2000)
   if (error) throw error
@@ -299,6 +315,12 @@ async function initialize() {
     mapTypeControl: false,
     fullscreenControl: false,
     gestureHandling: 'greedy',
+    // Double-click/tap is the street toggle here, not zoom (pinch and the
+    // +/- controls still zoom).
+    disableDoubleClickZoom: true,
+  })
+  map.addListener('dblclick', (e: google.maps.MapMouseEvent) => {
+    if (e.latLng) void onMapDoubleClick(e.latLng)
   })
   clusterer = new MarkerClusterer({ map, markers: [] })
 
@@ -392,7 +414,7 @@ async function fetchStreetRows(streetName: string, city: string | null): Promise
   // this pulls EVERY row on the street (geocoded or not), so counts are real.
   const { data } = await supabase
     .from('addresses')
-    .select('id, street, unit, city, lat, lng, turf_id')
+    .select('id, street, unit, city, zip, lat, lng, turf_id')
     .ilike('street', `%${streetName}`)
   let rows = ((data ?? []) as AddressLite[]).filter((r) => streetNameOf(r.street) === streetName)
   if (city) rows = rows.filter((r) => r.city.toUpperCase() === city.toUpperCase())
@@ -530,10 +552,117 @@ function clearDraft() {
   buildSavedAreas()
 }
 
+// --- Street toggling: double-click/tap anywhere on the map snaps to the
+// closest pinned door and toggles that door's ENTIRE street in or out of the
+// draft. That makes multi-street turf painting fast: double-tap street after
+// street to add them, double-tap an added street again to drop it. The
+// two-tap anchor sweep above stays for partial-street ranges. ---
+
+/** Farthest a double-tap can be from any pinned door and still count —
+ * beyond this the tap was probably a stray zoom attempt, not a selection. */
+const SNAP_RADIUS_M = 300
+
+function metersBetween(aLat: number, aLng: number, bLat: number, bLng: number): number {
+  const rad = Math.PI / 180
+  const dLat = (bLat - aLat) * rad
+  const dLng = (bLng - aLng) * rad
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(aLat * rad) * Math.cos(bLat * rad) * Math.sin(dLng / 2) ** 2
+  return 2 * 6371000 * Math.asin(Math.sqrt(s))
+}
+
+function nearestDoor(lat: number, lng: number): { door: AddressLite; meters: number } | null {
+  let best: AddressLite | null = null
+  let bestD = Infinity
+  for (const a of addressById.values()) {
+    if (a.lat == null || a.lng == null) continue
+    const d = metersBetween(lat, lng, a.lat, a.lng)
+    if (d < bestD) {
+      bestD = d
+      best = a
+    }
+  }
+  return best ? { door: best, meters: bestD } : null
+}
+
+async function onMapDoubleClick(latLng: google.maps.LatLng) {
+  if (sweepBusy.value) return
+  const hit = nearestDoor(latLng.lat(), latLng.lng())
+  if (!hit || hit.meters > SNAP_RADIUS_M) {
+    flash('No mapped door near that spot — try closer to a street with pins, or search below.')
+    return
+  }
+  anchor.value = null
+  const name = streetNameOf(hit.door.street)
+  const already = segments.value.filter(
+    (s) => s.street_name === name && (!s.city || s.city.toUpperCase() === hit.door.city.toUpperCase()),
+  )
+  if (already.length) {
+    for (const s of already) removeSegment(s)
+    flash(`Removed ${name} from the draft.`)
+    return
+  }
+  await sweepWholeStreet(name, hit.door.city)
+}
+
+/** Add an entire street (its full house-number span) as one draft segment,
+ * then pin down its unmapped doors. Both the double-tap toggle and the
+ * street search land here. */
+async function sweepWholeStreet(streetName: string, city: string | null, zoomTo = false) {
+  const rows = await fetchStreetRows(streetName, city)
+  if (!rows.length) {
+    flash(`No doors found on ${streetName}.`)
+    return
+  }
+  const nums = rows.map((r) => houseNumber(r.street))
+  await addSegment(streetName, city, Math.min(...nums), Math.max(...nums), parityChoice.value)
+  flash(`Added ${streetName} — ${rows.length} doors. Double-tap it again to remove it.`)
+  await materializeStreetPins(streetName, city, zoomTo)
+}
+
+/** Streets pulled in by search (or a double-tap near a sparsely-pinned
+ * street) can hold doors that were never geocoded, so the sweep would float
+ * over empty map. Geocode a capped batch of them, drop their pins, refresh
+ * the segment's stroke, and optionally zoom the map to the street. */
+const GEOCODE_BATCH_CAP = 25
+
+async function materializeStreetPins(streetName: string, city: string | null, zoomTo: boolean) {
+  const rows = await fetchStreetRows(streetName, city)
+  const fitToStreet = () => {
+    if (!map) return
+    const bounds = new google.maps.LatLngBounds()
+    for (const a of rows) {
+      if (a.lat != null && a.lng != null) bounds.extend({ lat: a.lat, lng: a.lng })
+    }
+    if (!bounds.isEmpty()) map.fitBounds(bounds, 72)
+  }
+  // Zoom to what's already pinned right away — don't make the user wait for
+  // geocoding to see where the street is.
+  if (zoomTo) fitToStreet()
+
+  const missing = rows.filter((a) => a.lat == null || a.lng == null).slice(0, GEOCODE_BATCH_CAP)
+  let added = 0
+  for (const a of missing) {
+    const loc = await geocodeAndCache(a)
+    if (loc) {
+      a.lat = loc.lat
+      a.lng = loc.lng
+      upsertMarker(a)
+      added++
+    }
+  }
+  if (added) {
+    const seg = segments.value.find((s) => s.street_name === streetName && s.city === city)
+    if (seg) await computeSegment(seg)
+    if (zoomTo) fitToStreet()
+  }
+}
+
 // --- Street search: the non-map way in. Typing "walnut" lists matching
 // streets with their door counts and number spans; tapping one sweeps the
-// whole street (trim the range in the tray afterwards). Also the only way
-// to grab streets whose doors haven't been geocoded onto the map yet. ---
+// whole street, zooms the map to it, and pins down its unmapped doors
+// (trim the range in the tray afterwards). ---
 
 const streetQuery = ref('')
 const streetMatches = ref<{ street_name: string; city: string; count: number; lo: number; hi: number }[]>([])
@@ -576,11 +705,13 @@ function onStreetInput(value: string) {
   }, 250)
 }
 
-async function addWholeStreet(m: { street_name: string; city: string; lo: number; hi: number }) {
+async function addWholeStreet(m: { street_name: string; city: string }) {
   streetQuery.value = ''
   streetMatches.value = []
-  await addSegment(m.street_name, m.city, m.lo, m.hi, parityChoice.value)
-  focusDraft()
+  // Bring the map back on screen — the payoff of picking a search result is
+  // watching the street light up, not a new row in the tray below.
+  mapEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  await sweepWholeStreet(m.street_name, m.city, true)
 }
 
 // --- Save / edit / delete ---
@@ -828,7 +959,8 @@ onUnmounted(() => {
           </div>
         </template>
         <p v-else class="muted empty-note">
-          No streets swept yet — tap two doors on a street above, or search a street by name.
+          No streets swept yet — double-tap the map near a street, tap two doors for part of one,
+          or search a street by name.
         </p>
 
         <div class="draft-form">
