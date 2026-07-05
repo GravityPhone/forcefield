@@ -5,6 +5,8 @@ import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import { Geolocation } from '@capacitor/geolocation'
 import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
+import { CityLimitsLayer, TurfAreasLayer, readMapPref, writeMapPref } from '@/lib/mapLayers'
+import type { DoorPoint } from '@/lib/mapLayers'
 import { geocodeAndCache } from '@/lib/geocode'
 import { supabase } from '@/lib/supabase'
 import { localToday, startOfLocalDayISO } from '@/lib/day'
@@ -69,6 +71,23 @@ function setPinMode(mode: PinMode) {
   }
   refreshAllPinStyles()
 }
+
+// Map layer toggles (turf area shading, city limits), shared prefs with the
+// turf cutter so the map looks the same on both pages.
+const showAreas = ref(readMapPref('map-show-areas', true))
+const showCity = ref(readMapPref('map-show-city', false))
+
+function toggleAreas() {
+  showAreas.value = !showAreas.value
+  writeMapPref('map-show-areas', showAreas.value)
+  areasLayer?.setVisible(showAreas.value)
+}
+
+function toggleCity() {
+  showCity.value = !showCity.value
+  writeMapPref('map-show-city', showCity.value)
+  void cityLayer?.setVisible(showCity.value)
+}
 const locatedAddress = ref<AddressWithRoster | null>(null)
 const statusByHousehold = ref<Map<string, KnockOutcome>>(new Map())
 const summaryByHousehold = ref<Map<string, HouseholdKnockSummary>>(new Map())
@@ -76,14 +95,28 @@ const summaryByHousehold = ref<Map<string, HouseholdKnockSummary>>(new Map())
  * already here today" signal on pins and result rows, so crews working the
  * same turf don't double-knock. Kept live via the realtime feed below. */
 const knockedToday = ref<Set<string>>(new Set())
-/** Turf assigned to this canvasser — directly, or via a squad they're in
- * today. Member doors get a colored ring on the map plus a jump-to chip. */
-const myTurfs = ref<{ id: string; name: string; color: string }[]>([])
+/** Every turf, for the shaded-area overlay (each in its own color, so crews
+ * can see where the others are working). Yours — assigned directly or via a
+ * squad you're in today — get emphasized shading, a colored ring on member
+ * pins, and a jump-to chip. */
+interface TurfLite {
+  id: string
+  name: string
+  color: string
+  squad_id: string | null
+  assignee_id: string | null
+}
+const allTurfs = ref<TurfLite[]>([])
+const myTurfIds = ref<Set<string>>(new Set())
+const myTurfs = computed(() => allTurfs.value.filter((t) => myTurfIds.value.has(t.id)))
 const turfByAddress = ref<Map<string, string>>(new Map())
+const doorInfoByAddress = new Map<string, DoorPoint>()
 const loadError = ref('')
 
 let map: google.maps.Map | null = null
 let clusterer: MarkerClusterer | null = null
+let areasLayer: TurfAreasLayer | null = null
+let cityLayer: CityLimitsLayer | null = null
 let markersByAddress = new Map<string, google.maps.marker.AdvancedMarkerElement>()
 let initStarted = false
 let searchTimer: ReturnType<typeof setTimeout> | undefined
@@ -132,23 +165,52 @@ async function fetchMapData() {
   return (addressesRes.data ?? []) as AddressWithRoster[]
 }
 
-/** Turf assigned to me directly, or to any squad I'm in today. */
-async function fetchMyTurfs() {
+/** All turfs (for the area shading), plus which of them are mine — assigned
+ * to me directly or to a squad I'm in today. */
+async function fetchTurfs() {
   if (!auth.profile) return
   const me = auth.profile.id
-  const { data: sm } = await supabase
-    .from('squad_members')
-    .select('squad_id, squads!inner(squad_date)')
-    .eq('user_id', me)
-    .eq('squads.squad_date', localToday())
-  const squadIds = (sm ?? []).map((r) => r.squad_id as string)
-  const orParts = [`assignee_id.eq.${me}`]
-  if (squadIds.length) orParts.push(`squad_id.in.(${squadIds.join(',')})`)
-  const { data } = await supabase.from('turfs').select('id, name, color').or(orParts.join(','))
-  myTurfs.value = (data ?? []) as { id: string; name: string; color: string }[]
+  const [smRes, turfRes] = await Promise.all([
+    supabase
+      .from('squad_members')
+      .select('squad_id, squads!inner(squad_date)')
+      .eq('user_id', me)
+      .eq('squads.squad_date', localToday()),
+    supabase.from('turfs').select('id, name, color, squad_id, assignee_id'),
+  ])
+  const mySquadIds = new Set((smRes.data ?? []).map((r) => r.squad_id as string))
+  allTurfs.value = (turfRes.data ?? []) as TurfLite[]
+  myTurfIds.value = new Set(
+    allTurfs.value
+      .filter((t) => t.assignee_id === me || (t.squad_id != null && mySquadIds.has(t.squad_id)))
+      .map((t) => t.id),
+  )
 }
 
 const myTurfColorById = computed(() => new Map(myTurfs.value.map((t) => [t.id, t.color])))
+
+/** Redraw the shaded turf areas from whatever doors the map knows about. */
+function rebuildTurfAreas() {
+  if (!areasLayer) return
+  const doorsByTurf = new Map<string, DoorPoint[]>()
+  for (const [addressId, turfId] of turfByAddress.value) {
+    const door = doorInfoByAddress.get(addressId)
+    if (!door) continue
+    const list = doorsByTurf.get(turfId)
+    if (list) list.push(door)
+    else doorsByTurf.set(turfId, [door])
+  }
+  void areasLayer.setTurfs(
+    allTurfs.value
+      .filter((t) => doorsByTurf.has(t.id))
+      .map((t) => ({
+        id: t.id,
+        color: t.color,
+        doors: doorsByTurf.get(t.id)!,
+        emphasis: myTurfIds.value.has(t.id),
+      })),
+  )
+}
 
 async function fetchKnockedToday(): Promise<Set<string>> {
   const { data } = await supabase
@@ -236,6 +298,7 @@ function addOrUpdateMarker(a: AddressWithRoster) {
   if (a.turf_id) turfByAddress.value.set(a.id, a.turf_id)
   else turfByAddress.value.delete(a.id)
   if (a.lat == null || a.lng == null || !map) return
+  doorInfoByAddress.set(a.id, { lat: a.lat, lng: a.lng, street: a.street })
   let marker = markersByAddress.get(a.id)
   if (!marker) {
     const content = document.createElement('div')
@@ -282,7 +345,7 @@ async function initialize() {
       fetchMapData(),
       loadMaps(),
       lastKnockCenter(),
-      fetchMyTurfs(),
+      fetchTurfs(),
     ])
   } catch {
     loadError.value = 'Could not load the map or address data. Check your connection.'
@@ -315,6 +378,11 @@ async function initialize() {
   map.addListener('click', scrollHuntToTop)
   clusterer = new MarkerClusterer({ map, markers: [] })
 
+  areasLayer = new TurfAreasLayer(map)
+  areasLayer.setVisible(showAreas.value)
+  cityLayer = new CityLimitsLayer(map)
+  if (showCity.value) void cityLayer.setVisible(true)
+
   const bounds = new google.maps.LatLngBounds()
   for (const a of mapAddresses) {
     if (a.lat == null || a.lng == null) continue
@@ -325,6 +393,7 @@ async function initialize() {
   // fitting all ~2k county-wide pins zooms way out and looks like the map
   // "doesn't know where to start".
   if (!lastCenter && !bounds.isEmpty()) map.fitBounds(bounds, 48)
+  rebuildTurfAreas()
   pinsLoading.value = false
 }
 
@@ -335,10 +404,11 @@ async function refreshStatuses() {
     supabase.from('household_latest_knock').select('*'),
     supabase.from('household_knock_summary').select('*'),
     fetchKnockedToday(),
-    fetchMyTurfs(),
+    fetchTurfs(),
   ])
   applyStatusAndSummary(statusRes.data, summaryRes.data, todayRes)
   refreshAllPinStyles()
+  rebuildTurfAreas()
 }
 
 /** Pan/zoom to a turf's doors (the chips above the map). */
@@ -672,6 +742,9 @@ onUnmounted(() => {
   }
   clusterer?.clearMarkers()
   markersByAddress.clear()
+  doorInfoByAddress.clear()
+  areasLayer?.dispose()
+  cityLayer?.dispose()
   if (myPosMarker) {
     myPosMarker.map = null
     myPosMarker = null
@@ -753,6 +826,30 @@ onUnmounted(() => {
           @click="setPinMode('numbers')"
         >
           123
+        </button>
+      </div>
+      <!-- Map layers: turf area shading and city/village limits. Below the
+           pin-style toggle, same chrome. -->
+      <div class="layer-toggle" role="group" aria-label="Map layers">
+        <button
+          type="button"
+          class="layer-btn"
+          :class="{ active: showAreas }"
+          :aria-pressed="showAreas"
+          title="Shade turf areas"
+          @click="toggleAreas"
+        >
+          Areas
+        </button>
+        <button
+          type="button"
+          class="layer-btn"
+          :class="{ active: showCity }"
+          :aria-pressed="showCity"
+          title="Show city and village limits"
+          @click="toggleCity"
+        >
+          City
         </button>
       </div>
       <button
@@ -1061,6 +1158,43 @@ onUnmounted(() => {
 }
 
 .pin-mode-btn:not(.active):hover {
+  background: var(--surface-2);
+}
+
+/* Layers control, stacked directly beneath the pin-style toggle. */
+.layer-toggle {
+  position: absolute;
+  top: calc(0.6rem + 36px + 0.5rem);
+  left: 0.6rem;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.layer-btn {
+  min-height: 36px;
+  padding: 0 0.6rem;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.layer-btn + .layer-btn {
+  border-left: 1px solid var(--border);
+}
+
+.layer-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.layer-btn:not(.active):hover {
   background: var(--surface-2);
 }
 

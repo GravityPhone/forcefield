@@ -14,6 +14,14 @@ import AppSelect from '@/components/ui/AppSelect.vue'
 import type { SelectOption } from '@/components/ui/AppSelect.vue'
 import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
+import {
+  CityLimitsLayer,
+  TurfAreasLayer,
+  corridorFor,
+  readMapPref,
+  writeMapPref,
+} from '@/lib/mapLayers'
+import type { DoorPoint } from '@/lib/mapLayers'
 import { supabase } from '@/lib/supabase'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import { useAuthStore } from '@/stores/auth'
@@ -87,6 +95,12 @@ const sweepBusy = ref(false)
 
 let map: google.maps.Map | null = null
 let clusterer: MarkerClusterer | null = null
+let areasLayer: TurfAreasLayer | null = null
+let cityLayer: CityLimitsLayer | null = null
+/** Draft-sweep shading lives on its own Data layer so it can restyle and
+ * clear independently of the saved-turf areas. */
+let draftData: google.maps.Data | null = null
+const draftFeaturesBySeg = new Map<string, google.maps.Data.Feature[]>()
 let initStarted = false
 const markersByAddress = new Map<string, google.maps.marker.AdvancedMarkerElement>()
 const addressById = new Map<string, AddressLite>()
@@ -96,6 +110,22 @@ const streetCache = new Map<string, AddressLite[]>()
 let segKeyCounter = 0
 
 const turfColorById = computed(() => new Map(turfs.value.map((t) => [t.id, t.color])))
+
+// Layer toggles, persisted per device like Hunt's pin mode.
+const showAreas = ref(readMapPref('map-show-areas', true))
+const showCity = ref(readMapPref('map-show-city', false))
+
+function toggleAreas() {
+  showAreas.value = !showAreas.value
+  writeMapPref('map-show-areas', showAreas.value)
+  areasLayer?.setVisible(showAreas.value)
+}
+
+function toggleCity() {
+  showCity.value = !showCity.value
+  writeMapPref('map-show-city', showCity.value)
+  void cityLayer?.setVisible(showCity.value)
+}
 
 const draftColor = computed(() => {
   if (editingTurfId.value) {
@@ -272,13 +302,47 @@ async function initialize() {
   })
   clusterer = new MarkerClusterer({ map, markers: [] })
 
+  areasLayer = new TurfAreasLayer(map)
+  areasLayer.setVisible(showAreas.value)
+  cityLayer = new CityLimitsLayer(map)
+  if (showCity.value) void cityLayer.setVisible(true)
+  draftData = new google.maps.Data({ map })
+  draftData.setStyle((f) => ({
+    fillColor: (f.getProperty('color') as string) || '#7c3aed',
+    fillOpacity: 0.2,
+    strokeOpacity: 0,
+    clickable: false,
+    zIndex: 0,
+  }))
+
   const bounds = new google.maps.LatLngBounds()
   for (const a of rows) {
     upsertMarker(a)
     if (a.lat != null && a.lng != null) bounds.extend({ lat: a.lat, lng: a.lng })
   }
   if (!bounds.isEmpty()) map.fitBounds(bounds, 48)
+  buildSavedAreas()
   pinsLoading.value = false
+}
+
+/** Shade every saved turf (except the one being edited — its shape is being
+ * redrawn live as the draft). */
+function buildSavedAreas() {
+  if (!areasLayer) return
+  const doorsByTurf = new Map<string, DoorPoint[]>()
+  for (const a of addressById.values()) {
+    if (!a.turf_id || a.lat == null || a.lng == null) continue
+    if (editingTurfId.value && a.turf_id === editingTurfId.value) continue
+    const list = doorsByTurf.get(a.turf_id)
+    const door = { lat: a.lat, lng: a.lng, street: a.street }
+    if (list) list.push(door)
+    else doorsByTurf.set(a.turf_id, [door])
+  }
+  void areasLayer.setTurfs(
+    turfs.value
+      .filter((t) => doorsByTurf.has(t.id))
+      .map((t) => ({ id: t.id, color: t.color, doors: doorsByTurf.get(t.id)! })),
+  )
 }
 
 /** Re-pull addresses + turfs after a save/delete (turf_id stamps changed
@@ -288,6 +352,7 @@ async function reloadAll() {
   for (const a of rows) upsertMarker(a)
   streetCache.clear()
   restyleAll()
+  buildSavedAreas()
 }
 
 // --- Sweeping ---
@@ -359,10 +424,9 @@ async function computeSegment(seg: DraftSegment) {
 
   segPolylines.get(seg.key)?.setMap(null)
   segPolylines.delete(seg.key)
-  const path = free
-    .filter((a) => a.lat != null && a.lng != null)
-    .sort((a, b) => houseNumber(a.street) - houseNumber(b.street))
-    .map((a) => ({ lat: a.lat!, lng: a.lng! }))
+  const located = free.filter((a) => a.lat != null && a.lng != null)
+  located.sort((a, b) => houseNumber(a.street) - houseNumber(b.street))
+  const path = located.map((a) => ({ lat: a.lat!, lng: a.lng! }))
   if (path.length >= 2 && map) {
     segPolylines.set(
       seg.key,
@@ -376,7 +440,30 @@ async function computeSegment(seg: DraftSegment) {
       }),
     )
   }
+
+  // Shaded swath under the stroke — the "color over the area" preview.
+  if (draftData) {
+    for (const f of draftFeaturesBySeg.get(seg.key) ?? []) draftData.remove(f)
+    draftFeaturesBySeg.delete(seg.key)
+    const corridor = await corridorFor(
+      located.map((a) => ({ lat: a.lat!, lng: a.lng!, street: a.street })),
+    )
+    if (corridor) {
+      const added = draftData.addGeoJson({
+        type: 'Feature',
+        geometry: corridor.geometry,
+        properties: { color: draftColor.value },
+      })
+      draftFeaturesBySeg.set(seg.key, added)
+    }
+  }
   restyleAll()
+}
+
+function removeDraftShading(segKey: string) {
+  if (!draftData) return
+  for (const f of draftFeaturesBySeg.get(segKey) ?? []) draftData.remove(f)
+  draftFeaturesBySeg.delete(segKey)
 }
 
 async function addSegment(
@@ -412,6 +499,7 @@ function removeSegment(seg: DraftSegment) {
   segments.value = segments.value.filter((s) => s.key !== seg.key)
   segPolylines.get(seg.key)?.setMap(null)
   segPolylines.delete(seg.key)
+  removeDraftShading(seg.key)
   restyleAll()
 }
 
@@ -431,12 +519,15 @@ function clearDraft() {
   segments.value = []
   for (const line of segPolylines.values()) line.setMap(null)
   segPolylines.clear()
+  for (const key of [...draftFeaturesBySeg.keys()]) removeDraftShading(key)
   anchor.value = null
   editingTurfId.value = null
   draftName.value = ''
   assignChoice.value = 'none'
   saveError.value = ''
   restyleAll()
+  // Restore the saved shading of whatever turf was being edited.
+  buildSavedAreas()
 }
 
 // --- Street search: the non-map way in. Typing "walnut" lists matching
@@ -553,6 +644,8 @@ async function editTurf(t: TurfWithMeta) {
   editingTurfId.value = t.id
   draftName.value = t.name
   assignChoice.value = t.squad_id ? `squad:${t.squad_id}` : t.assignee_id ? `user:${t.assignee_id}` : 'none'
+  // Hide this turf's saved shading — the draft redraws it live.
+  buildSavedAreas()
   for (const s of t.turf_segments) {
     await addSegment(s.street_name, s.city, s.range_start, s.range_end, s.parity)
   }
@@ -596,6 +689,10 @@ onUnmounted(() => {
   markersByAddress.clear()
   for (const line of segPolylines.values()) line.setMap(null)
   segPolylines.clear()
+  areasLayer?.dispose()
+  cityLayer?.dispose()
+  draftData?.setMap(null)
+  draftFeaturesBySeg.clear()
 })
 </script>
 
@@ -624,6 +721,29 @@ onUnmounted(() => {
         <div v-if="pinsLoading" class="pins-loading" role="status" aria-live="polite">
           <span class="pins-loading-spinner" aria-hidden="true"></span>
           Loading pins…
+        </div>
+        <!-- Map layers: turf area shading and city/village limits. -->
+        <div class="layer-toggle" role="group" aria-label="Map layers">
+          <button
+            type="button"
+            class="layer-btn"
+            :class="{ active: showAreas }"
+            :aria-pressed="showAreas"
+            title="Shade turf areas"
+            @click="toggleAreas"
+          >
+            Areas
+          </button>
+          <button
+            type="button"
+            class="layer-btn"
+            :class="{ active: showCity }"
+            :aria-pressed="showCity"
+            title="Show city and village limits"
+            @click="toggleCity"
+          >
+            City
+          </button>
         </div>
       </div>
       <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
@@ -864,6 +984,44 @@ onUnmounted(() => {
   border-radius: 6px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
   pointer-events: none;
+}
+
+/* Segmented layers control, top-left on the map — same chrome as Hunt's
+ * pin-mode toggle. */
+.layer-toggle {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.layer-btn {
+  min-height: 36px;
+  padding: 0 0.7rem;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.layer-btn + .layer-btn {
+  border-left: 1px solid var(--border);
+}
+
+.layer-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.layer-btn:not(.active):hover {
+  background: var(--surface-2);
 }
 
 .pins-loading-spinner {
