@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useChatStore } from '@/stores/chat'
+import { avatarUrl } from '@/lib/avatars'
 import type { ChatProfile } from '@/types'
 
 const props = defineProps<{
@@ -64,6 +65,7 @@ function remove(id: string) {
     />
     <div v-if="query.trim()" class="results">
       <button v-for="p in results" :key="p.id" class="result" @click="pick(p)">
+        <img v-if="avatarUrl(p.avatar)" class="result-avatar" :src="avatarUrl(p.avatar)" alt="" />
         <span class="result-name">{{ p.display_name || p.username }}</span>
         <span class="muted">@{{ p.username }}</span>
       </button>
@@ -117,6 +119,13 @@ function remove(id: string) {
   gap: 0.2rem;
   max-height: 180px;
   overflow-y: auto;
+}
+
+.result-avatar {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  align-self: center;
 }
 
 .result {

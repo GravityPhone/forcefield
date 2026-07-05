@@ -19,6 +19,8 @@ export interface Profile {
   id: string
   username: string
   display_name: string | null
+  /** Slug of a Fluent animal SVG in public/avatars/ (see lib/avatars.ts). */
+  avatar: string | null
   role: AppRole
   team_id: string | null
   theme: { scheme: ThemeId }
@@ -196,12 +198,31 @@ export interface ChatMember {
   joined_at: string
 }
 
+/** Attachment descriptor stored in chat_messages.files — mirrors the shape
+ * vue-advanced-chat renders ({ type } is the extension, e.g. 'png'). */
+export interface ChatFile {
+  name: string
+  size: number
+  type: string
+  url: string
+  preview?: string
+}
+
 export interface ChatMessage {
   id: string
   chat_id: string
   sender_id: string
   body: string
+  files: ChatFile[] | null
   created_at: string
+}
+
+/** One user's emoji reaction to a message. */
+export interface MessageReaction {
+  message_id: string
+  chat_id: string
+  user_id: string
+  emoji: string
 }
 
 /** Minimal profile info shown next to chat messages and in member pickers. */
@@ -209,6 +230,7 @@ export interface ChatProfile {
   id: string
   username: string
   display_name: string | null
+  avatar: string | null
 }
 
 export interface Bulletin {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useChatStore, type ChatListItem } from '@/stores/chat'
+import { avatarUrl } from '@/lib/avatars'
 import type { ChatProfile } from '@/types'
 
 const props = defineProps<{ members: ChatProfile[]; activeChat: ChatListItem | null }>()
@@ -47,6 +48,7 @@ function canAdd(member: ChatProfile): boolean {
           :class="{ me: m.id === chat.myId }"
           @click="toggleMenu(m.id)"
         >
+          <img v-if="avatarUrl(m.avatar)" class="member-avatar" :src="avatarUrl(m.avatar)" alt="" />
           {{ m.display_name || m.username }}{{ m.id === chat.myId ? ' (you)' : '' }}
         </button>
         <div v-if="openMenuFor === m.id" class="member-menu">
@@ -101,8 +103,16 @@ function canAdd(member: ChatProfile): boolean {
   position: relative;
 }
 
+.member-avatar {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
 .member-name-btn {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
   width: 100%;
   min-height: 36px;
   padding: 0.4rem 0.6rem;

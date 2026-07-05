@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import type { AppRole } from '@/types'
 import { useAuthStore, roleHome } from '@/stores/auth'
+import { useChatStore } from '@/stores/chat'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -20,8 +21,22 @@ const router = createRouter({
     // Canvasser home
     { path: '/canvass', name: 'canvass', component: () => import('@/views/CanvasserHomeView.vue'), meta: { roles: [] } },
 
-    // User-to-user chat (everyone) — distinct from the admin-only AI chat
-    { path: '/chat', name: 'chat', component: () => import('@/views/ChatView.vue'), meta: { roles: [] } },
+    // User-to-user chat is no longer a page — it's the pull-out drawer on
+    // every screen (ChatDrawer in AppShell). /chat survives as a deep link
+    // (old bookmarks, /chat?chat=<id> squad links): a guard opens the drawer,
+    // then either stays put (in-app) or falls through to the role home.
+    {
+      path: '/chat',
+      name: 'chat',
+      component: () => import('@/views/CanvasserHomeView.vue'), // never rendered — guard always redirects
+      meta: { roles: [] },
+      beforeEnter: (to, from) => {
+        useChatStore().openDrawer(typeof to.query.chat === 'string' ? to.query.chat : undefined)
+        // In-app navigation: cancel and keep the current page under the drawer.
+        if (from.matched.length) return false
+        return roleHome(useAuthStore().profile?.role ?? 'canvasser')
+      },
+    },
 
     // Day crews — anyone can form or join one; resets at midnight
     { path: '/squads', name: 'squads', component: () => import('@/views/SquadsView.vue'), meta: { roles: [] } },

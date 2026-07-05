@@ -6,6 +6,7 @@ import { ROLE_LABELS } from '@/types'
 import AppLogo from '@/components/AppLogo.vue'
 import EdgeScrollbar from '@/components/EdgeScrollbar.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
+import ChatDrawer from '@/components/chat/ChatDrawer.vue'
 import { hapticTap } from '@/lib/native'
 
 defineProps<{ title?: string }>()
@@ -35,41 +36,40 @@ interface NavItem {
 
 const barItems = computed<NavItem[]>(() => {
   if (!auth.profile) return []
+  // Chat is deliberately NOT a tab — it lives in the pull-out drawer
+  // (ChatDrawer), reachable from every screen via the right-edge handle.
   if (auth.profile.role === 'admin') {
     return [
       { to: '/admin', label: 'Dashboard', icon: 'dashboard' },
       { to: '/canvass', label: 'Canvass', icon: 'pin' },
-      { to: '/chat', label: 'Chat', icon: 'chat' },
       { to: '/squads', label: 'Squads', icon: 'squads' },
+      { to: '/leaderboard', label: 'Boards', icon: 'trophy' },
     ]
   }
   return [
     { to: homePath.value, label: 'Home', icon: 'home' },
-    { to: '/chat', label: 'Chat', icon: 'chat' },
     { to: '/squads', label: 'Squads', icon: 'squads' },
+    { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
     { to: '/leaderboard', label: 'Boards', icon: 'trophy' },
   ]
 })
 
 const moreItems = computed<NavItem[]>(() => {
   if (!auth.profile) return []
-  const common: NavItem[] = [
-    { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
-    { to: '/appearance', label: 'Appearance', icon: 'palette' },
-  ]
+  const appearance: NavItem = { to: '/appearance', label: 'Appearance', icon: 'palette' }
   if (auth.profile.role === 'admin') {
     return [
       { to: '/admin/chat', label: 'AI Chat', icon: 'sparkle' },
       { to: '/turf', label: 'Turf', icon: 'map' },
-      { to: '/leaderboard', label: 'Leaderboard', icon: 'trophy' },
-      ...common,
+      { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
+      appearance,
       { to: '/admin/settings', label: 'Settings', icon: 'sliders' },
     ]
   }
   if (auth.profile.role === 'team_lead') {
-    return [{ to: '/turf', label: 'Turf', icon: 'map' }, ...common]
+    return [{ to: '/turf', label: 'Turf', icon: 'map' }, appearance]
   }
-  return common
+  return [appearance]
 })
 
 const moreOpen = ref(false)
@@ -162,7 +162,6 @@ onUnmounted(() => {
         </template>
         <router-link v-else :to="homePath">Home</router-link>
         <router-link v-if="auth.profile.role === 'team_lead'" to="/turf">Turf</router-link>
-        <router-link to="/chat">Chat</router-link>
         <router-link to="/squads">Squads</router-link>
         <router-link to="/bulletin">Bulletin</router-link>
         <router-link to="/leaderboard">Leaderboard</router-link>
@@ -178,6 +177,11 @@ onUnmounted(() => {
         <slot />
       </div>
     </main>
+
+    <!-- User-to-user chat: a pull-out drawer on every screen, not a route.
+         The right-edge handle opens it; the handle drags up/down to wherever
+         the thumb likes. -->
+    <ChatDrawer />
 
     <!-- Phone bottom tab bar -->
     <nav v-if="auth.profile" class="tab-bar" aria-label="Primary">

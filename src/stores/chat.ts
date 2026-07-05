@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from './auth'
-import type { Chat, ChatKind, ChatMessage, ChatProfile } from '@/types'
+import type { Chat, ChatFile, ChatKind, ChatMessage, ChatProfile, MessageReaction } from '@/types'
 
 /** Chat row enriched with what the list pane needs. */
 export interface ChatListItem extends Chat {
@@ -10,11 +10,23 @@ export interface ChatListItem extends Chat {
   isMember: boolean
 }
 
+/** Attachment as emitted by vue-advanced-chat's composer (before upload). */
+export interface OutgoingFile {
+  name: string
+  size: number
+  type: string
+  extension?: string
+  blob?: Blob
+  localUrl?: string
+}
+
 interface ChatState {
   chats: ChatListItem[]
   loadingChats: boolean
   activeChatId: string | null
   messages: ChatMessage[]
+  /** emoji -> user ids, per message id, for the active chat. */
+  reactions: Record<string, Record<string, string[]>>
   loadingMessages: boolean
   /** Usernames for message senders — filled from memberships and topped up
    * on demand (global chat can have senders we haven't seen yet). */
@@ -23,11 +35,17 @@ interface ChatState {
   /** Every user in the org — the global room has no chat_members rows (by
    * design, everyone's implicitly in it), so its member list is this instead. */
   orgMembers: ChatProfile[]
+  /** Unread message count per chat id (only chats with unread > 0). */
+  unread: Record<string, number>
+  /** The slide-in chat drawer, reachable from every screen. */
+  drawerOpen: boolean
 }
 
 const MESSAGE_PAGE = 100
-let channel: RealtimeChannel | null = null
+let messagesChannel: RealtimeChannel | null = null
+let reactionsChannel: RealtimeChannel | null = null
 let membershipChannel: RealtimeChannel | null = null
+let backgroundReady = false
 
 /** Supabase's autoRefreshToken can be mid-rotation when a write fires right
  * after navigating to a new tab/view — the request goes out on a
@@ -46,10 +64,13 @@ export const useChatStore = defineStore('chat', {
     loadingChats: false,
     activeChatId: null,
     messages: [],
+    reactions: {},
     loadingMessages: false,
     profiles: {},
     sendError: '',
     orgMembers: [],
+    unread: {},
+    drawerOpen: false,
   }),
 
   getters: {
@@ -58,6 +79,9 @@ export const useChatStore = defineStore('chat', {
     },
     myId(): string | null {
       return useAuthStore().profile?.id ?? null
+    },
+    totalUnread(state): number {
+      return Object.values(state.unread).reduce((sum, n) => sum + n, 0)
     },
   },
 
@@ -71,6 +95,37 @@ export const useChatStore = defineStore('chat', {
       return others.map((m) => m.display_name || m.username).join(', ')
     },
 
+    // --- Drawer ---
+
+    openDrawer(chatId?: string) {
+      this.drawerOpen = true
+      if (chatId) void this.openChat(chatId)
+    },
+
+    closeDrawer() {
+      this.drawerOpen = false
+    },
+
+    /** One-time background wiring (idempotent — AppShell remounts per view):
+     * chat list, unread counts, and the always-on realtime listeners that
+     * keep the drawer badge live even when the drawer is closed. */
+    async ensureBackground() {
+      if (backgroundReady && this.myId) return
+      backgroundReady = true
+      await this.loadChats()
+      void this.loadOrgMembers()
+      void this.loadUnreadCounts()
+      this.subscribeToMessages()
+      this.subscribeToMembership()
+    },
+
+    /** Called on logout/login switches so the next user re-wires cleanly. */
+    resetBackground() {
+      backgroundReady = false
+      this.unsubscribeAll()
+      this.$reset()
+    },
+
     async loadChats() {
       this.loadingChats = true
       // chat_members has two FKs to profiles (user_id, added_by) — the embed
@@ -78,7 +133,7 @@ export const useChatStore = defineStore('chat', {
       const { data, error } = await supabase
         .from('chats')
         .select(
-          '*, chat_members(user_id, profiles!chat_members_user_id_fkey(id, username, display_name))',
+          '*, chat_members(user_id, profiles!chat_members_user_id_fkey(id, username, display_name, avatar))',
         )
         .order('created_at')
       this.loadingChats = false
@@ -100,14 +155,38 @@ export const useChatStore = defineStore('chat', {
           isMember: row.kind === 'global' || members.some((m) => m.id === this.myId),
         }
       })
-      // Global room first, then squads, then PMs.
-      const rank: Record<ChatKind, number> = { global: 0, squad: 1, dm: 2 }
+      // Squads first (today's working rooms), then the global room, then PMs.
+      const rank: Record<ChatKind, number> = { squad: 0, global: 1, dm: 2 }
       this.chats.sort((a, b) => rank[a.kind] - rank[b.kind] || a.created_at.localeCompare(b.created_at))
+    },
+
+    // --- Unread tracking ---
+
+    async loadUnreadCounts() {
+      const { data } = await supabase.rpc('get_unread_counts')
+      if (!data) return
+      const map: Record<string, number> = {}
+      for (const row of data as { chat_id: string; unread: number }[]) {
+        map[row.chat_id] = Number(row.unread)
+      }
+      this.unread = map
+    },
+
+    /** Stamp the active chat read now — server row for persistence, local
+     * zero for the badge. */
+    markRead(chatId: string) {
+      if (this.unread[chatId]) delete this.unread[chatId]
+      const myId = this.myId
+      if (!myId) return
+      void supabase
+        .from('chat_reads')
+        .upsert({ chat_id: chatId, user_id: myId, last_read_at: new Date().toISOString() })
     },
 
     async openChat(chatId: string) {
       this.activeChatId = chatId
       this.messages = []
+      this.reactions = {}
       this.sendError = ''
       this.loadingMessages = true
 
@@ -122,8 +201,10 @@ export const useChatStore = defineStore('chat', {
       if (!error && data) {
         this.messages = (data as ChatMessage[]).reverse()
         await this.ensureSenderProfiles(this.messages)
+        void this.loadReactions(chatId)
       }
-      this.subscribe(chatId)
+      this.markRead(chatId)
+      this.subscribeToReactions(chatId)
     },
 
     /** vue-advanced-chat re-emits `fetch-messages` for the room that's
@@ -144,38 +225,66 @@ export const useChatStore = defineStore('chat', {
     closeChat() {
       this.activeChatId = null
       this.messages = []
-      this.unsubscribe()
+      this.reactions = {}
+      if (reactionsChannel) {
+        void supabase.removeChannel(reactionsChannel)
+        reactionsChannel = null
+      }
     },
 
-    subscribe(chatId: string) {
-      this.unsubscribe()
-      channel = supabase
-        .channel(`chat-${chatId}`)
+    // --- Realtime ---
+
+    /** Always-on message stream (RLS scopes it to chats we can see). Feeds
+     * both the open room and the unread counters for every other room. */
+    subscribeToMessages() {
+      if (messagesChannel) void supabase.removeChannel(messagesChannel)
+      messagesChannel = supabase
+        .channel('chat-messages-all')
         .on(
           'postgres_changes',
-          { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `chat_id=eq.${chatId}` },
+          { event: 'INSERT', schema: 'public', table: 'chat_messages' },
           (payload) => {
             const msg = payload.new as ChatMessage
-            if (this.activeChatId !== msg.chat_id) return
-            if (this.messages.some((m) => m.id === msg.id)) return // we sent it
-            this.messages.push(msg)
-            void this.ensureSenderProfiles([msg])
+            if (msg.sender_id === this.myId) return // optimistic copy already shown
+            if (msg.chat_id === this.activeChatId && !this.messages.some((m) => m.id === msg.id)) {
+              this.messages.push(msg)
+              void this.ensureSenderProfiles([msg])
+            }
+            // Only an actually-visible room counts as read.
+            if (msg.chat_id === this.activeChatId && this.drawerOpen) {
+              this.markRead(msg.chat_id)
+            } else {
+              this.unread[msg.chat_id] = (this.unread[msg.chat_id] ?? 0) + 1
+            }
           },
         )
         .subscribe()
     },
 
-    unsubscribe() {
-      if (channel) {
-        void supabase.removeChannel(channel)
-        channel = null
-      }
+    subscribeToReactions(chatId: string) {
+      if (reactionsChannel) void supabase.removeChannel(reactionsChannel)
+      reactionsChannel = supabase
+        .channel(`chat-reactions-${chatId}`)
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'message_reactions', filter: `chat_id=eq.${chatId}` },
+          (payload) => this.applyReaction(payload.new as MessageReaction, false),
+        )
+        .on(
+          // DELETE payloads only carry the primary key (no chat_id), so this
+          // listener can't be filtered per-room — applyReaction just no-ops
+          // for messages that aren't in the open room.
+          'postgres_changes',
+          { event: 'DELETE', schema: 'public', table: 'message_reactions' },
+          (payload) => this.applyReaction(payload.old as MessageReaction, true),
+        )
+        .subscribe()
     },
 
     /** Live-refresh the chat list when someone adds you to a new DM/squad —
      * without this, a newly-added chat only appeared after a manual reload. */
     subscribeToMembership() {
-      this.unsubscribeFromMembership()
+      if (membershipChannel) void supabase.removeChannel(membershipChannel)
       const myId = this.myId
       if (!myId) return
       membershipChannel = supabase
@@ -188,10 +297,56 @@ export const useChatStore = defineStore('chat', {
         .subscribe()
     },
 
-    unsubscribeFromMembership() {
-      if (membershipChannel) {
-        void supabase.removeChannel(membershipChannel)
-        membershipChannel = null
+    unsubscribeAll() {
+      for (const ch of [messagesChannel, reactionsChannel, membershipChannel]) {
+        if (ch) void supabase.removeChannel(ch)
+      }
+      messagesChannel = reactionsChannel = membershipChannel = null
+    },
+
+    // --- Reactions ---
+
+    async loadReactions(chatId: string) {
+      const ids = this.messages.map((m) => m.id)
+      if (!ids.length) return
+      const { data } = await supabase
+        .from('message_reactions')
+        .select('message_id, chat_id, user_id, emoji')
+        .eq('chat_id', chatId)
+        .in('message_id', ids)
+      if (this.activeChatId !== chatId || !data) return
+      this.reactions = {}
+      for (const r of data as MessageReaction[]) this.applyReaction(r, false)
+    },
+
+    applyReaction(r: MessageReaction, remove: boolean) {
+      if (!r.message_id || !this.messages.some((m) => m.id === r.message_id)) return
+      const perMessage = (this.reactions[r.message_id] ??= {})
+      const users = (perMessage[r.emoji] ??= [])
+      if (remove) {
+        perMessage[r.emoji] = users.filter((id) => id !== r.user_id)
+        if (!perMessage[r.emoji].length) delete perMessage[r.emoji]
+      } else if (!users.includes(r.user_id)) {
+        users.push(r.user_id)
+      }
+    },
+
+    async toggleReaction(messageId: string, emoji: string, remove: boolean) {
+      const myId = this.myId
+      const chatId = this.activeChatId
+      if (!myId || !chatId) return
+      await ensureFreshSession()
+      // Apply locally right away — our own realtime echo is idempotent.
+      this.applyReaction({ message_id: messageId, chat_id: chatId, user_id: myId, emoji }, remove)
+      if (remove) {
+        await supabase
+          .from('message_reactions')
+          .delete()
+          .match({ message_id: messageId, user_id: myId, emoji })
+      } else {
+        await supabase
+          .from('message_reactions')
+          .upsert({ message_id: messageId, chat_id: chatId, user_id: myId, emoji })
       }
     },
 
@@ -202,26 +357,55 @@ export const useChatStore = defineStore('chat', {
       if (!missing.length) return
       const { data } = await supabase
         .from('profiles')
-        .select('id, username, display_name')
+        .select('id, username, display_name, avatar')
         .in('id', missing)
       for (const p of (data ?? []) as ChatProfile[]) this.profiles[p.id] = p
     },
 
-    async sendMessage(body: string) {
+    // --- Sending ---
+
+    /** Upload composer attachments to the public chat-media bucket and return
+     * descriptors in the shape vue-advanced-chat renders. */
+    async uploadFiles(chatId: string, messageId: string, files: OutgoingFile[]): Promise<ChatFile[]> {
+      const uploaded: ChatFile[] = []
+      for (const [i, f] of files.entries()) {
+        if (!f.blob) continue
+        const ext = (f.extension || f.name.split('.').pop() || 'bin').toLowerCase()
+        const path = `${chatId}/${messageId}-${i}.${ext}`
+        const { error } = await supabase.storage
+          .from('chat-media')
+          .upload(path, f.blob, { contentType: f.blob.type || undefined })
+        if (error) continue
+        const { data } = supabase.storage.from('chat-media').getPublicUrl(path)
+        uploaded.push({ name: f.name, size: f.size, type: ext, url: data.publicUrl })
+      }
+      return uploaded
+    },
+
+    async sendMessage(body: string, files: OutgoingFile[] = []) {
       const auth = useAuthStore()
       const chatId = this.activeChatId
       const text = body.trim()
-      if (!auth.profile || !chatId || !text) return
+      if (!auth.profile || !chatId || (!text && !files.length)) return
       this.sendError = ''
       await ensureFreshSession()
+
+      const id = crypto.randomUUID()
+      const uploaded = files.length ? await this.uploadFiles(chatId, id, files) : []
+      if (files.length && !uploaded.length) {
+        this.sendError = 'Attachment upload failed — check your connection.'
+        if (!text) return
+      }
+
       const message: ChatMessage = {
-        id: crypto.randomUUID(),
+        id,
         chat_id: chatId,
         sender_id: auth.profile.id,
         body: text,
+        files: uploaded.length ? uploaded : null,
         created_at: new Date().toISOString(),
       }
-      this.messages.push(message) // optimistic; realtime echo is deduped by id
+      this.messages.push(message) // optimistic; our realtime echo is skipped by sender
       const { error } = await supabase.from('chat_messages').insert(message)
       if (error) {
         this.messages = this.messages.filter((m) => m.id !== message.id)
@@ -296,7 +480,7 @@ export const useChatStore = defineStore('chat', {
     async loadOrgMembers() {
       const { data } = await supabase
         .from('profiles')
-        .select('id, username, display_name')
+        .select('id, username, display_name, avatar')
         .order('username')
       this.orgMembers = (data ?? []) as ChatProfile[]
     },
@@ -307,7 +491,7 @@ export const useChatStore = defineStore('chat', {
       if (q.length < 1) return []
       const { data } = await supabase
         .from('profiles')
-        .select('id, username, display_name')
+        .select('id, username, display_name, avatar')
         .or(`username.ilike.%${q}%,display_name.ilike.%${q}%`)
         .neq('id', this.myId ?? '')
         .limit(10)

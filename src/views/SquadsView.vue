@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import { fadeUp } from '@/lib/motion'
 import { useSquadsStore, type SquadListItem } from '@/stores/squads'
+import { useChatStore } from '@/stores/chat'
 import type { ChatProfile } from '@/types'
 
 const squads = useSquadsStore()
-const router = useRouter()
+const chat = useChatStore()
 
 const composing = ref(false)
 const squadName = ref('')
@@ -45,7 +45,7 @@ async function createSquad() {
 
 function openSquadChat(squad: SquadListItem) {
   if (!squad.chat_id) return
-  void router.push({ path: '/chat', query: { chat: squad.chat_id } })
+  chat.openDrawer(squad.chat_id) // slides over this page — no navigation
 }
 
 function memberNames(squad: SquadListItem): string {
