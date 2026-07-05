@@ -1,9 +1,24 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { OUTCOMES } from '@/lib/outcomes'
+import { hapticNotify, hapticTap } from '@/lib/native'
 import { useTalkStore } from '@/stores/talk'
+import type { KnockOutcome } from '@/types'
 
 const talk = useTalkStore()
+
+// A physical tick under the finger confirms the tap registered without
+// looking down at the screen — this pair of buttons is the highest-frequency
+// interaction in the whole app.
+function logOutcome(value: KnockOutcome) {
+  hapticTap('medium')
+  talk.logOutcome(value)
+}
+
+function confirmNext() {
+  hapticNotify('success')
+  talk.confirmNext()
+}
 
 // Not Home / Skip / Hostile describe the door interaction, so they only need
 // a household loaded. Signed / Didn't Sign / Maybe are a real answer from a
@@ -26,7 +41,7 @@ function disabledFor(requiresPerson: boolean): boolean {
         :class="{ active: talk.pendingOutcome === o.value }"
         :style="{ '--outcome-color': o.hex }"
         :disabled="disabledFor(o.requiresPerson)"
-        @click="talk.logOutcome(o.value)"
+        @click="logOutcome(o.value)"
       >
         {{ o.label }}
       </button>
@@ -37,7 +52,7 @@ function disabledFor(requiresPerson: boolean): boolean {
     </p>
     <!-- Confirms before the screen clears — no silent auto-advance. Only
          appears once something is actually logged for the current target. -->
-    <button v-if="talk.pendingOutcome" class="btn btn-primary next-btn" @click="talk.confirmNext()">
+    <button v-if="talk.pendingOutcome" class="btn btn-primary next-btn" @click="confirmNext">
       Next
     </button>
   </div>

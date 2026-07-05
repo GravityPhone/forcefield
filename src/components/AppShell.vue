@@ -106,6 +106,10 @@ onUnmounted(() => {
 .shell-header {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+  /* Under the native shells (viewport-fit=cover) the page extends behind the
+   * status bar / notch — keep the header's surface there but push its content
+   * clear of it. No-op in a regular browser tab (inset is 0). */
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
 .shell-header-inner {

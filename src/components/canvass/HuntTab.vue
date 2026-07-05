@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { MarkerClusterer } from '@googlemaps/markerclusterer'
+import { Geolocation } from '@capacitor/geolocation'
 import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import { geocodeAndCache } from '@/lib/geocode'
@@ -464,6 +465,50 @@ function knock(addressId: string, personId?: string) {
   void talk.loadAddress(addressId, personId)
 }
 
+// --- "Where am I": drop/refresh a blue you-are-here dot and pan to it.
+// Goes through @capacitor/geolocation so the same call works in a browser
+// (falls back to navigator.geolocation) and in the native shells (real OS
+// permission prompt instead of the webview's). ---
+
+const locatingMe = ref(false)
+const locateError = ref('')
+let myPosMarker: google.maps.marker.AdvancedMarkerElement | null = null
+
+async function locateMe() {
+  if (!map || locatingMe.value) return
+  locatingMe.value = true
+  locateError.value = ''
+  try {
+    const pos = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 10000 })
+    const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+    if (!myPosMarker) {
+      const dot = document.createElement('div')
+      const s = dot.style
+      s.width = '16px'
+      s.height = '16px'
+      s.borderRadius = '50%'
+      s.background = '#4285f4' // Google-blue "you are here" — not themed on purpose
+      s.border = '3px solid #ffffff'
+      s.boxShadow = '0 0 6px rgba(0, 0, 0, 0.5)'
+      myPosMarker = new google.maps.marker.AdvancedMarkerElement({
+        map,
+        position: loc,
+        content: dot,
+        zIndex: 2000,
+        title: 'You are here',
+      })
+    } else {
+      myPosMarker.position = loc
+    }
+    map.panTo(loc)
+    map.setZoom(Math.max(map.getZoom() ?? DEFAULT_ZOOM, 17))
+  } catch {
+    locateError.value = 'Could not get your location — check location permission for this app.'
+  } finally {
+    locatingMe.value = false
+  }
+}
+
 // --- Custom results-list scrollbar: the rows are buttons, so a touch-drag
 // starting on one scrolls unreliably (or just triggers the row). A dedicated
 // thumb gives a spot that's always just "grab and scroll", and staying custom
@@ -582,6 +627,10 @@ onUnmounted(() => {
   }
   clusterer?.clearMarkers()
   markersByAddress.clear()
+  if (myPosMarker) {
+    myPosMarker.map = null
+    myPosMarker = null
+  }
   document.removeEventListener('fullscreenchange', onFullscreenChange)
   document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
 })
@@ -664,8 +713,24 @@ onUnmounted(() => {
           </template>
         </svg>
       </button>
+      <button
+        type="button"
+        class="map-locate-btn"
+        :class="{ busy: locatingMe }"
+        aria-label="Show my location"
+        title="My location"
+        @click="locateMe"
+      >
+        <!-- Crosshair target: circle + four ticks, the standard locate glyph. -->
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" stroke-width="2" />
+          <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+          <path d="M12 2v3M12 19v3M2 12h3M19 12h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+        </svg>
+      </button>
     </div>
     <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
+    <p v-if="locateError" class="muted map-error">{{ locateError }}</p>
     <p v-if="mapsAuthError" class="muted map-error">
       Google rejected the Maps API key — usually quota, billing, or a referrer restriction on the
       key. The exact reason is logged in the browser console. Search and knock logging still work.
@@ -846,6 +911,32 @@ onUnmounted(() => {
 
 .map-fullscreen-btn:hover {
   background: var(--surface-2);
+}
+
+/* Same chrome as the fullscreen button, stacked directly beneath it. */
+.map-locate-btn {
+  position: absolute;
+  top: calc(0.6rem + 36px + 0.5rem);
+  right: 0.6rem;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.map-locate-btn:hover {
+  background: var(--surface-2);
+}
+
+.map-locate-btn.busy svg {
+  animation: pins-spin 0.9s linear infinite;
 }
 
 /* Status pill while the initial pin set loads/renders. Top-center so it clears

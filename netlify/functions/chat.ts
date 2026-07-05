@@ -90,6 +90,25 @@ function json(body: unknown, status = 200): Response {
   })
 }
 
+// The Capacitor apps run the same frontend from a local webview origin, so
+// their requests arrive cross-origin (the web app is same-origin and sends
+// no Origin header worth matching). Only the shell origins are allowed.
+const ALLOWED_ORIGINS = new Set([
+  'capacitor://localhost', // iOS shell
+  'https://localhost', // Android shell (androidScheme: https)
+])
+
+function corsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get('origin')
+  if (!origin || !ALLOWED_ORIGINS.has(origin)) return {}
+  return {
+    'access-control-allow-origin': origin,
+    'access-control-allow-methods': 'POST, OPTIONS',
+    'access-control-allow-headers': 'content-type',
+    vary: 'Origin',
+  }
+}
+
 function isValidMessages(value: unknown): value is WireMessage[] {
   return (
     Array.isArray(value) &&
@@ -351,6 +370,14 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
 }
 
 export default async (req: Request): Promise<Response> => {
+  const cors = corsHeaders(req)
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors })
+  const res = await handleChat(req)
+  for (const [k, v] of Object.entries(cors)) res.headers.set(k, v)
+  return res
+}
+
+async function handleChat(req: Request): Promise<Response> {
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
 
   let body: ChatRequest

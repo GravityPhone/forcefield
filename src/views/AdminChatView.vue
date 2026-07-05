@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
+import { apiBase } from '@/lib/native'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 
@@ -87,7 +88,7 @@ async function send() {
   })
 
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch(`${apiBase}/api/chat`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ apiKey: apiKey.value, messages: wireMessages, timezone, localTime }),

@@ -47,5 +47,6 @@ Capacitor 8 uses Swift Package Manager (no CocoaPods). On the Mac:
   icon + 2732×2732 splash source, `npx capacitor-assets generate`).
 - Android: versionCode/versionName in `android/app/build.gradle`.
 - iOS: version/build in Xcode target settings; App Store Connect listing.
-- Push notifications: see the scaffolding notes in this file once step 2 lands
-  (FCM for Android, APNs key for iOS).
+- Push notifications: registration code lives in `src/lib/push.ts` (not yet
+  called at startup). The header comment there lists the exact FCM/APNs +
+  backend steps needed before enabling it.
