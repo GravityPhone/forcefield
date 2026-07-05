@@ -1,6 +1,13 @@
 # Forcefield — Requirements & Specifications
 
-## 0. Current Status (as of 2026-07-03)
+## 0. Current Status (as of 2026-07-05)
+
+**Layered mobile stack (2026-07-05):** the app now ships on three deliberate layers — one library per layer, never two component libraries:
+- **Capacitor 8 native shell** (`capacitor.config.ts`, committed `android/` + `ios/` platforms, `npm run mobile:*` scripts — see `MOBILE.md`). The Netlify web deploy is untouched; the shells wrap the same built `dist/`. Plugins wired with web fallbacks: geolocation (Hunt map locate-me button), haptics (knock-outcome taps), app (Android back → router), push-notifications (scaffold only, `src/lib/push.ts`). The admin AI chat calls the live site absolutely from the shells (CORS allowlist in `netlify/functions/chat.ts`).
+- **Reka UI behavior primitives**, themed 100% by the existing CSS-variable schemes: `src/components/ui/BottomSheet.vue` (Dialog — used by /admin/users editor, Squads/Chat composers, and the nav More sheet) and `src/components/ui/AppSelect.vue` (Select — replaced every native `<select>`).
+- **@vueuse/motion** for entrance polish (`src/lib/motion.ts` presets; no-ops under prefers-reduced-motion).
+
+**Facelift (same date):** phones get a native-style bottom tab bar (4 role-appropriate destinations + a More sheet with the rest and Log out); desktop keeps the top tabs. Field-critical controls went big (full-width 64px Next, 56px squad/chat primary actions); browse/manage screens stay compact.
 
 This doc below is the original requirements/planning spec — left intact as a reference, but it now reads ahead of what's actually built in places. This section is the accurate summary.
 
