@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
+import AppSelect from '@/components/ui/AppSelect.vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import type { Campaign, Team } from '@/types'
@@ -90,6 +91,13 @@ function campaignName(id: string | null): string {
 function teamsIn(campaignId: string | null): Team[] {
   return teams.value.filter((t) => t.campaign_id === campaignId)
 }
+
+// Reka's Select reserves the empty-string value, so "(no campaign)" rides a
+// 'none' sentinel that maps back to '' / null at the call sites.
+const campaignOptions = computed(() => [
+  { value: 'none', label: '(no campaign)' },
+  ...campaigns.value.map((c) => ({ value: c.id, label: c.name })),
+])
 </script>
 
 <template>
@@ -133,11 +141,13 @@ function teamsIn(campaignId: string | null): Team[] {
             <input id="team-name" v-model="newTeamName" placeholder="e.g. Richwood Team" />
           </div>
           <div class="field">
-            <label for="team-campaign">Campaign</label>
-            <select id="team-campaign" v-model="newTeamCampaignId">
-              <option value="">(no campaign)</option>
-              <option v-for="c in campaigns" :key="c.id" :value="c.id">{{ c.name }}</option>
-            </select>
+            <label id="team-campaign-label">Campaign</label>
+            <AppSelect
+              :model-value="newTeamCampaignId || 'none'"
+              :options="campaignOptions"
+              aria-labelledby="team-campaign-label"
+              @update:model-value="newTeamCampaignId = $event === 'none' ? '' : $event"
+            />
           </div>
           <button
             class="btn btn-primary btn-sm"
@@ -154,14 +164,13 @@ function teamsIn(campaignId: string | null): Team[] {
           <p v-if="!teamsIn(c.id).length" class="muted desc">No teams assigned yet.</p>
           <div v-for="t in teamsIn(c.id)" :key="t.id" class="team-row">
             <span class="team-name">{{ t.name }}</span>
-            <select
-              :value="t.campaign_id ?? ''"
+            <AppSelect
+              small
+              :model-value="t.campaign_id ?? 'none'"
+              :options="campaignOptions"
               :aria-label="`Campaign for ${t.name}`"
-              @change="assignTeam(t, ($event.target as HTMLSelectElement).value)"
-            >
-              <option value="">(no campaign)</option>
-              <option v-for="opt in campaigns" :key="opt.id" :value="opt.id">{{ opt.name }}</option>
-            </select>
+              @update:model-value="assignTeam(t, $event === 'none' ? '' : $event)"
+            />
           </div>
         </div>
 
@@ -169,14 +178,13 @@ function teamsIn(campaignId: string | null): Team[] {
           <h3>Unassigned teams</h3>
           <div v-for="t in teamsIn(null)" :key="t.id" class="team-row">
             <span class="team-name">{{ t.name }}</span>
-            <select
-              :value="t.campaign_id ?? ''"
+            <AppSelect
+              small
+              :model-value="t.campaign_id ?? 'none'"
+              :options="campaignOptions"
               :aria-label="`Campaign for ${t.name}`"
-              @change="assignTeam(t, ($event.target as HTMLSelectElement).value)"
-            >
-              <option value="">(no campaign)</option>
-              <option v-for="opt in campaigns" :key="opt.id" :value="opt.id">{{ opt.name }}</option>
-            </select>
+              @update:model-value="assignTeam(t, $event === 'none' ? '' : $event)"
+            />
           </div>
         </div>
       </template>
@@ -231,7 +239,7 @@ function teamsIn(campaignId: string | null): Team[] {
   font-weight: 600;
 }
 
-.team-row select {
+.team-row :deep(.sel-trigger) {
   max-width: 12rem;
 }
 </style>

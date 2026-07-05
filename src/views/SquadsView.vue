@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
+import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import { useSquadsStore, type SquadListItem } from '@/stores/squads'
 import type { ChatProfile } from '@/types'
@@ -89,32 +90,26 @@ function memberNames(squad: SquadListItem): string {
       </div>
     </div>
 
-    <!-- New squad dialog -->
-    <div v-if="composing" class="overlay" @click.self="composing = false">
-      <div class="dialog card">
-        <h3>New squad</h3>
-        <p class="muted hint">
-          Name today's crew and optionally add people now — anyone can also join on their own.
-          A squad chat is created automatically.
-        </p>
-        <div class="field">
-          <label for="squad-name">Squad name</label>
-          <input id="squad-name" v-model="squadName" placeholder="e.g. Richwood crew" />
-        </div>
-        <UserPicker v-model="picked" />
-        <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>
-        <div class="dialog-actions">
-          <button class="btn" @click="composing = false">Cancel</button>
-          <button
-            class="btn btn-primary"
-            :disabled="creating || !squadName.trim()"
-            @click="createSquad"
-          >
-            {{ creating ? 'Creating…' : 'Create squad' }}
-          </button>
-        </div>
+    <!-- New squad sheet -->
+    <BottomSheet v-model:open="composing" title="New squad" aria-label="New squad">
+      <p class="muted hint">
+        Name today's crew and optionally add people now — anyone can also join on their own.
+        A squad chat is created automatically.
+      </p>
+      <div class="field">
+        <label for="squad-name">Squad name</label>
+        <input id="squad-name" v-model="squadName" placeholder="e.g. Richwood crew" />
       </div>
-    </div>
+      <UserPicker v-model="picked" />
+      <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>
+      <button
+        class="btn btn-primary btn-block create-btn"
+        :disabled="creating || !squadName.trim()"
+        @click="createSquad"
+      >
+        {{ creating ? 'Creating…' : 'Create squad' }}
+      </button>
+    </BottomSheet>
   </AppShell>
 </template>
 
@@ -131,7 +126,8 @@ function memberNames(squad: SquadListItem): string {
 }
 
 .new-squad-btn {
-  align-self: flex-start;
+  min-height: 56px;
+  font-size: 1.05rem;
 }
 
 .squad-card {
@@ -181,29 +177,9 @@ function memberNames(squad: SquadListItem): string {
   font-size: 0.88rem;
 }
 
-.overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 18, 30, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  z-index: 50;
-}
-
-.dialog {
-  width: min(440px, 100%);
-  max-height: 85dvh;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
-}
-
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
+/* Creating today's crew is a primary field action — full-width, can't-miss. */
+.create-btn {
+  min-height: 56px;
+  font-size: 1.05rem;
 }
 </style>

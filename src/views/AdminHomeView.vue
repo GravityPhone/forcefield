@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
+import AppSelect from '@/components/ui/AppSelect.vue'
 import { supabase } from '@/lib/supabase'
 import { METRIC_LABELS } from '@/types'
 import type { LeaderboardMetric, LeaderboardSettings } from '@/types'
+
+const metricOptions = Object.entries(METRIC_LABELS).map(([value, label]) => ({ value, label }))
 
 const settings = ref<LeaderboardSettings | null>(null)
 const saving = ref(false)
@@ -44,12 +47,13 @@ async function saveSettings() {
         <h3>Leaderboards</h3>
         <template v-if="settings">
           <div class="field">
-            <label for="primary-metric">Ranking metric</label>
-            <select id="primary-metric" v-model="settings.primary_metric">
-              <option v-for="(label, value) in METRIC_LABELS" :key="value" :value="value as LeaderboardMetric">
-                {{ label }}
-              </option>
-            </select>
+            <label id="primary-metric-label">Ranking metric</label>
+            <AppSelect
+              :model-value="settings.primary_metric"
+              :options="metricOptions"
+              aria-labelledby="primary-metric-label"
+              @update:model-value="settings.primary_metric = $event as LeaderboardMetric"
+            />
           </div>
           <label class="check">
             <input type="checkbox" v-model="settings.doors_board_enabled" />

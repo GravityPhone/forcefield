@@ -95,10 +95,12 @@ function disabledFor(requiresPerson: boolean): boolean {
   font-size: 0.85rem;
 }
 
+/* The single most-tapped button in the app — full width, can't miss it
+ * walking between doors in the sun. */
 .next-btn {
-  min-height: 56px;
-  font-size: 1.05rem;
-  align-self: flex-end;
-  min-width: 140px;
+  width: 100%;
+  min-height: 64px;
+  font-size: 1.15rem;
+  font-weight: 700;
 }
 </style>

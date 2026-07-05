@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { register } from 'vue-advanced-chat'
 import AppShell from '@/components/AppShell.vue'
+import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import ChatMemberList from '@/components/chat/ChatMemberList.vue'
 import { useChatStore } from '@/stores/chat'
@@ -233,53 +234,51 @@ async function addPeople() {
       ></vue-advanced-chat>
     </div>
 
-    <!-- New chat / join squad dialog -->
-    <div v-if="composing" class="overlay" @click.self="composing = false">
-      <div class="dialog card">
-        <h3>Start a chat</h3>
-        <p class="muted hint">
-          Pick one or more people on your campaign. Give it a name to form today's squad —
-          an open crew anyone can join, with its own chat; leave the name off for a private
-          message.
-        </p>
-        <UserPicker v-model="picked" />
-        <div class="field">
-          <label for="chat-name">Squad name (optional)</label>
-          <input id="chat-name" v-model="chatName" placeholder="e.g. Richwood crew" />
-        </div>
-        <p v-if="chat.sendError" class="send-error">{{ chat.sendError }}</p>
-        <div class="dialog-actions">
-          <button class="btn" @click="composing = false">Cancel</button>
-          <button class="btn btn-primary" :disabled="creating || !picked.length" @click="createChat">
-            {{ creating ? 'Starting…' : 'Start chat' }}
-          </button>
-        </div>
-
-        <div v-if="joinableSquads.length" class="joinable">
-          <h4 class="muted">Open squads you can join</h4>
-          <button v-for="c in joinableSquads" :key="c.id" class="squad-row" @click="joinSquad(c.id)">
-            <span class="squad-name">👥 {{ chat.chatTitle(c) }}</span>
-            <span class="muted">
-              {{ c.members.length }} member{{ c.members.length === 1 ? '' : 's' }} · tap to join
-            </span>
-          </button>
-        </div>
+    <!-- New chat / join squad sheet -->
+    <BottomSheet v-model:open="composing" title="Start a chat" aria-label="Start a chat">
+      <p class="muted hint">
+        Pick one or more people on your campaign. Give it a name to form today's squad —
+        an open crew anyone can join, with its own chat; leave the name off for a private
+        message.
+      </p>
+      <UserPicker v-model="picked" />
+      <div class="field">
+        <label for="chat-name">Squad name (optional)</label>
+        <input id="chat-name" v-model="chatName" placeholder="e.g. Richwood crew" />
       </div>
-    </div>
+      <p v-if="chat.sendError" class="send-error">{{ chat.sendError }}</p>
+      <button
+        class="btn btn-primary btn-block start-btn"
+        :disabled="creating || !picked.length"
+        @click="createChat"
+      >
+        {{ creating ? 'Starting…' : 'Start chat' }}
+      </button>
 
-    <!-- Add people dialog -->
-    <div v-if="addingPeople && chat.activeChat" class="overlay" @click.self="addingPeople = false">
-      <div class="dialog card">
-        <h3>Add people to {{ chat.chatTitle(chat.activeChat) }}</h3>
+      <div v-if="joinableSquads.length" class="joinable">
+        <h4 class="muted">Open squads you can join</h4>
+        <button v-for="c in joinableSquads" :key="c.id" class="squad-row" @click="joinSquad(c.id)">
+          <span class="squad-name">👥 {{ chat.chatTitle(c) }}</span>
+          <span class="muted">
+            {{ c.members.length }} member{{ c.members.length === 1 ? '' : 's' }} · tap to join
+          </span>
+        </button>
+      </div>
+    </BottomSheet>
+
+    <!-- Add people sheet -->
+    <BottomSheet
+      v-model:open="addingPeople"
+      :title="chat.activeChat ? `Add people to ${chat.chatTitle(chat.activeChat)}` : 'Add people'"
+      aria-label="Add people"
+    >
+      <template v-if="chat.activeChat">
         <UserPicker v-model="pickedToAdd" :exclude="chat.activeChat.members.map((m) => m.id)" />
-        <div class="dialog-actions">
-          <button class="btn" @click="addingPeople = false">Cancel</button>
-          <button class="btn btn-primary" :disabled="!pickedToAdd.length" @click="addPeople">
-            Add
-          </button>
-        </div>
-      </div>
-    </div>
+        <button class="btn btn-primary btn-block" :disabled="!pickedToAdd.length" @click="addPeople">
+          Add
+        </button>
+      </template>
+    </BottomSheet>
   </AppShell>
 </template>
 
@@ -352,44 +351,8 @@ async function addPeople() {
   font-weight: 600;
 }
 
-.overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 18, 30, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  z-index: 50;
-  animation: overlay-in 0.15s ease-out;
-}
-
-.dialog {
-  width: min(440px, 100%);
-  max-height: 85dvh;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0.9rem;
-  animation: dialog-in 0.15s ease-out;
-}
-
-@keyframes overlay-in {
-  from {
-    opacity: 0;
-  }
-}
-
-@keyframes dialog-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px) scale(0.98);
-  }
-}
-
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
+.start-btn {
+  min-height: 56px;
+  font-size: 1.05rem;
 }
 </style>
