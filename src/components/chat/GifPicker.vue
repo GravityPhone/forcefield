@@ -7,7 +7,11 @@ import BottomSheet from '@/components/ui/BottomSheet.vue'
 const open = defineModel<boolean>('open', { default: false })
 const emit = defineEmits<{ pick: [url: string] }>()
 
-const TENOR_KEY = 'LIVDSRZULELA'
+// Preferred: a real Tenor v2 key (Google Cloud, referrer-restricted — safe
+// in the browser) via VITE_TENOR_API_KEY. Fallback: Tenor v1's shared demo
+// key, which works from some networks but rejects others.
+const TENOR_V2_KEY = import.meta.env.VITE_TENOR_API_KEY ?? ''
+const TENOR_V1_KEY = 'LIVDSRZULELA'
 
 interface GifResult {
   id: string
@@ -22,29 +26,42 @@ const failed = ref(false)
 let timer: ReturnType<typeof setTimeout> | undefined
 let requestSeq = 0
 
+/** v1 and v2 differ in host, param names, and where the media formats live. */
+function tenorUrl(q: string): string {
+  const query = q.trim()
+  if (TENOR_V2_KEY) {
+    return query
+      ? `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=${TENOR_V2_KEY}&limit=24&media_filter=gif,tinygif`
+      : `https://tenor.googleapis.com/v2/featured?key=${TENOR_V2_KEY}&limit=24&media_filter=gif,tinygif`
+  }
+  return query
+    ? `https://g.tenor.com/v1/search?q=${encodeURIComponent(query)}&key=${TENOR_V1_KEY}&limit=24`
+    : `https://g.tenor.com/v1/trending?key=${TENOR_V1_KEY}&limit=24`
+}
+
+interface TenorEntry {
+  id: string
+  media?: Record<string, { url: string }>[] // v1
+  media_formats?: Record<string, { url: string }> // v2
+}
+
+function toResult(r: TenorEntry): GifResult {
+  const formats = r.media_formats ?? r.media?.[0] ?? {}
+  return { id: r.id, preview: formats.tinygif?.url ?? '', full: formats.gif?.url ?? '' }
+}
+
 async function fetchGifs(q: string) {
   const seq = ++requestSeq
   loading.value = true
   failed.value = false
-  const url = q.trim()
-    ? `https://g.tenor.com/v1/search?q=${encodeURIComponent(q.trim())}&key=${TENOR_KEY}&limit=24`
-    : `https://g.tenor.com/v1/trending?key=${TENOR_KEY}&limit=24`
   try {
-    const res = await fetch(url)
+    const res = await fetch(tenorUrl(q))
     // Tenor's errors come back as JSON too — without this check they'd
     // parse to zero results and read as a silent "Nothing found".
     if (!res.ok) throw new Error(`Tenor ${res.status}`)
-    const data = (await res.json()) as {
-      results?: { id: string; media: Record<string, { url: string }>[] }[]
-    }
+    const data = (await res.json()) as { results?: TenorEntry[] }
     if (seq !== requestSeq) return // a newer search superseded this one
-    results.value = (data.results ?? [])
-      .map((r) => ({
-        id: r.id,
-        preview: r.media?.[0]?.tinygif?.url ?? '',
-        full: r.media?.[0]?.gif?.url ?? '',
-      }))
-      .filter((r) => r.preview && r.full)
+    results.value = (data.results ?? []).map(toResult).filter((r) => r.preview && r.full)
   } catch {
     if (seq === requestSeq) failed.value = true
   } finally {
