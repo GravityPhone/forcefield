@@ -427,6 +427,30 @@ export const useChatStore = defineStore('chat', {
       }
     },
 
+    /** Send a GIF picked from the GIF sheet — already hosted (Tenor CDN), so
+     * no upload step, just a file descriptor the widget renders as an image. */
+    async sendGif(url: string) {
+      const auth = useAuthStore()
+      const chatId = this.activeChatId
+      if (!auth.profile || !chatId) return
+      this.sendError = ''
+      await ensureFreshSession()
+      const message: ChatMessage = {
+        id: crypto.randomUUID(),
+        chat_id: chatId,
+        sender_id: auth.profile.id,
+        body: '',
+        files: [{ name: 'GIF', size: 0, type: 'gif', url, preview: url }],
+        created_at: new Date().toISOString(),
+      }
+      this.messages.push(message)
+      const { error } = await supabase.from('chat_messages').insert(message)
+      if (error) {
+        this.messages = this.messages.filter((m) => m.id !== message.id)
+        this.sendError = 'GIF failed to send — check your connection.'
+      }
+    },
+
     /** Create a squad (named, open) or PM (unnamed, invite-only) and open it. */
     async createChat(kind: 'squad' | 'dm', name: string | null, memberIds: string[]) {
       const auth = useAuthStore()

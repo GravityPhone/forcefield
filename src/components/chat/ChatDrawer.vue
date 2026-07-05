@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import ChatMemberList from '@/components/chat/ChatMemberList.vue'
+import GifPicker from '@/components/chat/GifPicker.vue'
 import { useChatStore, type ChatListItem, type OutgoingFile } from '@/stores/chat'
 import { useSquadsStore } from '@/stores/squads'
 import { useAuthStore } from '@/stores/auth'
@@ -334,6 +335,12 @@ function onMenuAction(e: Event) {
 // --- New chat / join squad / add people sheets (ported from the old /chat
 // page — the drawer is chat's only home now). ---
 
+const gifOpen = ref(false)
+
+async function onGifPick(url: string) {
+  await chat.sendGif(url)
+}
+
 const composing = ref(false)
 const chatName = ref('')
 const picked = ref<ChatProfile[]>([])
@@ -489,6 +496,7 @@ async function addPeople() {
             :messageActions.prop="messageActions"
             :menuActions.prop="menuActions"
             :show-add-room="false"
+            :show-audio="false"
             :single-room="true"
             @fetch-messages="onFetchMessages"
             @send-message="onSendMessage"
@@ -497,9 +505,14 @@ async function addPeople() {
             @menu-action-handler="onMenuAction"
           ></vue-advanced-chat>
         </div>
+        <div class="composer-extras">
+          <button class="gif-btn" @click="gifOpen = true">GIF</button>
+        </div>
         <p v-if="chat.sendError" class="send-error">{{ chat.sendError }}</p>
       </template>
     </aside>
+
+    <GifPicker v-model:open="gifOpen" @pick="onGifPick" />
 
     <!-- New chat / join squad sheet -->
     <BottomSheet v-model:open="composing" title="Start a chat" aria-label="Start a chat">
@@ -777,6 +790,29 @@ async function addPeople() {
 .widget-box {
   flex: 1;
   min-height: 0;
+}
+
+.composer-extras {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.gif-btn {
+  min-height: 36px;
+  padding: 0.25rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.gif-btn:hover {
+  background: var(--surface-2);
 }
 
 .send-error {
