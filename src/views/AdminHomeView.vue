@@ -73,6 +73,12 @@ async function saveSettings() {
       </div>
 
       <div class="card">
+        <h3>Campaigns &amp; Teams</h3>
+        <p class="muted">Create campaigns and assign teams to them.</p>
+        <router-link class="btn btn-primary btn-sm" to="/admin/campaigns">Manage</router-link>
+      </div>
+
+      <div class="card">
         <h3>Users &amp; Roles</h3>
         <p class="muted">Manage accounts, elevate roles, create admins. Coming soon.</p>
       </div>

@@ -29,7 +29,36 @@ export interface Profile {
 export interface Team {
   id: string
   name: string
+  campaign_id: string | null
   created_at: string
+}
+
+/** Long-lived effort (e.g. "UBI") that teams are assigned to. */
+export interface Campaign {
+  id: string
+  name: string
+  description: string | null
+  is_active: boolean
+  created_by: string | null
+  created_at: string
+}
+
+/** Day crew: formed by anyone, dissolves at midnight (squad_date scopes it
+ * to one workday — the app only shows squads dated today). Each squad gets
+ * its own squad chat, created alongside it. */
+export interface Squad {
+  id: string
+  name: string
+  chat_id: string | null
+  created_by: string | null
+  squad_date: string
+  created_at: string
+}
+
+export interface SquadMember {
+  squad_id: string
+  user_id: string
+  joined_at: string
 }
 
 export const ROLE_LABELS: Record<AppRole, string> = {

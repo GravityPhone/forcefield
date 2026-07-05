@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import AppShell from '@/components/AppShell.vue'
 import { supabase } from '@/lib/supabase'
+import { localToday, startOfLocalDayISO } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
 import { METRIC_LABELS } from '@/types'
 import type {
@@ -12,6 +13,17 @@ import type {
   TeamLeaderboardRow,
 } from '@/types'
 
+/** Aggregated client-side: squads are tiny (a day's crews) and today's
+ * knocks are already a filtered query, so no SQL view is needed. */
+interface SquadBoardRow {
+  squad_id: string
+  squad_name: string
+  member_count: number
+  doors_knocked: number
+  signatures: number
+  isMine: boolean
+}
+
 const auth = useAuthStore()
 const myId = auth.profile?.id ?? null
 const myTeamId = auth.profile?.team_id ?? null
@@ -19,6 +31,7 @@ const myTeamId = auth.profile?.team_id ?? null
 const settings = ref<LeaderboardSettings | null>(null)
 const canvassers = ref<CanvasserLeaderboardRow[]>([])
 const teams = ref<TeamLeaderboardRow[]>([])
+const squadRows = ref<SquadBoardRow[]>([])
 const loading = ref(true)
 // Spec default: your own team, with an org-wide toggle. Teamless users
 // (e.g. the seed admin) start org-wide.
@@ -32,11 +45,51 @@ async function loadAll() {
     supabase.from('leaderboard_settings').select('*').eq('id', true).single(),
     supabase.from('canvasser_leaderboard').select('*'),
     supabase.from('team_leaderboard').select('*'),
+    loadSquadBoard(),
   ])
   loading.value = false
   if (s.data) settings.value = s.data as LeaderboardSettings
   if (c.data) canvassers.value = c.data as CanvasserLeaderboardRow[]
   if (t.data) teams.value = t.data as TeamLeaderboardRow[]
+}
+
+/** Today's squads ranked by what their members knocked today. Members'
+ * knocks count from local midnight (not from when they joined the squad) —
+ * a squad is "who you're crewing with today", not a signup timestamp. */
+async function loadSquadBoard() {
+  const [squadsRes, knocksRes] = await Promise.all([
+    supabase
+      .from('squads')
+      .select('id, name, chat_id, squad_members(user_id)')
+      .eq('squad_date', localToday()),
+    supabase
+      .from('knock_logs')
+      .select('canvasser_id, outcome')
+      .gte('occurred_at', startOfLocalDayISO()),
+  ])
+  type SquadRow = { id: string; name: string; squad_members: { user_id: string }[] }
+  const knocks = (knocksRes.data ?? []) as { canvasser_id: string; outcome: string }[]
+
+  const doorsBy = new Map<string, number>()
+  const signaturesBy = new Map<string, number>()
+  for (const k of knocks) {
+    doorsBy.set(k.canvasser_id, (doorsBy.get(k.canvasser_id) ?? 0) + 1)
+    if (k.outcome === 'signed') {
+      signaturesBy.set(k.canvasser_id, (signaturesBy.get(k.canvasser_id) ?? 0) + 1)
+    }
+  }
+
+  squadRows.value = ((squadsRes.data ?? []) as SquadRow[]).map((s) => {
+    const memberIds = s.squad_members.map((m) => m.user_id)
+    return {
+      squad_id: s.id,
+      squad_name: s.name,
+      member_count: memberIds.length,
+      doors_knocked: memberIds.reduce((sum, id) => sum + (doorsBy.get(id) ?? 0), 0),
+      signatures: memberIds.reduce((sum, id) => sum + (signaturesBy.get(id) ?? 0), 0),
+      isMine: myId != null && memberIds.includes(myId),
+    }
+  })
 }
 
 const primaryMetric = computed<LeaderboardMetric>(
@@ -176,6 +229,37 @@ onUnmounted(() => {
             </tbody>
           </table>
           </div>
+        </div>
+
+        <div v-if="squadRows.length" class="card">
+          <h3>Squads — today</h3>
+          <div class="board-scroll">
+          <table class="board">
+            <thead>
+              <tr>
+                <th class="rank">#</th>
+                <th>Squad</th>
+                <th class="num">Members</th>
+                <th class="num">{{ METRIC_LABELS[primaryMetric] }}</th>
+                <th class="num">{{ METRIC_LABELS[primaryMetric === 'doors' ? 'signatures' : 'doors'] }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="(s, i) in ranked(squadRows, primaryMetric)"
+                :key="s.squad_id"
+                :class="{ me: s.isMine }"
+              >
+                <td class="rank">{{ i + 1 }}</td>
+                <td>{{ s.squad_name }}{{ s.isMine ? ' (your squad)' : '' }}</td>
+                <td class="num muted">{{ s.member_count }}</td>
+                <td class="num">{{ metricOf(s, primaryMetric) }}</td>
+                <td class="num muted">{{ metricOf(s, primaryMetric === 'doors' ? 'signatures' : 'doors') }}</td>
+              </tr>
+            </tbody>
+          </table>
+          </div>
+          <p class="muted empty-note">Counts each member's knocks since midnight. Squads reset daily.</p>
         </div>
 
         <div class="card">

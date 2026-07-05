@@ -78,6 +78,7 @@ onUnmounted(() => {
         </template>
         <router-link v-else :to="homePath">Home</router-link>
         <router-link to="/chat">Chat</router-link>
+        <router-link to="/squads">Squads</router-link>
         <router-link to="/bulletin">Bulletin</router-link>
         <router-link to="/leaderboard">Leaderboard</router-link>
         <router-link to="/appearance">Appearance</router-link>

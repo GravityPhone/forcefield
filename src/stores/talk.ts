@@ -8,6 +8,7 @@ import type { Address, KnockLog, KnockOutcome, NewKnock, Person } from '@/types'
 
 const WALK_DIRECTION_KEY = 'forcefield.walk_direction'
 const WALK_PARITY_KEY = 'forcefield.walk_parity'
+const KNOCK_PARTLY_SIGNED_KEY = 'forcefield.knock_partly_signed'
 
 /** Person search hit with its address embedded (null for unlinked walk-ups). */
 export interface PersonHit extends Person {
@@ -35,6 +36,10 @@ interface TalkState {
    * house numbers ascending/descending, one side of the street or both. */
   walkDirection: WalkDirection
   walkParity: WalkParity
+  /** Whether Next stops at doors where someone signed but other residents
+   * haven't yet — some pushes chase every signature in a household, others
+   * treat one signature as door-done. Per-device, like the walk prefs. */
+  knockPartlySigned: boolean
 }
 
 const SEARCH_DEBOUNCE_MS = 250
@@ -55,6 +60,7 @@ export const useTalkStore = defineStore('talk', {
     activeClientId: null,
     walkDirection: (localStorage.getItem(WALK_DIRECTION_KEY) as WalkDirection) || 'ascending',
     walkParity: (localStorage.getItem(WALK_PARITY_KEY) as WalkParity) || 'both',
+    knockPartlySigned: localStorage.getItem(KNOCK_PARTLY_SIGNED_KEY) !== 'false',
   }),
 
   actions: {
@@ -209,6 +215,11 @@ export const useTalkStore = defineStore('talk', {
       localStorage.setItem(WALK_PARITY_KEY, parity)
     },
 
+    setKnockPartlySigned(knock: boolean) {
+      this.knockPartlySigned = knock
+      localStorage.setItem(KNOCK_PARTLY_SIGNED_KEY, String(knock))
+    },
+
     /** Canvasser confirms before the screen clears. The outcome itself was
      * already written by logOutcome — this just moves on, auto-advancing to
      * the next house on the street per walkDirection/walkParity (falling
@@ -223,7 +234,9 @@ export const useTalkStore = defineStore('talk', {
 
       const current = this.selectedAddress
       if (!current) return
-      const next = await findNextOnStreet(current, this.walkDirection, this.walkParity)
+      const next = await findNextOnStreet(current, this.walkDirection, this.walkParity, {
+        knockPartlySigned: this.knockPartlySigned,
+      })
       if (next) await this.loadAddress(next.id)
     },
   },

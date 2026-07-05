@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import type { RealtimeChannel } from '@supabase/supabase-js'
 import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import { geocodeAndCache } from '@/lib/geocode'
 import { supabase } from '@/lib/supabase'
+import { startOfLocalDayISO } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
 import { useTalkStore } from '@/stores/talk'
 import { OUTCOME_HEX, PIN_DEFAULT_HEX, knockButtonHex } from '@/lib/outcomes'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import OutcomeIndicatorGrid from './OutcomeIndicatorGrid.vue'
-import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockOutcome, Person } from '@/types'
+import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockLog, KnockOutcome, Person } from '@/types'
 
 // Fallback map center: Richwood, OH (the imported demo subset).
 const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
@@ -68,6 +70,10 @@ function setPinMode(mode: PinMode) {
 const locatedAddress = ref<AddressWithRoster | null>(null)
 const statusByHousehold = ref<Map<string, KnockOutcome>>(new Map())
 const summaryByHousehold = ref<Map<string, HouseholdKnockSummary>>(new Map())
+/** Doors anyone in the org knocked since local midnight — the "someone was
+ * already here today" signal on pins and result rows, so crews working the
+ * same turf don't double-knock. Kept live via the realtime feed below. */
+const knockedToday = ref<Set<string>>(new Set())
 const loadError = ref('')
 
 let map: google.maps.Map | null = null
@@ -109,22 +115,34 @@ function scrollHuntToTop() {
 /** Only geocoded addresses get pins — a much smaller, growing-over-time set
  * (Talk mode, and now Hunt's "locate", both geocode on demand). */
 async function fetchMapData() {
-  const [addressesRes, statusRes, summaryRes] = await Promise.all([
+  const [addressesRes, statusRes, summaryRes, todayRes] = await Promise.all([
     supabase.from('addresses').select('*, persons(count)').not('lat', 'is', null).limit(2000),
     supabase.from('household_latest_knock').select('*'),
     supabase.from('household_knock_summary').select('*'),
+    fetchKnockedToday(),
   ])
   if (addressesRes.error) throw addressesRes.error
-  applyStatusAndSummary(statusRes.data, summaryRes.data)
+  applyStatusAndSummary(statusRes.data, summaryRes.data, todayRes)
   return (addressesRes.data ?? []) as AddressWithRoster[]
+}
+
+async function fetchKnockedToday(): Promise<Set<string>> {
+  const { data } = await supabase
+    .from('knock_logs')
+    .select('household_id')
+    .gte('occurred_at', startOfLocalDayISO())
+    .not('household_id', 'is', null)
+  return new Set((data ?? []).map((r) => r.household_id as string))
 }
 
 function applyStatusAndSummary(
   statusData: HouseholdLatestKnock[] | null,
   summaryData: HouseholdKnockSummary[] | null,
+  todayData?: Set<string>,
 ) {
   statusByHousehold.value = new Map((statusData ?? []).map((s) => [s.household_id, s.outcome]))
   summaryByHousehold.value = new Map((summaryData ?? []).map((s) => [s.household_id, s]))
+  if (todayData) knockedToday.value = todayData
 }
 
 /** Each pin is a plain DOM dot (AdvancedMarkerElement content) rather than a
@@ -145,6 +163,10 @@ function styleMarker(marker: google.maps.marker.AdvancedMarkerElement, addressId
   s.cursor = 'pointer'
   s.background = outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
   s.border = isLocated ? '3px solid #111' : '1.5px solid #ffffff'
+  // Dark halo = someone already knocked here today (any canvasser) — the
+  // "don't re-knock" cue, distinct from the located pin's solid dark border.
+  s.outline = knockedToday.value.has(addressId) ? '2px solid #111' : ''
+  s.outlineOffset = '1.5px'
   s.boxShadow = '0 0 3px rgba(0, 0, 0, 0.45)'
   s.color = '#ffffff'
   s.display = 'flex'
@@ -276,12 +298,37 @@ async function initialize() {
 /** Re-pull statuses/summaries and recolor existing pins (cheap: two view
  * queries). Called whenever Hunt is revisited after logging knocks. */
 async function refreshStatuses() {
-  const [statusRes, summaryRes] = await Promise.all([
+  const [statusRes, summaryRes, todayRes] = await Promise.all([
     supabase.from('household_latest_knock').select('*'),
     supabase.from('household_knock_summary').select('*'),
+    fetchKnockedToday(),
   ])
-  applyStatusAndSummary(statusRes.data, summaryRes.data)
+  applyStatusAndSummary(statusRes.data, summaryRes.data, todayRes)
   refreshAllPinStyles()
+}
+
+// --- Live teammate knocks: when anyone on the campaign logs a door, its pin
+// recolors and picks up the today-halo immediately — a squad working the
+// same neighborhood sees each other's progress without reloading. Undo/redo
+// (DELETE/UPDATE on knock_logs) is rarer and self-corrects on the next
+// refreshStatuses, so only INSERTs are streamed. ---
+
+let knockFeed: RealtimeChannel | null = null
+
+function subscribeToKnockFeed() {
+  knockFeed = supabase
+    .channel('hunt-knock-feed')
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'knock_logs' }, (payload) => {
+      const knock = payload.new as KnockLog
+      if (!knock.household_id) return
+      statusByHousehold.value.set(knock.household_id, knock.outcome)
+      if (new Date(knock.occurred_at) >= new Date(startOfLocalDayISO())) {
+        knockedToday.value.add(knock.household_id)
+      }
+      const marker = markersByAddress.get(knock.household_id)
+      if (marker) styleMarker(marker, knock.household_id)
+    })
+    .subscribe()
 }
 
 // --- Search (people + addresses, like Talk's search) ---
@@ -334,6 +381,10 @@ function householdSize(address: Partial<RosterCount> | null | undefined): number
 function knockColorFor(addressId: string | null | undefined): string {
   if (!addressId) return knockButtonHex(null)
   return knockButtonHex(statusByHousehold.value.get(addressId))
+}
+
+function wasKnockedToday(addressId: string | null | undefined): boolean {
+  return !!addressId && knockedToday.value.has(addressId)
 }
 
 const locatedStatusClass = computed(() => {
@@ -518,12 +569,17 @@ onMounted(() => {
     resizeObserver.observe(resultsListEl.value)
   }
   recomputeThumb()
+  subscribeToKnockFeed()
   document.addEventListener('fullscreenchange', onFullscreenChange)
   document.addEventListener('webkitfullscreenchange', onFullscreenChange)
 })
 
 onUnmounted(() => {
   resizeObserver?.disconnect()
+  if (knockFeed) {
+    void supabase.removeChannel(knockFeed)
+    knockFeed = null
+  }
   clusterer?.clearMarkers()
   markersByAddress.clear()
   document.removeEventListener('fullscreenchange', onFullscreenChange)
@@ -540,6 +596,7 @@ onUnmounted(() => {
         <span class="result-name">
           {{ locatedAddress.street }}{{ locatedAddress.unit ? ' ' + locatedAddress.unit : '' }}
         </span>
+        <span v-if="wasKnockedToday(locatedAddress.id)" class="today-badge">Knocked today</span>
       </span>
       <OutcomeIndicatorGrid
         :summary="summaryFor(locatedAddress.id)"
@@ -648,6 +705,15 @@ onUnmounted(() => {
         <option value="even">Evens only</option>
         <option value="odd">Odds only</option>
       </select>
+      <select
+        class="walk-select"
+        :value="talk.knockPartlySigned ? 'knock' : 'skip'"
+        aria-label="Doors where someone already signed but others have not"
+        @change="talk.setKnockPartlySigned(($event.target as HTMLSelectElement).value === 'knock')"
+      >
+        <option value="knock">Knock partly-signed</option>
+        <option value="skip">Skip partly-signed</option>
+      </select>
     </div>
 
     <div class="results-list-wrap">
@@ -673,6 +739,7 @@ onUnmounted(() => {
             <span class="muted result-sub">
               {{ p.addresses ? `${p.addresses.street}${p.addresses.unit ? ' ' + p.addresses.unit : ''}` : 'No address on file' }}
             </span>
+            <span v-if="wasKnockedToday(p.household_id)" class="today-badge">Knocked today</span>
           </span>
           <OutcomeIndicatorGrid
             :summary="summaryFor(p.household_id)"
@@ -697,6 +764,7 @@ onUnmounted(() => {
         >
           <span class="result-left">
             <span class="result-name">{{ a.street }}{{ a.unit ? ' ' + a.unit : '' }}</span>
+            <span v-if="wasKnockedToday(a.id)" class="today-badge">Knocked today</span>
           </span>
           <OutcomeIndicatorGrid :summary="summaryFor(a.id)" :household-size="householdSize(a)" />
           <button
@@ -1037,6 +1105,20 @@ onUnmounted(() => {
 .knock-btn {
   flex-shrink: 0;
   font-weight: 700;
+}
+
+/* "Someone already knocked here today" — same signal as the dark halo on the
+ * map pins, in word form for the list rows and located card. */
+.today-badge {
+  align-self: flex-start;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #fff;
+  background: #111;
+  border-radius: 999px;
 }
 
 .empty {

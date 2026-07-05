@@ -23,6 +23,9 @@ const router = createRouter({
     // User-to-user chat (everyone) — distinct from the admin-only AI chat
     { path: '/chat', name: 'chat', component: () => import('@/views/ChatView.vue'), meta: { roles: [] } },
 
+    // Day crews — anyone can form or join one; resets at midnight
+    { path: '/squads', name: 'squads', component: () => import('@/views/SquadsView.vue'), meta: { roles: [] } },
+
     // Campaign bulletin (everyone reads; admins post) and leaderboards
     { path: '/bulletin', name: 'bulletin', component: () => import('@/views/BulletinView.vue'), meta: { roles: [] } },
     { path: '/leaderboard', name: 'leaderboard', component: () => import('@/views/LeaderboardView.vue'), meta: { roles: [] } },
@@ -37,6 +40,7 @@ const router = createRouter({
     { path: '/admin', name: 'admin', component: () => import('@/views/AdminHomeView.vue'), meta: { roles: ['admin'] } },
     { path: '/admin/chat', name: 'admin-chat', component: () => import('@/views/AdminChatView.vue'), meta: { roles: ['admin'] } },
     { path: '/admin/settings', name: 'admin-settings', component: () => import('@/views/AdminSettingsView.vue'), meta: { roles: ['admin'] } },
+    { path: '/admin/campaigns', name: 'admin-campaigns', component: () => import('@/views/AdminCampaignsView.vue'), meta: { roles: ['admin'] } },
 
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],

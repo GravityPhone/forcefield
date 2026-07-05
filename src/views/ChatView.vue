@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { register } from 'vue-advanced-chat'
 import AppShell from '@/components/AppShell.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import ChatMemberList from '@/components/chat/ChatMemberList.vue'
 import { useChatStore } from '@/stores/chat'
+import { useSquadsStore } from '@/stores/squads'
 import { useThemeStore } from '@/stores/theme'
 import { vacStyles } from '@/lib/themes'
 import type { ChatProfile } from '@/types'
@@ -13,6 +15,7 @@ register()
 
 const chat = useChatStore()
 const theme = useThemeStore()
+const route = useRoute()
 
 // Re-skins the (shadow-DOM) chat widget to match the account's chosen
 // scheme — the library fills in anything not overridden from its own
@@ -38,10 +41,14 @@ const currentMembers = computed(() =>
   chat.activeChat?.kind === 'global' ? chat.orgMembers : (chat.activeChat?.members ?? []),
 )
 
-onMounted(() => {
-  void chat.loadChats()
+onMounted(async () => {
+  await chat.loadChats()
   void chat.loadOrgMembers()
   chat.subscribeToMembership()
+  // Deep link from the Squads page ("Chat" on a squad card): /chat?chat=<id>
+  // lands directly in that squad's room.
+  const target = typeof route.query.chat === 'string' ? route.query.chat : null
+  if (target && chat.chats.some((c) => c.id === target)) await chat.openChat(target)
 })
 onUnmounted(() => {
   chat.closeChat()
@@ -147,11 +154,24 @@ async function createChat() {
   if (creating.value || !picked.value.length) return
   creating.value = true
   const name = chatName.value.trim()
-  await chat.createChat(
-    name ? 'squad' : 'dm',
-    name || null,
-    picked.value.map((p) => p.id),
-  )
+  if (name) {
+    // Named group = today's squad. Goes through the squads RPC (not a bare
+    // squad chat) so the crew also exists on /squads and the leaderboard.
+    const squad = await useSquadsStore().createSquad(
+      name,
+      picked.value.map((p) => p.id),
+    )
+    if (squad?.chat_id) {
+      await chat.loadChats()
+      await chat.openChat(squad.chat_id)
+    }
+  } else {
+    await chat.createChat(
+      'dm',
+      null,
+      picked.value.map((p) => p.id),
+    )
+  }
   creating.value = false
   composing.value = false
 }
@@ -218,8 +238,9 @@ async function addPeople() {
       <div class="dialog card">
         <h3>Start a chat</h3>
         <p class="muted hint">
-          Pick one or more people on your campaign (UBI). Give it a name to make it an open
-          squad anyone can join; leave the name off for a private message.
+          Pick one or more people on your campaign. Give it a name to form today's squad —
+          an open crew anyone can join, with its own chat; leave the name off for a private
+          message.
         </p>
         <UserPicker v-model="picked" />
         <div class="field">
