@@ -7,9 +7,10 @@ import BottomSheet from '@/components/ui/BottomSheet.vue'
 const open = defineModel<boolean>('open', { default: false })
 const emit = defineEmits<{ pick: [url: string] }>()
 
-// Preferred: a real Tenor v2 key (Google Cloud, referrer-restricted — safe
-// in the browser) via VITE_TENOR_API_KEY. Fallback: Tenor v1's shared demo
-// key, which works from some networks but rejects others.
+// Source priority: Giphy (the org's own key — client-side by design), then
+// a Tenor v2 key if one's ever set, then Tenor v1's shared demo key (which
+// works from some networks but rejects others).
+const GIPHY_KEY = import.meta.env.VITE_GIPHY_API_KEY ?? ''
 const TENOR_V2_KEY = import.meta.env.VITE_TENOR_API_KEY ?? ''
 const TENOR_V1_KEY = 'LIVDSRZULELA'
 
@@ -26,9 +27,13 @@ const failed = ref(false)
 let timer: ReturnType<typeof setTimeout> | undefined
 let requestSeq = 0
 
-/** v1 and v2 differ in host, param names, and where the media formats live. */
-function tenorUrl(q: string): string {
+function gifApiUrl(q: string): string {
   const query = q.trim()
+  if (GIPHY_KEY) {
+    return query
+      ? `https://api.giphy.com/v1/gifs/search?api_key=${GIPHY_KEY}&q=${encodeURIComponent(query)}&limit=24&rating=pg-13`
+      : `https://api.giphy.com/v1/gifs/trending?api_key=${GIPHY_KEY}&limit=24&rating=pg-13`
+  }
   if (TENOR_V2_KEY) {
     return query
       ? `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(query)}&key=${TENOR_V2_KEY}&limit=24&media_filter=gif,tinygif`
@@ -39,15 +44,31 @@ function tenorUrl(q: string): string {
     : `https://g.tenor.com/v1/trending?key=${TENOR_V1_KEY}&limit=24`
 }
 
+interface GiphyEntry {
+  id: string
+  images: Record<string, { url?: string }>
+}
+
 interface TenorEntry {
   id: string
   media?: Record<string, { url: string }>[] // v1
   media_formats?: Record<string, { url: string }> // v2
 }
 
-function toResult(r: TenorEntry): GifResult {
-  const formats = r.media_formats ?? r.media?.[0] ?? {}
-  return { id: r.id, preview: formats.tinygif?.url ?? '', full: formats.gif?.url ?? '' }
+function toResults(data: { data?: GiphyEntry[]; results?: TenorEntry[] }): GifResult[] {
+  if (data.data) {
+    // Giphy: fixed_height_small is a lightweight grid thumb; downsized is
+    // capped around 2 MB so chats stay loadable on field signal.
+    return data.data.map((g) => ({
+      id: g.id,
+      preview: g.images.fixed_height_small?.url ?? g.images.preview_gif?.url ?? '',
+      full: g.images.downsized?.url ?? g.images.original?.url ?? '',
+    }))
+  }
+  return (data.results ?? []).map((r) => {
+    const formats = r.media_formats ?? r.media?.[0] ?? {}
+    return { id: r.id, preview: formats.tinygif?.url ?? '', full: formats.gif?.url ?? '' }
+  })
 }
 
 async function fetchGifs(q: string) {
@@ -55,13 +76,13 @@ async function fetchGifs(q: string) {
   loading.value = true
   failed.value = false
   try {
-    const res = await fetch(tenorUrl(q))
-    // Tenor's errors come back as JSON too — without this check they'd
-    // parse to zero results and read as a silent "Nothing found".
-    if (!res.ok) throw new Error(`Tenor ${res.status}`)
-    const data = (await res.json()) as { results?: TenorEntry[] }
+    const res = await fetch(gifApiUrl(q))
+    // Both providers return their errors as JSON — without this check
+    // they'd parse to zero results and read as a silent "Nothing found".
+    if (!res.ok) throw new Error(`GIF API ${res.status}`)
+    const data = (await res.json()) as { data?: GiphyEntry[]; results?: TenorEntry[] }
     if (seq !== requestSeq) return // a newer search superseded this one
-    results.value = (data.results ?? []).map(toResult).filter((r) => r.preview && r.full)
+    results.value = toResults(data).filter((r) => r.preview && r.full)
   } catch {
     if (seq === requestSeq) failed.value = true
   } finally {
