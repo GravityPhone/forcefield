@@ -195,15 +195,14 @@ export const useChatStore = defineStore('chat', {
       this.unread = map
     },
 
-    /** Stamp the active chat read now — server row for persistence, local
-     * zero for the badge. */
+    /** Stamp the active chat read — local zero for the badge, and a server
+     * row via RPC so the timestamp comes from the SERVER clock. Stamping
+     * client time here left rooms stuck "unread" whenever a device clock
+     * drifted relative to the message timestamps. */
     markRead(chatId: string) {
       if (this.unread[chatId]) delete this.unread[chatId]
-      const myId = this.myId
-      if (!myId) return
-      void supabase
-        .from('chat_reads')
-        .upsert({ chat_id: chatId, user_id: myId, last_read_at: new Date().toISOString() })
+      if (!this.myId) return
+      void supabase.rpc('mark_chat_read', { cid: chatId })
     },
 
     async openChat(chatId: string) {
@@ -426,10 +425,13 @@ export const useChatStore = defineStore('chat', {
         sender_id: auth.profile.id,
         body: text,
         files: uploaded.length ? uploaded : null,
-        created_at: new Date().toISOString(),
+        created_at: new Date().toISOString(), // local display only
       }
       this.messages.push(message) // optimistic; our realtime echo is skipped by sender
-      const { error } = await supabase.from('chat_messages').insert(message)
+      // created_at stays out of the insert — the server clock stamps it
+      // (client clocks drift, and a future-dated message never reads as read).
+      const { created_at: _localOnly, ...payload } = message
+      const { error } = await supabase.from('chat_messages').insert(payload)
       if (error) {
         this.messages = this.messages.filter((m) => m.id !== message.id)
         this.sendError = 'Message failed to send — check your connection.'
@@ -450,10 +452,11 @@ export const useChatStore = defineStore('chat', {
         sender_id: auth.profile.id,
         body: '',
         files: [{ name: 'GIF', size: 0, type: 'gif', url, preview: url }],
-        created_at: new Date().toISOString(),
+        created_at: new Date().toISOString(), // local display only
       }
       this.messages.push(message)
-      const { error } = await supabase.from('chat_messages').insert(message)
+      const { created_at: _localOnly, ...payload } = message
+      const { error } = await supabase.from('chat_messages').insert(payload)
       if (error) {
         this.messages = this.messages.filter((m) => m.id !== message.id)
         this.sendError = 'GIF failed to send — check your connection.'
