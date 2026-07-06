@@ -196,13 +196,19 @@ export const useChatStore = defineStore('chat', {
     },
 
     /** Stamp the active chat read — local zero for the badge, and a server
-     * row via RPC so the timestamp comes from the SERVER clock. Stamping
-     * client time here left rooms stuck "unread" whenever a device clock
-     * drifted relative to the message timestamps. */
-    markRead(chatId: string) {
+     * row via RPC so the timestamp comes from the SERVER clock (a client
+     * clock can drift relative to message timestamps).
+     *
+     * The RPC MUST be awaited: supabase-js builders are lazy thenables that
+     * only send the request when awaited/.then()'d — `void supabase.rpc(...)`
+     * discards the request unsent, so no read ever reached the server and
+     * every reload resurrected the badges. */
+    async markRead(chatId: string) {
       if (this.unread[chatId]) delete this.unread[chatId]
       if (!this.myId) return
-      void supabase.rpc('mark_chat_read', { cid: chatId })
+      await ensureFreshSession()
+      const { error } = await supabase.rpc('mark_chat_read', { cid: chatId })
+      if (error) console.warn(`mark_chat_read(${chatId}) failed: ${error.message}`)
     },
 
     async openChat(chatId: string) {
@@ -225,7 +231,7 @@ export const useChatStore = defineStore('chat', {
         await this.ensureSenderProfiles(this.messages)
         void this.loadReactions(chatId)
       }
-      this.markRead(chatId)
+      void this.markRead(chatId)
       this.subscribeToReactions(chatId)
     },
 
@@ -274,7 +280,7 @@ export const useChatStore = defineStore('chat', {
             }
             // Only an actually-visible room counts as read.
             if (msg.chat_id === this.activeChatId && this.drawerOpen) {
-              this.markRead(msg.chat_id)
+              void this.markRead(msg.chat_id)
             } else {
               this.unread[msg.chat_id] = (this.unread[msg.chat_id] ?? 0) + 1
             }
