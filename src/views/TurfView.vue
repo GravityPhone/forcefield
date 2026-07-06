@@ -1,13 +1,19 @@
 <script setup lang="ts">
-// Turf cutter (team leads + admins): the same Google map as Hunt, but pins
-// are paint targets instead of knock targets. Cutting works like a
-// highlighter — tap one door to anchor a sweep, tap another door down the
-// same street to close it, and every door in that house-number range lights
-// up under a colored stroke. Sweeps stack into a draft turf that gets a
-// name and an assignee: a squad (the day crew sorts out who takes what) or
-// a single canvasser. Saving stamps addresses.turf_id server-side via the
-// set_turf_segments RPC, which is what Hunt reads to show "your turf".
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+// Turf cutter: the same Google map as Hunt, but pins are paint targets
+// instead of knock targets. Cutting works like a highlighter — tap one door
+// to anchor a sweep, tap another door down the same street to close it, and
+// every door in that house-number range lights up under a colored stroke.
+// Sweeps stack into a draft turf that gets a name and an assignee: a squad
+// (the day crew sorts out who takes what) or a single canvasser. Saving
+// stamps addresses.turf_id server-side via the set_turf_segments RPC, which
+// is what Hunt reads to show "your turf".
+//
+// Roles: campaign managers (and admins) cut anywhere. Squad leaders only
+// cut SUB-turfs — cuts inside a turf assigned to them (directly or via
+// their squad) that carve doors out of the parent, for splitting the crew's
+// assignment. RLS + the RPC enforce this server-side; the scoping here just
+// keeps the UI honest.
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import AppShell from '@/components/AppShell.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
@@ -91,6 +97,8 @@ const segments = ref<DraftSegment[]>([])
 const anchor = ref<AddressLite | null>(null)
 const parityChoice = ref<TurfParity>('both')
 const editingTurfId = ref<string | null>(null)
+/** Which of the lead's turfs a NEW sub-turf carves from (auto when one). */
+const draftParentId = ref<string | null>(null)
 // 'none' | 'squad:<id>' | 'user:<id>' — Reka's SelectItem forbids '' values.
 const assignChoice = ref('none')
 const sweepBusy = ref(false)
@@ -112,6 +120,80 @@ const streetCache = new Map<string, AddressLite[]>()
 let segKeyCounter = 0
 
 const turfColorById = computed(() => new Map(turfs.value.map((t) => [t.id, t.color])))
+
+// --- Role scoping ---
+
+const isLead = computed(() => auth.profile?.role === 'team_lead')
+/** Squads I'm a member of, any date — the squad row itself is the turf's
+ * assignment target, so membership in that squad is the credential. */
+const mySquadIds = ref<Set<string>>(new Set())
+
+/** Top-level turfs assigned to me — the only ground a lead may sub-cut. */
+const myParentTurfs = computed(() =>
+  turfs.value.filter(
+    (t) =>
+      !t.parent_turf_id &&
+      (t.assignee_id === auth.profile?.id ||
+        (t.squad_id !== null && mySquadIds.value.has(t.squad_id))),
+  ),
+)
+
+/** The pool the current draft claims doors from: the edited turf's parent,
+ * or the lead's picked parent for a fresh cut. Null = top-level cut
+ * claiming unassigned doors (campaign managers). */
+const effectiveParentId = computed(() => {
+  if (editingTurfId.value) {
+    return turfs.value.find((t) => t.id === editingTurfId.value)?.parent_turf_id ?? null
+  }
+  return isLead.value ? draftParentId.value : null
+})
+
+/** Keep the lead's parent pick valid as turfs load/refresh. */
+function defaultDraftParent() {
+  if (!isLead.value) return
+  if (draftParentId.value && myParentTurfs.value.some((t) => t.id === draftParentId.value)) return
+  draftParentId.value = myParentTurfs.value[0]?.id ?? null
+}
+
+function canManage(t: TurfWithMeta): boolean {
+  if (!isLead.value) return true
+  return t.parent_turf_id !== null && myParentTurfs.value.some((p) => p.id === t.parent_turf_id)
+}
+
+function parentName(t: { parent_turf_id: string | null }): string {
+  return turfs.value.find((p) => p.id === t.parent_turf_id)?.name ?? 'its parent turf'
+}
+
+/** Leads see only their turf + its sub-turfs; managers see everything,
+ * parents first with their sub-turfs tucked underneath. */
+const listTurfs = computed(() => {
+  const source = isLead.value
+    ? turfs.value.filter(
+        (t) =>
+          myParentTurfs.value.some((p) => p.id === t.id) ||
+          (t.parent_turf_id !== null &&
+            myParentTurfs.value.some((p) => p.id === t.parent_turf_id)),
+      )
+    : turfs.value
+  const subsByParent = new Map<string, TurfWithMeta[]>()
+  const tops: TurfWithMeta[] = []
+  for (const t of source) {
+    if (t.parent_turf_id) {
+      const arr = subsByParent.get(t.parent_turf_id)
+      if (arr) arr.push(t)
+      else subsByParent.set(t.parent_turf_id, [t])
+    } else {
+      tops.push(t)
+    }
+  }
+  const out: TurfWithMeta[] = []
+  for (const t of tops) {
+    out.push(t, ...(subsByParent.get(t.id) ?? []))
+    subsByParent.delete(t.id)
+  }
+  for (const orphans of subsByParent.values()) out.push(...orphans)
+  return out
+})
 
 // Layer toggles, persisted per device like Hunt's pin mode.
 const showAreas = ref(readMapPref('map-show-areas', true))
@@ -166,7 +248,11 @@ const hint = computed(() => {
     const a = anchor.value
     return `Anchor down at ${a.street} — tap another door on ${streetNameOf(a.street)} to sweep the range (or tap the anchor again to cancel).`
   }
-  return 'Double-tap the map to add or remove a whole street. For part of a street, tap a door, then a second door on it.'
+  const base =
+    'Double-tap the map to add or remove a whole street. For part of a street, tap a door, then a second door on it.'
+  return isLead.value
+    ? `${base} Only doors inside your assigned turf count toward a sub-turf.`
+    : base
 })
 
 // --- Assignment options: today's squads + every canvasser. A turf may point
@@ -313,7 +399,15 @@ async function initialize() {
         .then((res) => {
           people.value = (res.data ?? []) as ChatProfile[]
         }),
+      supabase
+        .from('squad_members')
+        .select('squad_id')
+        .eq('user_id', auth.profile?.id ?? '')
+        .then((res) => {
+          mySquadIds.value = new Set((res.data ?? []).map((r) => r.squad_id as string))
+        }),
     ])
+    defaultDraftParent()
   } catch {
     loadError.value = 'Could not load the map or address data. Check your connection.'
     initStarted = false
@@ -391,6 +485,7 @@ async function reloadAll() {
   const [rows] = await Promise.all([fetchAddresses(), fetchTurfs()])
   for (const a of rows) upsertMarker(a)
   streetCache.clear()
+  defaultDraftParent()
   restyleAll()
   buildSavedAreas()
 }
@@ -451,8 +546,14 @@ function matchesSegment(a: AddressLite, seg: Pick<DraftSegment, 'range_start' | 
 async function computeSegment(seg: DraftSegment) {
   const rows = await fetchStreetRows(seg.street_name, seg.city)
   const members = rows.filter((a) => matchesSegment(a, seg))
+  // Claimable mirrors set_turf_segments(): doors already in this turf, plus
+  // the pool it draws from — the parent's doors for a sub-turf, unassigned
+  // doors for a top-level cut. Everything else counts as "taken".
+  const parentId = effectiveParentId.value
   const free = members.filter(
-    (a) => !a.turf_id || a.turf_id === editingTurfId.value,
+    (a) =>
+      (editingTurfId.value !== null && a.turf_id === editingTurfId.value) ||
+      (parentId !== null ? a.turf_id === parentId : !a.turf_id && !isLead.value),
   )
   seg.memberIds = free.map((a) => a.id)
   seg.doorCount = free.length
@@ -565,10 +666,17 @@ function clearDraft() {
   draftName.value = ''
   assignChoice.value = 'none'
   saveError.value = ''
+  defaultDraftParent()
   restyleAll()
   // Restore the saved shading of whatever turf was being edited.
   buildSavedAreas()
 }
+
+// A different parent = a different claim pool: recompute every sweep so door
+// counts and shading track the pick.
+watch(draftParentId, async () => {
+  for (const seg of segments.value) await computeSegment(seg)
+})
 
 // --- Street toggling: double-click/tap anywhere on the map snaps to the
 // closest pinned door and toggles that door's ENTIRE street in or out of the
@@ -772,6 +880,10 @@ async function saveTurf() {
     saveError.value = 'Sweep at least one street range first.'
     return
   }
+  if (isLead.value && !editingTurfId.value && !draftParentId.value) {
+    saveError.value = 'No turf is assigned to you yet — your campaign manager assigns turf first.'
+    return
+  }
   saving.value = true
   try {
     const [kind, id] = assignChoice.value.split(':')
@@ -789,7 +901,13 @@ async function saveTurf() {
     } else {
       const { data, error } = await supabase
         .from('turfs')
-        .insert({ name, color: draftColor.value, ...assignment, created_by: auth.profile?.id })
+        .insert({
+          name,
+          color: draftColor.value,
+          ...assignment,
+          parent_turf_id: isLead.value ? draftParentId.value : null,
+          created_by: auth.profile?.id,
+        })
         .select('id')
         .single()
       if (error || !data) throw error ?? new Error('insert failed')
@@ -830,7 +948,10 @@ async function editTurf(t: TurfWithMeta) {
 }
 
 async function deleteTurf(t: TurfWithMeta) {
-  if (!window.confirm(`Delete turf "${t.name}"? Its doors become unassigned.`)) return
+  const consequence = t.parent_turf_id
+    ? `Its doors return to "${parentName(t)}".`
+    : 'Its doors become unassigned.'
+  if (!window.confirm(`Delete ${t.parent_turf_id ? 'sub-turf' : 'turf'} "${t.name}"? ${consequence}`)) return
   if (editingTurfId.value === t.id) clearDraft()
   await supabase.from('turfs').delete().eq('id', t.id)
   await reloadAll()
@@ -947,11 +1068,43 @@ onUnmounted(() => {
 
       <!-- Draft tray: the turf being cut. -->
       <div ref="draftCardEl" class="card draft-card" :style="{ '--draft-color': draftColor }">
+        <!-- A lead with no assigned turf has no ground to cut on. -->
+        <template v-if="isLead && !myParentTurfs.length">
+          <h3 class="draft-title">
+            <span class="draft-swatch" aria-hidden="true"></span>
+            Sub-turfs
+          </h3>
+          <p class="muted empty-note">
+            No turf is assigned to you (or a squad you're on) yet — your campaign manager cuts
+            and assigns turf. Once you have some, you can split it into sub-turfs here and hand
+            those to your canvassers.
+          </p>
+        </template>
+        <template v-else>
         <h3 class="draft-title">
           <span class="draft-swatch" aria-hidden="true"></span>
-          {{ editingTurfId ? 'Editing turf' : 'New turf' }}
+          {{ editingTurfId ? (isLead ? 'Editing sub-turf' : 'Editing turf') : isLead ? 'New sub-turf' : 'New turf' }}
           <span v-if="draftDoorCount" class="draft-count">{{ draftDoorCount }} doors</span>
         </h3>
+
+        <!-- Which turf the sub-turf carves from (auto when there's one). -->
+        <AppSelect
+          v-if="isLead && !editingTurfId && myParentTurfs.length > 1"
+          class="parent-pick"
+          small
+          :options="myParentTurfs.map((t) => ({ value: t.id, label: `Inside — ${t.name}` }))"
+          :model-value="draftParentId ?? ''"
+          aria-label="Cut inside which of your turfs"
+          @update:model-value="draftParentId = $event"
+        />
+        <p v-else-if="isLead" class="muted parent-note">
+          Cutting inside
+          <strong>{{
+            editingTurfId
+              ? parentName({ parent_turf_id: effectiveParentId })
+              : (myParentTurfs[0]?.name ?? 'your turf')
+          }}</strong>
+        </p>
 
         <template v-if="segments.length">
           <div class="seg-list">
@@ -1027,36 +1180,46 @@ onUnmounted(() => {
             </button>
           </div>
           <p v-if="draftTakenCount" class="muted">
-            {{ draftTakenCount }} swept doors stay with their current turf (first claim wins).
+            {{ draftTakenCount }} swept doors
+            {{ isLead ? 'are outside your turf or already in another cut' : 'stay with their current turf (first claim wins)' }}.
           </p>
           <p v-if="saveError" class="error">{{ saveError }}</p>
         </div>
+        </template>
       </div>
 
       <!-- Existing turfs -->
       <div class="card">
-        <h3>Turfs</h3>
-        <p v-if="!turfs.length" class="muted empty-note">
-          No turf cut yet. Squads without turf just pick their own streets.
+        <h3>{{ isLead ? 'Your turf' : 'Turfs' }}</h3>
+        <p v-if="!listTurfs.length" class="muted empty-note">
+          {{
+            isLead
+              ? 'Nothing here yet — turf your campaign manager assigns to you shows up here.'
+              : 'No turf cut yet. Squads without turf just pick their own streets.'
+          }}
         </p>
         <div v-else class="turf-list">
-          <div v-for="t in turfs" :key="t.id" class="turf-row">
+          <div v-for="t in listTurfs" :key="t.id" class="turf-row" :class="{ 'turf-row-sub': t.parent_turf_id }">
             <div class="turf-row-top">
               <button class="turf-row-main" @click="focusTurf(t.id)">
                 <span class="turf-swatch" :style="{ background: t.color }" aria-hidden="true"></span>
                 <span class="turf-row-text">
-                  <span class="turf-name">{{ t.name }}</span>
+                  <span class="turf-name">
+                    {{ t.name }}
+                    <span v-if="t.parent_turf_id" class="muted turf-sub-tag">↳ inside {{ parentName(t) }}</span>
+                  </span>
                   <span class="muted turf-segments">
                     {{ t.turf_segments.map(segmentLabel).join(' · ') || 'No street ranges' }}
                   </span>
                 </span>
               </button>
-              <div class="turf-row-actions">
+              <div v-if="canManage(t)" class="turf-row-actions">
                 <button class="btn btn-ghost btn-sm" @click="editTurf(t)">Edit</button>
                 <button class="btn btn-ghost btn-sm turf-delete" @click="deleteTurf(t)">Delete</button>
               </div>
             </div>
             <AppSelect
+              v-if="canManage(t)"
               class="turf-row-assign"
               small
               :options="assignOptionsFor(t)"
@@ -1476,6 +1639,26 @@ onUnmounted(() => {
 
 .turf-name {
   font-weight: 700;
+}
+
+/* Sub-turfs tuck under their parent in the list. */
+.turf-row-sub {
+  margin-left: 1.1rem;
+  border-left: 3px solid var(--border);
+}
+
+.turf-sub-tag {
+  font-weight: 500;
+  font-size: 0.78rem;
+}
+
+.parent-pick {
+  align-self: flex-start;
+}
+
+.parent-note {
+  margin: 0;
+  font-size: 0.85rem;
 }
 
 .turf-segments {

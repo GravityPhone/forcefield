@@ -167,13 +167,18 @@ export const PARITY_LABELS: Record<TurfParity, string> = {
 
 /** Named cut of geography, assigned to a squad or an individual canvasser
  * (never both). Its member addresses carry turf_id (stamped by the
- * set_turf_segments RPC), so lookup is a plain column read. */
+ * set_turf_segments RPC), so lookup is a plain column read.
+ *
+ * Cutting top-level turf is a campaign-manager job. A row with
+ * parent_turf_id set is a SUB-TURF — a squad leader's cut inside a turf
+ * assigned to them, its doors carved out of (and returned to) the parent. */
 export interface Turf {
   id: string
   name: string
   color: string
   squad_id: string | null
   assignee_id: string | null
+  parent_turf_id: string | null
   created_by: string | null
   created_at: string
   updated_at: string
