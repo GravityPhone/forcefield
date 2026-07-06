@@ -9,6 +9,10 @@ import type { Campaign, Team } from '@/types'
 
 const auth = useAuthStore()
 
+// Cap campaign/team names so a stray paste can't stuff arbitrarily long
+// strings into the org roster. Mirrored by :maxlength on the inputs.
+const NAME_MAX = 60
+
 const campaigns = ref<Campaign[]>([])
 const teams = ref<Team[]>([])
 const loading = ref(true)
@@ -39,6 +43,11 @@ async function createCampaign() {
   if (creatingCampaign.value || !name) return
   creatingCampaign.value = true
   error.value = ''
+  if (name.length > NAME_MAX) {
+    creatingCampaign.value = false
+    error.value = `Campaign name must be ${NAME_MAX} characters or fewer.`
+    return
+  }
   const { error: err } = await supabase.from('campaigns').insert({
     name,
     description: newCampaignDescription.value.trim() || null,
@@ -59,6 +68,11 @@ async function createTeam() {
   if (creatingTeam.value || !name) return
   creatingTeam.value = true
   error.value = ''
+  if (name.length > NAME_MAX) {
+    creatingTeam.value = false
+    error.value = `Team name must be ${NAME_MAX} characters or fewer.`
+    return
+  }
   const { error: err } = await supabase.from('teams').insert({
     name,
     campaign_id: newTeamCampaignId.value || null,
@@ -154,7 +168,12 @@ const campaignOptions = computed(() => [
             <h3>New team</h3>
             <div class="field">
               <label for="team-name">Name</label>
-              <input id="team-name" v-model="newTeamName" placeholder="e.g. Richwood Team" />
+              <input
+                id="team-name"
+                v-model="newTeamName"
+                :maxlength="NAME_MAX"
+                placeholder="e.g. Richwood Team"
+              />
             </div>
             <div class="field">
               <label id="team-campaign-label">Campaign</label>
@@ -178,7 +197,12 @@ const campaignOptions = computed(() => [
             <h3>New campaign</h3>
             <div class="field">
               <label for="campaign-name">Name</label>
-              <input id="campaign-name" v-model="newCampaignName" placeholder="e.g. UBI" />
+              <input
+                id="campaign-name"
+                v-model="newCampaignName"
+                :maxlength="NAME_MAX"
+                placeholder="e.g. UBI"
+              />
             </div>
             <div class="field">
               <label for="campaign-desc">Description (optional)</label>

@@ -586,6 +586,17 @@ function nearestDoor(lat: number, lng: number): { door: AddressLite; meters: num
   return best ? { door: best, meters: bestD } : null
 }
 
+/** Draft segments already covering this street (in the same city, when known).
+ * Both the map double-tap toggle and the search-result add consult this so a
+ * street can never land in the draft twice. */
+function matchingSegments(streetName: string, city: string | null) {
+  return segments.value.filter(
+    (s) =>
+      s.street_name === streetName &&
+      (!s.city || !city || s.city.toUpperCase() === city.toUpperCase()),
+  )
+}
+
 async function onMapDoubleClick(latLng: google.maps.LatLng) {
   if (sweepBusy.value) return
   const hit = nearestDoor(latLng.lat(), latLng.lng())
@@ -595,9 +606,7 @@ async function onMapDoubleClick(latLng: google.maps.LatLng) {
   }
   anchor.value = null
   const name = streetNameOf(hit.door.street)
-  const already = segments.value.filter(
-    (s) => s.street_name === name && (!s.city || s.city.toUpperCase() === hit.door.city.toUpperCase()),
-  )
+  const already = matchingSegments(name, hit.door.city)
   if (already.length) {
     for (const s of already) removeSegment(s)
     flash(`Removed ${name} from the draft.`)
@@ -608,9 +617,27 @@ async function onMapDoubleClick(latLng: google.maps.LatLng) {
 
 /** Add an entire street (its full house-number span) as one draft segment,
  * then pin down its unmapped doors. Both the double-tap toggle and the
- * street search land here. */
+ * street search land here. Guards against adding a street that's already in
+ * the draft — the map path pre-checks, but rapid search-result taps would
+ * otherwise stack duplicate segments. */
 async function sweepWholeStreet(streetName: string, city: string | null, zoomTo = false) {
-  const rows = await fetchStreetRows(streetName, city)
+  // Bail if another sweep is mid-flight: a second rapid tap would otherwise
+  // clear the duplicate check below before the first one's addSegment lands.
+  if (sweepBusy.value) return
+  if (matchingSegments(streetName, city).length) {
+    flash(`${streetName} is already in the draft — double-tap it on the map to remove it.`)
+    if (zoomTo) await materializeStreetPins(streetName, city, true)
+    return
+  }
+  let rows: AddressLite[]
+  // Hold the busy flag across the door fetch — addSegment only raises it once
+  // it starts, leaving the fetch window open to concurrent taps otherwise.
+  sweepBusy.value = true
+  try {
+    rows = await fetchStreetRows(streetName, city)
+  } finally {
+    sweepBusy.value = false
+  }
   if (!rows.length) {
     flash(`No doors found on ${streetName}.`)
     return

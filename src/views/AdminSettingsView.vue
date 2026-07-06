@@ -43,10 +43,16 @@ onMounted(async () => {
 async function saveKey() {
   const ownerId = auth.profile?.id
   if (!ownerId) return
+  loadError.value = ''
+  const key = apiKey.value.trim()
+  if (!key) {
+    loadError.value = 'Enter your Anthropic API key first.'
+    return
+  }
   saving.value = true
   const { error } = await supabase
     .from('admin_settings')
-    .upsert({ owner_id: ownerId, anthropic_api_key: apiKey.value.trim(), updated_at: new Date().toISOString() })
+    .upsert({ owner_id: ownerId, anthropic_api_key: key, updated_at: new Date().toISOString() })
   saving.value = false
   if (error) {
     loadError.value = 'Could not save the key — try again.'
