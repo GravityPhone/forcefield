@@ -71,10 +71,10 @@ const router = createRouter({
     // Squad leader home (managers/admins can view too)
     { path: '/team', name: 'team', component: () => import('@/views/TeamLeadHomeView.vue'), meta: { roles: ['team_lead', 'campaign_manager', 'admin'] } },
 
-    // Turf cutting/assignment — a campaign-manager job (leads still have
-    // access here pending the permissions tightening; the corrected model
-    // only lets them sub-cut within a CM's turf). Canvassers see their own
-    // turf on the Hunt map instead.
+    // Turf cutting/assignment — a campaign-manager job. Squad leaders get
+    // the same page as a scoped sub-cutter: they only carve sub-turfs inside
+    // turf assigned to them (RLS-enforced). Canvassers see their own turf on
+    // the Hunt map instead.
     { path: '/turf', name: 'turf', component: () => import('@/views/TurfView.vue'), meta: { roles: ['team_lead', 'campaign_manager', 'admin'] } },
 
     // Management area. Campaign managers run the day-to-day (dashboard, AI
