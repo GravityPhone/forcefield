@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import { ANIMAL_AVATARS, avatarUrl } from '@/lib/avatars'
+import { MEMBER_COLORS, memberColor } from '@/lib/memberColors'
 import type { ThemeId } from '@/types'
 
 const theme = useThemeStore()
@@ -32,6 +33,22 @@ async function pickAvatar(slug: string | null) {
     .eq('id', auth.profile.id)
   if (!error) auth.profile.avatar = slug
   savingAvatar.value = false
+}
+
+// --- Member color (squad card + squad-map marker accent) ---
+
+const savingColor = ref(false)
+
+async function pickColor(hex: string | null) {
+  if (savingColor.value || !auth.profile) return
+  savingColor.value = true
+  await supabase.auth.getSession() // refresh-token race guard, same as theme saves
+  const { error } = await supabase
+    .from('profiles')
+    .update({ color: hex, updated_at: new Date().toISOString() })
+    .eq('id', auth.profile.id)
+  if (!error) auth.profile.color = hex
+  savingColor.value = false
 }
 </script>
 
@@ -97,6 +114,43 @@ async function pickAvatar(slug: string | null) {
       @click="pickAvatar(null)"
     >
       Remove avatar
+    </button>
+
+    <h2 class="avatar-heading">Your color</h2>
+    <p class="muted intro">
+      Your accent on the Squad page — it tints your member card and the marker that follows
+      your knocks on the squad map.
+    </p>
+    <div class="color-grid" :class="{ busy: savingColor }">
+      <button
+        v-for="hex in MEMBER_COLORS"
+        :key="hex"
+        class="color-cell"
+        :class="{ active: auth.profile?.color === hex }"
+        :style="{ background: hex }"
+        :disabled="savingColor"
+        :aria-label="`Pick ${hex}`"
+        @click="pickColor(hex)"
+      >
+        <span v-if="auth.profile?.color === hex" class="color-check">✓</span>
+      </button>
+    </div>
+    <p v-if="auth.profile && !auth.profile.color" class="muted small color-hint">
+      No pick yet — you're currently showing as
+      <span
+        class="color-dot"
+        :style="{ background: memberColor(auth.profile) }"
+        aria-hidden="true"
+      ></span>
+      (assigned automatically).
+    </p>
+    <button
+      v-if="auth.profile?.color"
+      class="btn btn-ghost btn-sm avatar-clear"
+      :disabled="savingColor"
+      @click="pickColor(null)"
+    >
+      Reset to automatic color
     </button>
   </AppShell>
 </template>
@@ -231,5 +285,55 @@ async function pickAvatar(slug: string | null) {
 
 .avatar-clear {
   margin-top: 0.6rem;
+}
+
+/* --- Member color picker --- */
+
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
+  gap: 0.5rem;
+  max-width: 640px;
+}
+
+.color-grid.busy {
+  opacity: 0.7;
+}
+
+.color-cell {
+  aspect-ratio: 1;
+  border: 2px solid var(--border);
+  border-radius: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+
+.color-cell:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.color-cell.active {
+  border-color: var(--text);
+}
+
+.color-check {
+  color: #fff;
+  font-weight: 800;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+}
+
+.color-hint {
+  margin-top: 0.6rem;
+}
+
+.color-dot {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  border-radius: 50%;
+  vertical-align: -0.08em;
 }
 </style>

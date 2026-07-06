@@ -25,6 +25,10 @@ export interface Profile {
   display_name: string | null
   /** Slug of a Fluent animal SVG in public/avatars/ (see lib/avatars.ts). */
   avatar: string | null
+  /** Personal accent hex, picked on /appearance — colors this member's card
+   * and marker on the Squad page. Null = deterministic palette fallback
+   * (lib/memberColors.ts). */
+  color: string | null
   role: AppRole
   team_id: string | null
   theme: { scheme: ThemeId }
@@ -240,6 +244,8 @@ export interface ChatProfile {
   username: string
   display_name: string | null
   avatar: string | null
+  /** Present where member accent colors matter (Squad page). */
+  color?: string | null
   /** Present where role matters (leadership-room member lists). */
   role?: AppRole
   /** Present where team scoping matters (team-room member lists, pickers). */

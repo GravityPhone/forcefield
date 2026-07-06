@@ -57,7 +57,7 @@ const barItems = computed<NavItem[]>(() => {
   }
   return [
     { to: homePath.value, label: 'Home', icon: 'home' },
-    { to: '/squads', label: 'Squads', icon: 'squads' },
+    { to: '/squad', label: 'Squad', icon: 'squads' },
     { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
     { to: '/leaderboard', label: 'Boards', icon: 'trophy' },
   ]
@@ -178,9 +178,12 @@ onUnmounted(() => {
         </template>
         <router-link v-else :to="homePath">Home</router-link>
         <router-link v-if="auth.profile.role === 'team_lead'" to="/turf">Turf</router-link>
-        <!-- Campaign-life links — admins oversee, they don't participate. -->
+        <!-- Campaign-life links — admins oversee, they don't participate.
+             Managers assign rosters across all squads (/squads); everyone
+             else lives on their own squad's page (/squad). -->
         <template v-if="auth.profile.role !== 'admin'">
-          <router-link to="/squads">Squads</router-link>
+          <router-link v-if="auth.profile.role === 'campaign_manager'" to="/squads">Squads</router-link>
+          <router-link v-else to="/squad">Squad</router-link>
           <router-link to="/bulletin">Bulletin</router-link>
           <router-link to="/leaderboard">Leaderboard</router-link>
         </template>

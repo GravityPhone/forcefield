@@ -13,6 +13,9 @@ files.zip
 # Real secrets — never commit
 KEYS-AND-ACCESS.md
 
+# Project overview for Claude Code — local-only, not shared via git
+CLAUDE.md
+
 # Claude Code's local permission allowlist echoes raw command args (including
 # any secrets passed on the command line) — keep it local, never push it.
 .claude/settings.local.json

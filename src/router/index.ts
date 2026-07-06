@@ -38,8 +38,28 @@ const router = createRouter({
       },
     },
 
-    // Day crews — anyone can form or join one; resets at midnight
-    { path: '/squads', name: 'squads', component: () => import('@/views/SquadsView.vue'), meta: { roles: [] } },
+    // Your squad's home base — members, turf map, live knock progress. Also
+    // where canvassers/leads form or join today's crew (squads reset at
+    // midnight).
+    { path: '/squad', name: 'squad', component: () => import('@/views/SquadView.vue'), meta: { roles: [] } },
+
+    // Roster management across ALL of today's squads — the campaign-manager
+    // assignment interface. Everyone else lands on their own squad instead
+    // (old /squads bookmarks included).
+    {
+      path: '/squads',
+      name: 'squads',
+      component: () => import('@/views/SquadsView.vue'),
+      // roles stays [] so the global guard lets everyone through to this
+      // redirect (it runs before per-route beforeEnter and would bounce
+      // non-managers to their role home instead of /squad).
+      meta: { roles: [] },
+      beforeEnter: () => {
+        const role = useAuthStore().profile?.role
+        if (role === 'canvasser' || role === 'team_lead') return '/squad'
+        return true
+      },
+    },
 
     // Campaign bulletin (everyone reads; admins post) and leaderboards
     { path: '/bulletin', name: 'bulletin', component: () => import('@/views/BulletinView.vue'), meta: { roles: [] } },
@@ -51,8 +71,10 @@ const router = createRouter({
     // Squad leader home (managers/admins can view too)
     { path: '/team', name: 'team', component: () => import('@/views/TeamLeadHomeView.vue'), meta: { roles: ['team_lead', 'campaign_manager', 'admin'] } },
 
-    // Turf cutting/assignment — squad leaders and up cut turf; canvassers
-    // see their own turf on the Hunt map instead.
+    // Turf cutting/assignment — a campaign-manager job (leads still have
+    // access here pending the permissions tightening; the corrected model
+    // only lets them sub-cut within a CM's turf). Canvassers see their own
+    // turf on the Hunt map instead.
     { path: '/turf', name: 'turf', component: () => import('@/views/TurfView.vue'), meta: { roles: ['team_lead', 'campaign_manager', 'admin'] } },
 
     // Management area. Campaign managers run the day-to-day (dashboard, AI
