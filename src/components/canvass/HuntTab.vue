@@ -109,6 +109,9 @@ interface TurfLite {
 const allTurfs = ref<TurfLite[]>([])
 const myTurfIds = ref<Set<string>>(new Set())
 const myTurfs = computed(() => allTurfs.value.filter((t) => myTurfIds.value.has(t.id)))
+/** Everyone in a squad I'm in today — their live knocks plink harder than
+ * the rest of the org's, so watching the map reads as "us working". */
+const squadmateIds = ref<Set<string>>(new Set())
 const turfByAddress = ref<Map<string, string>>(new Map())
 const doorInfoByAddress = new Map<string, DoorPoint>()
 const loadError = ref('')
@@ -185,6 +188,15 @@ async function fetchTurfs() {
       .filter((t) => t.assignee_id === me || (t.squad_id != null && mySquadIds.has(t.squad_id)))
       .map((t) => t.id),
   )
+  if (mySquadIds.size) {
+    const { data } = await supabase
+      .from('squad_members')
+      .select('user_id')
+      .in('squad_id', [...mySquadIds])
+    squadmateIds.value = new Set((data ?? []).map((r) => r.user_id as string))
+  } else {
+    squadmateIds.value = new Set()
+  }
 }
 
 const myTurfColorById = computed(() => new Map(myTurfs.value.map((t) => [t.id, t.color])))
@@ -384,15 +396,21 @@ async function initialize() {
   if (showCity.value) void cityLayer.setVisible(true)
 
   const bounds = new google.maps.LatLngBounds()
+  const myTurfBounds = new google.maps.LatLngBounds()
   for (const a of mapAddresses) {
     if (a.lat == null || a.lng == null) continue
     addOrUpdateMarker(a)
     bounds.extend({ lat: a.lat, lng: a.lng })
+    if (a.turf_id && myTurfIds.value.has(a.turf_id)) {
+      myTurfBounds.extend({ lat: a.lat, lng: a.lng })
+    }
   }
-  // Only auto-fit to every pin when there's no personal last-knock anchor —
-  // fitting all ~2k county-wide pins zooms way out and looks like the map
-  // "doesn't know where to start".
-  if (!lastCenter && !bounds.isEmpty()) map.fitBounds(bounds, 48)
+  // Opening frame, best anchor first: all of your (and your today-squad's)
+  // turf together — the crew's whole assignment in one look — then your last
+  // knocked door, then every pin. (Fitting all ~2k county-wide pins zooms way
+  // out and looks like the map "doesn't know where to start".)
+  if (!myTurfBounds.isEmpty()) map.fitBounds(myTurfBounds, 64)
+  else if (!lastCenter && !bounds.isEmpty()) map.fitBounds(bounds, 48)
   rebuildTurfAreas()
   pinsLoading.value = false
 }
@@ -423,6 +441,19 @@ function focusTurf(turfId: string) {
   if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
 }
 
+/** Re-frame around every turf that's yours — same view the map opens with. */
+function focusAllMyTurf() {
+  if (!map) return
+  const bounds = new google.maps.LatLngBounds()
+  for (const [addressId, marker] of markersByAddress) {
+    const turfId = turfByAddress.value.get(addressId)
+    if (turfId && myTurfIds.value.has(turfId) && marker.position) {
+      bounds.extend(marker.position)
+    }
+  }
+  if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
+}
+
 // --- Live teammate knocks: when anyone on the campaign logs a door, its pin
 // recolors and picks up the today-halo immediately — a squad working the
 // same neighborhood sees each other's progress without reloading. Undo/redo
@@ -430,6 +461,29 @@ function focusTurf(turfId: string) {
 // refreshStatuses, so only INSERTs are streamed. ---
 
 let knockFeed: RealtimeChannel | null = null
+
+/** One-shot pop on a pin as its knock lands — the "plink" that makes live
+ * progress watchable. Squadmates' knocks pop bigger than the rest of the
+ * org's. Web Animations API (not a CSS class) so back-to-back knocks on
+ * nearby doors each restart cleanly. */
+function plinkMarker(addressId: string, isSquadmate: boolean) {
+  const marker = markersByAddress.get(addressId)
+  const el = marker?.content as HTMLElement | undefined
+  if (!marker || !el) return
+  const prevZ = marker.zIndex
+  marker.zIndex = 1500
+  const anim = el.animate(
+    [
+      { transform: 'scale(1)' },
+      { transform: `scale(${isSquadmate ? 2.6 : 1.8})` },
+      { transform: 'scale(1)' },
+    ],
+    { duration: isSquadmate ? 750 : 550, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
+  )
+  anim.onfinish = () => {
+    marker.zIndex = prevZ ?? 1
+  }
+}
 
 function subscribeToKnockFeed() {
   knockFeed = supabase
@@ -442,7 +496,10 @@ function subscribeToKnockFeed() {
         knockedToday.value.add(knock.household_id)
       }
       const marker = markersByAddress.get(knock.household_id)
-      if (marker) styleMarker(marker, knock.household_id)
+      if (marker) {
+        styleMarker(marker, knock.household_id)
+        plinkMarker(knock.household_id, squadmateIds.value.has(knock.canvasser_id))
+      }
     })
     .subscribe()
 }
@@ -782,6 +839,15 @@ onUnmounted(() => {
          jumps the map to that turf's doors, which carry a ring in the same
          color. -->
     <div v-if="myTurfs.length" class="turf-chips">
+      <button
+        v-if="myTurfs.length > 1"
+        class="turf-chip"
+        :style="{ '--turf-color': 'var(--accent)' }"
+        @click="focusAllMyTurf"
+      >
+        <span class="turf-chip-dot" aria-hidden="true"></span>
+        All our turf
+      </button>
       <button
         v-for="t in myTurfs"
         :key="t.id"
