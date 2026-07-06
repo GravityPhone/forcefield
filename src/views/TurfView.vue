@@ -169,36 +169,54 @@ const hint = computed(() => {
   return 'Double-tap the map to add or remove a whole street. For part of a street, tap a door, then a second door on it.'
 })
 
-// --- Assignment options: today's squads + every canvasser. A turf being
-// edited may point at a past day's squad that loadToday won't return — keep
-// it selectable so editing doesn't silently drop the assignment. ---
-const assignOptions = computed<SelectOption[]>(() => {
+// --- Assignment options: today's squads + every canvasser. A turf may point
+// at a past day's squad that loadToday won't return — keep it selectable so
+// touching the dropdown doesn't silently drop the assignment. ---
+function assignOptionsFor(t: TurfWithMeta | null): SelectOption[] {
   const opts: SelectOption[] = [{ value: 'none', label: 'Unassigned' }]
   const squadIds = new Set<string>()
   for (const s of squadsStore.squads) {
     squadIds.add(s.id)
     opts.push({ value: `squad:${s.id}`, label: `Squad — ${s.name}` })
   }
-  if (editingTurfId.value) {
-    const t = turfs.value.find((x) => x.id === editingTurfId.value)
-    if (t?.squad && !squadIds.has(t.squad.id)) {
-      opts.push({ value: `squad:${t.squad.id}`, label: `Squad — ${t.squad.name} (${t.squad.squad_date})` })
-    }
+  if (t?.squad && !squadIds.has(t.squad.id)) {
+    opts.push({ value: `squad:${t.squad.id}`, label: `Squad — ${t.squad.name} (${t.squad.squad_date})` })
   }
   for (const p of people.value) {
     opts.push({ value: `user:${p.id}`, label: `Canvasser — ${p.display_name || p.username}` })
   }
   return opts
-})
-
-function personName(p: ChatProfile | null): string {
-  return p ? p.display_name || p.username : '—'
 }
 
-function assignmentLabel(t: TurfWithMeta): string {
-  if (t.squad) return `Squad: ${t.squad.name} (${t.squad.squad_date})`
-  if (t.assignee) return `Canvasser: ${personName(t.assignee)}`
-  return 'Unassigned'
+const assignOptions = computed<SelectOption[]>(() =>
+  assignOptionsFor(turfs.value.find((x) => x.id === editingTurfId.value) ?? null),
+)
+
+function assignChoiceOf(t: TurfWithMeta): string {
+  return t.squad_id ? `squad:${t.squad_id}` : t.assignee_id ? `user:${t.assignee_id}` : 'none'
+}
+
+// Reassign straight from the turf list — no need to re-open the whole cut
+// for a hand-off. Segments and stamped doors are untouched.
+const listError = ref('')
+async function reassignTurf(t: TurfWithMeta, choice: string) {
+  if (choice === assignChoiceOf(t)) return
+  listError.value = ''
+  const [kind, id] = choice.split(':')
+  const { error } = await supabase
+    .from('turfs')
+    .update({
+      squad_id: kind === 'squad' ? id : null,
+      assignee_id: kind === 'user' ? id : null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', t.id)
+  if (error) {
+    listError.value = 'Could not reassign that turf — try again.'
+    return
+  }
+  if (editingTurfId.value === t.id) assignChoice.value = choice
+  await fetchTurfs()
 }
 
 function segmentLabel(s: { street_name: string; range_start: number; range_end: number; parity: TurfParity }): string {
@@ -801,7 +819,7 @@ async function editTurf(t: TurfWithMeta) {
   clearDraft()
   editingTurfId.value = t.id
   draftName.value = t.name
-  assignChoice.value = t.squad_id ? `squad:${t.squad_id}` : t.assignee_id ? `user:${t.assignee_id}` : 'none'
+  assignChoice.value = assignChoiceOf(t)
   // Hide this turf's saved shading — the draft redraws it live.
   buildSavedAreas()
   for (const s of t.turf_segments) {
@@ -1023,22 +1041,32 @@ onUnmounted(() => {
         </p>
         <div v-else class="turf-list">
           <div v-for="t in turfs" :key="t.id" class="turf-row">
-            <button class="turf-row-main" @click="focusTurf(t.id)">
-              <span class="turf-swatch" :style="{ background: t.color }" aria-hidden="true"></span>
-              <span class="turf-row-text">
-                <span class="turf-name">{{ t.name }}</span>
-                <span class="muted turf-assignment">{{ assignmentLabel(t) }}</span>
-                <span class="muted turf-segments">
-                  {{ t.turf_segments.map(segmentLabel).join(' · ') || 'No street ranges' }}
+            <div class="turf-row-top">
+              <button class="turf-row-main" @click="focusTurf(t.id)">
+                <span class="turf-swatch" :style="{ background: t.color }" aria-hidden="true"></span>
+                <span class="turf-row-text">
+                  <span class="turf-name">{{ t.name }}</span>
+                  <span class="muted turf-segments">
+                    {{ t.turf_segments.map(segmentLabel).join(' · ') || 'No street ranges' }}
+                  </span>
                 </span>
-              </span>
-            </button>
-            <div class="turf-row-actions">
-              <button class="btn btn-ghost btn-sm" @click="editTurf(t)">Edit</button>
-              <button class="btn btn-ghost btn-sm turf-delete" @click="deleteTurf(t)">Delete</button>
+              </button>
+              <div class="turf-row-actions">
+                <button class="btn btn-ghost btn-sm" @click="editTurf(t)">Edit</button>
+                <button class="btn btn-ghost btn-sm turf-delete" @click="deleteTurf(t)">Delete</button>
+              </div>
             </div>
+            <AppSelect
+              class="turf-row-assign"
+              small
+              :options="assignOptionsFor(t)"
+              :model-value="assignChoiceOf(t)"
+              :aria-label="`Reassign ${t.name}`"
+              @update:model-value="reassignTurf(t, $event)"
+            />
           </div>
         </div>
+        <p v-if="listError" class="error">{{ listError }}</p>
       </div>
     </div>
   </AppShell>
@@ -1395,12 +1423,24 @@ onUnmounted(() => {
 
 .turf-row {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: 0.4rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
   padding: 0.5rem 0.65rem;
+}
+
+.turf-row-top {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.turf-row-assign {
+  align-self: flex-start;
+  /* Line the dropdown up under the turf name, past the color swatch. */
+  margin-left: calc(16px + 0.6rem);
 }
 
 .turf-row-main {
@@ -1438,7 +1478,6 @@ onUnmounted(() => {
   font-weight: 700;
 }
 
-.turf-assignment,
 .turf-segments {
   font-size: 0.82rem;
   overflow: hidden;
