@@ -43,7 +43,7 @@ export const useSquadsStore = defineStore('squads', {
       const { data, error } = await supabase
         .from('squads')
         .select(
-          '*, squad_members(user_id, profiles!squad_members_user_id_fkey(id, username, display_name, avatar, color))',
+          '*, squad_members(user_id, profiles!squad_members_user_id_fkey(id, username, display_name, avatar, color, role))',
         )
         .eq('squad_date', localToday())
         .order('created_at')

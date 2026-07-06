@@ -28,13 +28,13 @@ import {
   writeMapPref,
 } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
-import { geocodeAndCache } from '@/lib/geocode'
+import { geocodeAndCache, geocodeMissing } from '@/lib/geocode'
 import { supabase } from '@/lib/supabase'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import { useAuthStore } from '@/stores/auth'
 import { useSquadsStore } from '@/stores/squads'
 import { PARITY_LABELS } from '@/types'
-import type { ChatProfile, Turf, TurfParity, TurfSegment } from '@/types'
+import type { AppRole, ChatProfile, Turf, TurfParity, TurfSegment } from '@/types'
 
 // Same fallback as Hunt: Richwood, OH (the imported demo subset).
 const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
@@ -118,24 +118,60 @@ const segPolylines = new Map<string, google.maps.Polyline>()
 /** Street rows already pulled for a sweep, so range tweaks don't re-query. */
 const streetCache = new Map<string, AddressLite[]>()
 let segKeyCounter = 0
+/** Set on teardown so a background geocode sweep stops dropping pins onto a
+ * disposed map. */
+let unmounted = false
 
 const turfColorById = computed(() => new Map(turfs.value.map((t) => [t.id, t.color])))
 
 // --- Role scoping ---
+// Managers (and admins) get the full cutter; squad leaders — and, when their
+// squad has no leader, plain members — get a scoped SUB-cutter; everyone else
+// gets a read-only notice.
 
+const isManager = computed(
+  () => auth.profile?.role === 'campaign_manager' || auth.profile?.role === 'admin',
+)
 const isLead = computed(() => auth.profile?.role === 'team_lead')
 /** Squads I'm a member of, any date — the squad row itself is the turf's
  * assignment target, so membership in that squad is the credential. */
 const mySquadIds = ref<Set<string>>(new Set())
+/** The subset of my squads with no team_lead/campaign_manager/admin member —
+ * the only turf a plain canvasser may sub-cut (mirrors the DB's
+ * can_member_subcut). */
+const myLeaderlessSquadIds = ref<Set<string>>(new Set())
 
-/** Top-level turfs assigned to me — the only ground a lead may sub-cut. */
+/** A canvasser standing in for an absent leader: some top-level turf is
+ * assigned to a leaderless squad I'm on. */
+const isMemberSubcutter = computed(
+  () =>
+    auth.profile?.role === 'canvasser' &&
+    turfs.value.some(
+      (t) => !t.parent_turf_id && t.squad_id !== null && myLeaderlessSquadIds.value.has(t.squad_id),
+    ),
+)
+/** Anyone who cuts SUB-turfs scoped to their own turf (leads + leaderless
+ * members), as opposed to the managers' full cutter. */
+const isSubcutter = computed(() => isLead.value || isMemberSubcutter.value)
+/** Who may cut at all — everyone else just sees the notice. */
+const canCut = computed(() => isManager.value || isSubcutter.value)
+
+/** Top-level turfs I may sub-cut inside: assigned to me or a squad I'm on (as
+ * a lead), or to a leaderless squad I'm on (as a stand-in member). */
 const myParentTurfs = computed(() =>
-  turfs.value.filter(
-    (t) =>
-      !t.parent_turf_id &&
-      (t.assignee_id === auth.profile?.id ||
-        (t.squad_id !== null && mySquadIds.value.has(t.squad_id))),
-  ),
+  turfs.value.filter((t) => {
+    if (t.parent_turf_id) return false
+    if (isLead.value) {
+      return (
+        t.assignee_id === auth.profile?.id ||
+        (t.squad_id !== null && mySquadIds.value.has(t.squad_id))
+      )
+    }
+    if (isMemberSubcutter.value) {
+      return t.squad_id !== null && myLeaderlessSquadIds.value.has(t.squad_id)
+    }
+    return false
+  }),
 )
 
 /** The pool the current draft claims doors from: the edited turf's parent,
@@ -145,18 +181,18 @@ const effectiveParentId = computed(() => {
   if (editingTurfId.value) {
     return turfs.value.find((t) => t.id === editingTurfId.value)?.parent_turf_id ?? null
   }
-  return isLead.value ? draftParentId.value : null
+  return isSubcutter.value ? draftParentId.value : null
 })
 
-/** Keep the lead's parent pick valid as turfs load/refresh. */
+/** Keep the sub-cutter's parent pick valid as turfs load/refresh. */
 function defaultDraftParent() {
-  if (!isLead.value) return
+  if (!isSubcutter.value) return
   if (draftParentId.value && myParentTurfs.value.some((t) => t.id === draftParentId.value)) return
   draftParentId.value = myParentTurfs.value[0]?.id ?? null
 }
 
 function canManage(t: TurfWithMeta): boolean {
-  if (!isLead.value) return true
+  if (!isSubcutter.value) return true
   return t.parent_turf_id !== null && myParentTurfs.value.some((p) => p.id === t.parent_turf_id)
 }
 
@@ -167,7 +203,7 @@ function parentName(t: { parent_turf_id: string | null }): string {
 /** Leads see only their turf + its sub-turfs; managers see everything,
  * parents first with their sub-turfs tucked underneath. */
 const listTurfs = computed(() => {
-  const source = isLead.value
+  const source = isSubcutter.value
     ? turfs.value.filter(
         (t) =>
           myParentTurfs.value.some((p) => p.id === t.id) ||
@@ -250,7 +286,7 @@ const hint = computed(() => {
   }
   const base =
     'Double-tap the map to add or remove a whole street. For part of a street, tap a door, then a second door on it.'
-  return isLead.value
+  return isSubcutter.value
     ? `${base} Only doors inside your assigned turf count toward a sub-turf.`
     : base
 })
@@ -383,6 +419,27 @@ async function fetchTurfs() {
   turfs.value = (data ?? []) as TurfWithMeta[]
 }
 
+/** Which of my squads have no team_lead/campaign_manager/admin member — the
+ * only ones a plain canvasser may sub-cut inside. Kept in step with the DB's
+ * can_member_subcut so the UI offers exactly what the RPC will accept. */
+async function computeLeaderlessSquads() {
+  if (!mySquadIds.value.size) {
+    myLeaderlessSquadIds.value = new Set()
+    return
+  }
+  const { data } = await supabase
+    .from('squad_members')
+    .select('squad_id, profiles!inner(role)')
+    .in('squad_id', [...mySquadIds.value])
+  const ranked = new Set<string>()
+  for (const r of (data ?? []) as unknown as { squad_id: string; profiles: { role: AppRole } }[]) {
+    if (r.profiles.role !== 'canvasser') ranked.add(r.squad_id)
+  }
+  myLeaderlessSquadIds.value = new Set(
+    [...mySquadIds.value].filter((id) => !ranked.has(id)),
+  )
+}
+
 async function initialize() {
   pinsLoading.value = true
   let rows: AddressLite[] = []
@@ -407,6 +464,7 @@ async function initialize() {
           mySquadIds.value = new Set((res.data ?? []).map((r) => r.squad_id as string))
         }),
     ])
+    await computeLeaderlessSquads()
     defaultDraftParent()
   } catch {
     loadError.value = 'Could not load the map or address data. Check your connection.'
@@ -490,6 +548,35 @@ async function reloadAll() {
   buildSavedAreas()
 }
 
+/** After a turf is cut, geocode every door in it that has no coordinates yet
+ * (fetchAddresses only pulls already-located rows, so these never showed a
+ * pin). Runs in the background one door at a time — the Geocoder rate-limits
+ * on bursts — dropping each pin as it resolves and refining the shaded area
+ * at the end. Every result caches to the DB, so this is a one-time cost per
+ * door: the whole turf ends up pinned everywhere it's shown (Squad, Hunt). */
+async function geocodeTurfDoors(turfId: string) {
+  const { data } = await supabase
+    .from('addresses')
+    .select('id, street, unit, city, zip, lat, lng, turf_id')
+    .eq('turf_id', turfId)
+    .is('lat', null)
+  const missing = (data ?? []) as AddressLite[]
+  if (!missing.length) return
+  await geocodeMissing(
+    missing,
+    (id, loc) => {
+      const a = missing.find((m) => m.id === id)
+      if (a) {
+        a.lat = loc.lat
+        a.lng = loc.lng
+        upsertMarker(a)
+      }
+    },
+    () => unmounted,
+  )
+  if (!unmounted) buildSavedAreas()
+}
+
 // --- Sweeping ---
 
 async function onPinTap(addressId: string) {
@@ -553,7 +640,7 @@ async function computeSegment(seg: DraftSegment) {
   const free = members.filter(
     (a) =>
       (editingTurfId.value !== null && a.turf_id === editingTurfId.value) ||
-      (parentId !== null ? a.turf_id === parentId : !a.turf_id && !isLead.value),
+      (parentId !== null ? a.turf_id === parentId : !a.turf_id && !isSubcutter.value),
   )
   seg.memberIds = free.map((a) => a.id)
   seg.doorCount = free.length
@@ -880,7 +967,7 @@ async function saveTurf() {
     saveError.value = 'Sweep at least one street range first.'
     return
   }
-  if (isLead.value && !editingTurfId.value && !draftParentId.value) {
+  if (isSubcutter.value && !editingTurfId.value && !draftParentId.value) {
     saveError.value = 'No turf is assigned to you yet — your campaign manager assigns turf first.'
     return
   }
@@ -905,7 +992,7 @@ async function saveTurf() {
           name,
           color: draftColor.value,
           ...assignment,
-          parent_turf_id: isLead.value ? draftParentId.value : null,
+          parent_turf_id: isSubcutter.value ? draftParentId.value : null,
           created_by: auth.profile?.id,
         })
         .select('id')
@@ -926,6 +1013,9 @@ async function saveTurf() {
     if (rpcError) throw rpcError
     clearDraft()
     await reloadAll()
+    // Fill in pins for every door now in this turf, in the background —
+    // never blocks the save.
+    void geocodeTurfDoors(turfId)
   } catch {
     saveError.value = 'Could not save the turf — try again.'
   } finally {
@@ -982,6 +1072,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  unmounted = true
   clusterer?.clearMarkers()
   markersByAddress.clear()
   for (const line of segPolylines.values()) line.setMap(null)
@@ -995,7 +1086,20 @@ onUnmounted(() => {
 
 <template>
   <AppShell title="Turf">
-    <div class="stack">
+    <!-- Plain members with no stand-in role see a read-only notice, not the
+         cutter. Managers and sub-cutters (leads / leaderless members) get the
+         tool. RLS enforces the same rule server-side regardless. -->
+    <div v-if="!canCut" class="stack">
+      <div class="card">
+        <h3>Turf</h3>
+        <p class="muted empty-note">
+          Dividing up turf is a campaign manager's or squad leader's job — or, when your squad has
+          no leader today, anyone on the squad can split it up. You're all set: head to
+          <router-link to="/canvass">Canvass</router-link> to knock your turf.
+        </p>
+      </div>
+    </div>
+    <div v-else class="stack">
       <!-- Sweep status + side filter: the "controls" of the highlighter. -->
       <div class="sweep-bar" :style="{ '--draft-color': draftColor }">
         <span class="sweep-dot" :class="{ armed: !!anchor }" aria-hidden="true"></span>
@@ -1069,7 +1173,7 @@ onUnmounted(() => {
       <!-- Draft tray: the turf being cut. -->
       <div ref="draftCardEl" class="card draft-card" :style="{ '--draft-color': draftColor }">
         <!-- A lead with no assigned turf has no ground to cut on. -->
-        <template v-if="isLead && !myParentTurfs.length">
+        <template v-if="isSubcutter && !myParentTurfs.length">
           <h3 class="draft-title">
             <span class="draft-swatch" aria-hidden="true"></span>
             Sub-turfs
@@ -1083,13 +1187,13 @@ onUnmounted(() => {
         <template v-else>
         <h3 class="draft-title">
           <span class="draft-swatch" aria-hidden="true"></span>
-          {{ editingTurfId ? (isLead ? 'Editing sub-turf' : 'Editing turf') : isLead ? 'New sub-turf' : 'New turf' }}
+          {{ editingTurfId ? (isSubcutter ? 'Editing sub-turf' : 'Editing turf') : isSubcutter ? 'New sub-turf' : 'New turf' }}
           <span v-if="draftDoorCount" class="draft-count">{{ draftDoorCount }} doors</span>
         </h3>
 
         <!-- Which turf the sub-turf carves from (auto when there's one). -->
         <AppSelect
-          v-if="isLead && !editingTurfId && myParentTurfs.length > 1"
+          v-if="isSubcutter && !editingTurfId && myParentTurfs.length > 1"
           class="parent-pick"
           small
           :options="myParentTurfs.map((t) => ({ value: t.id, label: `Inside — ${t.name}` }))"
@@ -1097,7 +1201,7 @@ onUnmounted(() => {
           aria-label="Cut inside which of your turfs"
           @update:model-value="draftParentId = $event"
         />
-        <p v-else-if="isLead" class="muted parent-note">
+        <p v-else-if="isSubcutter" class="muted parent-note">
           Cutting inside
           <strong>{{
             editingTurfId
@@ -1181,7 +1285,7 @@ onUnmounted(() => {
           </div>
           <p v-if="draftTakenCount" class="muted">
             {{ draftTakenCount }} swept doors
-            {{ isLead ? 'are outside your turf or already in another cut' : 'stay with their current turf (first claim wins)' }}.
+            {{ isSubcutter ? 'are outside your turf or already in another cut' : 'stay with their current turf (first claim wins)' }}.
           </p>
           <p v-if="saveError" class="error">{{ saveError }}</p>
         </div>
@@ -1190,10 +1294,10 @@ onUnmounted(() => {
 
       <!-- Existing turfs -->
       <div class="card">
-        <h3>{{ isLead ? 'Your turf' : 'Turfs' }}</h3>
+        <h3>{{ isSubcutter ? 'Your turf' : 'Turfs' }}</h3>
         <p v-if="!listTurfs.length" class="muted empty-note">
           {{
-            isLead
+            isSubcutter
               ? 'Nothing here yet — turf your campaign manager assigns to you shows up here.'
               : 'No turf cut yet. Squads without turf just pick their own streets.'
           }}

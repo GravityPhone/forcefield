@@ -72,10 +72,11 @@ const router = createRouter({
     { path: '/team', name: 'team', component: () => import('@/views/TeamLeadHomeView.vue'), meta: { roles: ['team_lead', 'campaign_manager', 'admin'] } },
 
     // Turf cutting/assignment — a campaign-manager job. Squad leaders get
-    // the same page as a scoped sub-cutter: they only carve sub-turfs inside
-    // turf assigned to them (RLS-enforced). Canvassers see their own turf on
-    // the Hunt map instead.
-    { path: '/turf', name: 'turf', component: () => import('@/views/TurfView.vue'), meta: { roles: ['team_lead', 'campaign_manager', 'admin'] } },
+    // the same page as a scoped sub-cutter (sub-turfs inside turf assigned to
+    // them). A plain canvasser can reach it too, but only cuts when their
+    // squad has no leader/manager to do it — the page shows everyone else a
+    // read-only notice, and RLS enforces the same rule server-side.
+    { path: '/turf', name: 'turf', component: () => import('@/views/TurfView.vue'), meta: { roles: [] } },
 
     // Management area. Campaign managers run the day-to-day (dashboard, AI
     // chat, settings); true admins keep user management to themselves.

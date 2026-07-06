@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import type { RealtimeChannel } from '@supabase/supabase-js'
+import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
@@ -12,17 +14,26 @@ import { TurfAreasLayer } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
 import { avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
+import { houseNumber } from '@/lib/streetWalk'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useSquadsStore, type SquadListItem } from '@/stores/squads'
+import { useTalkStore } from '@/stores/talk'
 import type { ChatProfile, KnockLog } from '@/types'
 
 // Fallback map center: Richwood, OH (the imported demo subset).
 const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
 
+// Door-pin colors (fixed hex, like the outcome/Hunt pins — not themed, so
+// "done vs to-do" reads the same in every color scheme).
+const DOOR_KNOCKED_HEX = '#2e9e5b'
+const DOOR_TODO_HEX = '#2f6fed'
+
+const router = useRouter()
 const auth = useAuthStore()
 const chat = useChatStore()
 const squads = useSquadsStore()
+const talk = useTalkStore()
 
 // --- Which squad is "mine" (you can be in several crews in one day) ---
 
@@ -87,6 +98,20 @@ const orderedMembers = computed<ChatProfile[]>(() => {
 
 const doorsTotal = computed(() => turfDoors.value.size)
 const doorsKnocked = computed(() => knockedDoors.value.size)
+
+// Splitting the squad's turf among members is a leader's / manager's job —
+// but if nobody on the crew outranks a canvasser today, any member can do it
+// (matches the DB's can_member_subcut). Show the shortcut to /turf when the
+// current user is allowed to divide this squad's turf.
+const squadHasRankedMember = computed(() =>
+  (mySquad.value?.members ?? []).some((m) => m.role != null && m.role !== 'canvasser'),
+)
+const canSplitTurf = computed(() => {
+  if (!squadTurfs.value.length) return false
+  const role = auth.profile?.role
+  if (role === 'team_lead' || role === 'campaign_manager' || role === 'admin') return true
+  return !squadHasRankedMember.value
+})
 const progressPct = computed(() =>
   doorsTotal.value ? Math.round((doorsKnocked.value / doorsTotal.value) * 100) : 0,
 )
@@ -194,7 +219,13 @@ const mapCardEl = ref<HTMLElement | null>(null)
 let map: google.maps.Map | null = null
 let areasLayer: TurfAreasLayer | null = null
 const markersByMember = new Map<string, google.maps.marker.AdvancedMarkerElement>()
+// One house-number pin per geocoded turf door, decluttered by a clusterer
+// (a turf can hold thousands of doors). Tapping one opens it in Talk mode.
+const markersByDoor = new Map<string, google.maps.marker.AdvancedMarkerElement>()
+let doorClusterer: MarkerClusterer | null = null
 const mapFailed = ref(false)
+
+const turfColorById = computed(() => new Map(squadTurfs.value.map((t) => [t.id, t.color])))
 
 let mapInitBusy = false
 
@@ -219,6 +250,8 @@ async function initMap() {
   areasLayer?.dispose()
   for (const marker of markersByMember.values()) marker.map = null
   markersByMember.clear()
+  doorClusterer?.clearMarkers()
+  markersByDoor.clear()
   map = new google.maps.Map(el, {
     center: FALLBACK_CENTER,
     zoom: 13,
@@ -230,6 +263,7 @@ async function initMap() {
     gestureHandling: 'greedy',
   })
   areasLayer = new TurfAreasLayer(map)
+  doorClusterer = new MarkerClusterer({ map, markers: [] })
   applyMapData(true)
 }
 
@@ -252,6 +286,8 @@ function applyMapData(refit = false) {
       .map((t) => ({ id: t.id, color: t.color, doors: doorsByTurf.get(t.id)!, emphasis: true })),
   )
 
+  applyDoorMarkers()
+
   // One avatar marker per member, sitting on their last geocoded knock.
   const members = mySquad.value?.members ?? []
   const alive = new Set(members.map((m) => m.id))
@@ -264,6 +300,88 @@ function applyMapData(refit = false) {
   for (const m of members) updateMemberMarker(m)
 
   if (refit) fitToSquad()
+}
+
+/** House-number chip for one door: green once anyone's knocked it, blue while
+ * it's still to-do — the door-level echo of the "X of Y knocked" bar. */
+function styleDoorMarker(marker: google.maps.marker.AdvancedMarkerElement, door: TurfDoor) {
+  const el = marker.content as HTMLElement
+  const s = el.style
+  const knocked = knockedDoors.value.has(door.id)
+  const turfColor = turfColorById.value.get(door.turf_id)
+  el.textContent = el.dataset.house || ''
+  s.boxSizing = 'border-box'
+  s.cursor = 'pointer'
+  s.display = 'flex'
+  s.alignItems = 'center'
+  s.justifyContent = 'center'
+  s.height = '19px'
+  s.minWidth = '19px'
+  s.padding = el.dataset.house ? '0 5px' : '0'
+  s.borderRadius = el.dataset.house ? '7px' : '50%'
+  s.width = el.dataset.house ? 'auto' : '14px'
+  s.fontSize = '11px'
+  s.fontWeight = '700'
+  s.lineHeight = '1'
+  s.color = '#fff'
+  s.background = knocked ? DOOR_KNOCKED_HEX : DOOR_TODO_HEX
+  s.border = '1.5px solid #fff'
+  // Thin ring in the turf's own color, so doors from different turfs (yours
+  // vs a squadmate's directly-assigned turf) stay tellable apart.
+  s.boxShadow = turfColor
+    ? `0 0 0 2px ${turfColor}, 0 0 3px rgba(0, 0, 0, 0.45)`
+    : '0 0 3px rgba(0, 0, 0, 0.45)'
+}
+
+/** Sync the door pins with the current turf doors: add new ones, restyle
+ * existing ones (knock status changes), drop any no longer in turf. */
+function applyDoorMarkers() {
+  if (!map || !doorClusterer) return
+  const alive = new Set<string>()
+  const fresh: google.maps.marker.AdvancedMarkerElement[] = []
+  for (const door of turfDoors.value.values()) {
+    if (door.lat == null || door.lng == null) continue
+    alive.add(door.id)
+    let marker = markersByDoor.get(door.id)
+    if (!marker) {
+      const content = document.createElement('div')
+      const num = houseNumber(door.street)
+      if (num > 0) content.dataset.house = String(num)
+      marker = new google.maps.marker.AdvancedMarkerElement({
+        position: { lat: door.lat, lng: door.lng },
+        title: door.street,
+        content,
+        gmpClickable: true,
+      })
+      marker.addListener('gmp-click', () => void openDoor(door.id))
+      markersByDoor.set(door.id, marker)
+      fresh.push(marker)
+    }
+    styleDoorMarker(marker, door)
+  }
+  const stale: google.maps.marker.AdvancedMarkerElement[] = []
+  for (const [id, marker] of markersByDoor) {
+    if (!alive.has(id)) {
+      stale.push(marker)
+      markersByDoor.delete(id)
+    }
+  }
+  if (stale.length) doorClusterer.removeMarkers(stale)
+  if (fresh.length) doorClusterer.addMarkers(fresh)
+}
+
+/** Restyle a single door's pin in place (live knock landed on it). */
+function restyleDoor(addressId: string) {
+  const marker = markersByDoor.get(addressId)
+  const door = turfDoors.value.get(addressId)
+  if (marker && door) styleDoorMarker(marker, door)
+}
+
+/** Tap a door pin: load it into Talk mode and jump to the canvass screen —
+ * the squad map as a second way into knock logging. */
+async function openDoor(addressId: string) {
+  await talk.loadAddress(addressId)
+  await router.push({ name: 'canvass' })
 }
 
 function latestGeo(memberId: string): RecentDoor | null {
@@ -396,6 +514,7 @@ async function onLiveKnock(knock: KnockLog) {
     let set = knockedByMember.value.get(knock.canvasser_id)
     if (!set) knockedByMember.value.set(knock.canvasser_id, (set = new Set()))
     set.add(a.id)
+    restyleDoor(a.id)
   }
 
   const member = mySquad.value?.members.find((m) => m.id === knock.canvasser_id)
@@ -486,6 +605,8 @@ onUnmounted(() => {
   areasLayer?.dispose()
   for (const marker of markersByMember.values()) marker.map = null
   markersByMember.clear()
+  doorClusterer?.clearMarkers()
+  markersByDoor.clear()
 })
 
 // Load once the squad appears and reload whenever the squad or its roster
@@ -564,6 +685,9 @@ watch(
               <span class="turf-dot" :style="{ background: t.color }"></span>{{ t.name }}
             </button>
           </div>
+          <router-link v-if="canSplitTurf" to="/turf" class="btn btn-sm btn-ghost split-turf-btn">
+            Split up the turf between the crew →
+          </router-link>
         </template>
         <p v-else-if="!dashboardLoading" class="muted no-turf">
           No turf assigned to your squad yet — your campaign manager cuts and assigns turf.
@@ -615,8 +739,9 @@ watch(
         </button>
       </div>
       <p class="muted color-tip">
-        Tap a squadmate to zoom the map to the last door they knocked. Pick your card color and
-        avatar under Appearance.
+        Tap a door pin to open it in Talk mode — green pins are already knocked, blue ones aren't
+        yet. Tap a squadmate to zoom to the last door they knocked. Pick your card color and avatar
+        under Appearance.
       </p>
     </div>
 
@@ -799,6 +924,11 @@ watch(
 .no-turf {
   margin: 0;
   font-size: 0.9rem;
+}
+
+.split-turf-btn {
+  align-self: flex-start;
+  text-decoration: none;
 }
 
 /* --- Map --- */

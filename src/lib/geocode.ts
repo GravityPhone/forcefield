@@ -42,3 +42,22 @@ export async function geocodeAndCache(address: GeocodableAddress): Promise<{ lat
     return null // best-effort — Talk mode still works without a pin
   }
 }
+
+/** Geocode a batch of addresses one at a time (the Maps JS Geocoder has no
+ * batch call and rate-limits hard on bursts, so sequential-with-await is the
+ * safe cadence). Already-located rows are skipped for free. `onLocated` fires
+ * as each door resolves so callers can drop its pin incrementally; `shouldStop`
+ * is polled before each door so a long sweep can bail when the caller navigates
+ * away. Every result caches to the DB — this is a one-time cost per address. */
+export async function geocodeMissing(
+  addresses: GeocodableAddress[],
+  onLocated?: (id: string, loc: { lat: number; lng: number }) => void,
+  shouldStop?: () => boolean,
+): Promise<void> {
+  for (const a of addresses) {
+    if (shouldStop?.()) return
+    if (a.lat != null && a.lng != null) continue
+    const loc = await geocodeAndCache(a)
+    if (loc) onLocated?.(a.id, loc)
+  }
+}
