@@ -54,18 +54,8 @@ async function send() {
   if (!text || loading.value) return
 
   if (!keyLoaded.value) return // still fetching; send is disabled in the UI until then
-  if (!apiKey.value) {
-    messages.value.push({ id: nextId++, role: 'user', text })
-    messages.value.push({
-      id: nextId++,
-      role: 'assistant',
-      text: 'No API key saved — add your Anthropic API key in Settings first.',
-      error: true,
-    })
-    draft.value = ''
-    await scrollToBottom()
-    return
-  }
+  // No personal key saved is fine — the chat function falls back to the
+  // shared demo key configured on the server.
 
   messages.value.push({ id: nextId++, role: 'user', text })
   draft.value = ''
@@ -91,7 +81,13 @@ async function send() {
     const res = await fetch(`${apiBase}/api/chat`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ apiKey: apiKey.value, messages: wireMessages, timezone, localTime }),
+      body: JSON.stringify({
+        // undefined omits the field, so the server falls back to the shared key
+        apiKey: apiKey.value ?? undefined,
+        messages: wireMessages,
+        timezone,
+        localTime,
+      }),
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {

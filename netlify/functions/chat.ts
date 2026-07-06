@@ -28,6 +28,9 @@ const TOOL_TIMEOUT_MS = 4000
 const SUPABASE_URL = 'https://whrliwbdxjdcksbvwkrc.supabase.co'
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
 const MAPS_KEY = process.env.GOOGLE_MAPS_API_KEY ?? ''
+// Shared demo key: used when the request doesn't carry a personal key, so
+// anyone with AI-chat access can demo it without bringing their own.
+const SHARED_ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? ''
 
 const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 
@@ -389,7 +392,12 @@ async function handleChat(req: Request): Promise<Response> {
   }
 
   const { apiKey, messages: rawMessages, timezone: rawTimezone, localTime: rawLocalTime } = body
-  if (typeof apiKey !== 'string' || !apiKey.trim()) {
+  // A personal key saved in Settings still wins; otherwise fall back to the
+  // shared demo key configured on the Netlify site (ANTHROPIC_API_KEY). The
+  // shared key never leaves the server — demo users just get working chat.
+  const personalKey = typeof apiKey === 'string' ? apiKey.trim() : ''
+  const effectiveKey = personalKey || SHARED_ANTHROPIC_KEY
+  if (!effectiveKey) {
     return json({ error: 'Missing API key — add it in Settings.' }, 400)
   }
   if (!isValidMessages(rawMessages)) {
@@ -412,9 +420,9 @@ async function handleChat(req: Request): Promise<Response> {
     typeof rawLocalTime === 'string' && rawLocalTime.length < 100 ? rawLocalTime : 'unknown'
 
   // Pin the base URL explicitly — don't inherit ANTHROPIC_BASE_URL from the
-  // function's environment. This is a BYO-key proxy for the admin's own
-  // Anthropic account; it must always talk to the real public API.
-  const client = new Anthropic({ apiKey: apiKey.trim(), baseURL: 'https://api.anthropic.com' })
+  // function's environment. Whether BYO or the shared demo key, this must
+  // always talk to the real public API.
+  const client = new Anthropic({ apiKey: effectiveKey, baseURL: 'https://api.anthropic.com' })
 
   const started = Date.now()
   const messages: Anthropic.MessageParam[] = rawMessages.map((m) => ({

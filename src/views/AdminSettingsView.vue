@@ -70,8 +70,9 @@ async function saveKey() {
       <div class="card">
         <h3>AI Assistant — Anthropic API Key</h3>
         <p class="muted">
-          Bring your own key. Saved to your admin account, so it's available on any device you log
-          in from — set it once here.
+          A shared demo key is already configured — the AI assistant works out of the box, nothing
+          to set up. Optionally save your own key here to use it instead; it's saved to your
+          account and follows you across devices.
         </p>
         <form v-if="!loading" @submit.prevent="saveKey">
           <div class="field">
