@@ -97,9 +97,6 @@ const draftName = ref('')
 const segments = ref<DraftSegment[]>([])
 const anchor = ref<AddressLite | null>(null)
 const parityChoice = ref<TurfParity>('both')
-/** Add paints doors into the draft; Erase takes them back out with the very
- * same gestures (two-tap walk, double-tap street, hold a single door). */
-const sweepMode = ref<'add' | 'erase'>('add')
 /** Which draft segment's inline editor is open (pill tap toggles it). */
 const expandedSegKey = ref<string | null>(null)
 const expandedSeg = computed(() => segments.value.find((s) => s.key === expandedSegKey.value) ?? null)
@@ -275,6 +272,14 @@ const draftMemberIds = computed(() => {
 const draftDoorCount = computed(() => draftMemberIds.value.size)
 const draftTakenCount = computed(() => segments.value.reduce((n, s) => n + s.takenCount, 0))
 
+/** Every gesture is contextual instead of mode-based: touching a door
+ * already in the draft takes it OUT, touching one that isn't takes it (and
+ * whatever it's connected to) IN. This tells whichever pin is currently
+ * armed as a sweep anchor which way the next tap will go. */
+const anchorErasing = computed(() =>
+  anchor.value ? draftMemberIds.value.has(anchor.value.id) : false,
+)
+
 // Transient feedback line ("Added WALNUT ST — 41 doors") that temporarily
 // replaces the standing instructions in the sweep bar.
 const flashMsg = ref('')
@@ -289,19 +294,16 @@ function flash(msg: string) {
 }
 
 const hint = computed(() => {
-  if (sweepBusy.value) return sweepMode.value === 'erase' ? 'Erasing…' : 'Sweeping…'
+  if (sweepBusy.value) return anchorErasing.value ? 'Erasing…' : 'Sweeping…'
   if (flashMsg.value) return flashMsg.value
   if (anchor.value) {
     const a = anchor.value
-    return sweepMode.value === 'erase'
-      ? `Anchor down at ${a.street} — tap another door to erase the walk between them (tap the anchor again to cancel).`
+    return anchorErasing.value
+      ? `Anchor down at ${a.street} (already in the turf) — tap another door to erase the walk between them (tap the anchor again to cancel).`
       : `Anchor down at ${a.street} — tap another door to sweep the walk between them, even onto another street (tap the anchor again to cancel).`
   }
-  if (sweepMode.value === 'erase') {
-    return 'Erasing: tap two doors to remove that stretch, hold a door to remove just it, double-tap a street to drop it whole.'
-  }
   const base =
-    'Tap two doors to sweep the walk between them, hold a door to add just it, double-tap a street to add it whole.'
+    'Tap a door already in the turf, then another, to erase the walk between — tap two NEW doors to sweep them in. Hold a door to take just it (connects to the rest of the turf); double-tap a street to add or remove it whole.'
   return isSubcutter.value
     ? `${base} Only doors inside your assigned turf count toward a sub-turf.`
     : base
@@ -691,10 +693,13 @@ async function onPinTap(addressId: string) {
   // Same street: the range between the taps. Different streets: the WALK
   // between them — up the anchor's street to the corner where the two
   // streets come closest, then along the second street to the tap. Two taps
-  // can cover doors on two streets. Erase mode runs the same walk backwards.
+  // can cover doors on two streets. Whether this ADDS or ERASES is decided
+  // by the anchor: starting from a door already in the turf erases the walk
+  // between the taps; starting from a fresh door sweeps it in.
   const ranges = walkRanges(from, a, addressById.values())
+  const erasing = draftMemberIds.value.has(from.id)
   snapshotDraft()
-  if (sweepMode.value === 'erase') {
+  if (erasing) {
     for (const r of ranges) await subtractRange(r.street_name, r.city, r.lo, r.hi)
     flash(`Erased ${ranges.map((r) => `${r.street_name} ${r.lo}–${r.hi}`).join(' + ')}.`)
     return
@@ -707,8 +712,28 @@ async function onPinTap(addressId: string) {
   }
 }
 
-/** Holding a pin (~half a second) takes exactly that one door — added to the
- * draft in Add mode, carved out of it in Erase mode. */
+/** The already-drafted door geometrically closest to `a` — what a held door
+ * connects onto. Null when the draft is still empty. */
+function nearestDraftDoor(a: AddressLite): AddressLite | null {
+  if (a.lat == null || a.lng == null) return null
+  let best: AddressLite | null = null
+  let bestD = Infinity
+  for (const id of draftMemberIds.value) {
+    const d = addressById.get(id)
+    if (!d || d.lat == null || d.lng == null || d.id === a.id) continue
+    const dist = metersBetween(a.lat, a.lng, d.lat, d.lng)
+    if (dist < bestD) {
+      bestD = dist
+      best = d
+    }
+  }
+  return best
+}
+
+/** Holding a pin (~half a second) is contextual, same as the two-tap sweep:
+ * a door already in the turf comes back OUT; a fresh door goes IN, walked in
+ * from whichever drafted door sits closest so it joins the turf connected
+ * rather than floating as an isolated single-door island. */
 async function onPinHold(addressId: string) {
   const a = addressById.get(addressId)
   if (!a || sweepBusy.value) return
@@ -716,12 +741,19 @@ async function onPinHold(addressId: string) {
   const name = streetNameOf(a.street)
   const n = houseNumber(a.street)
   snapshotDraft()
-  if (sweepMode.value === 'erase') {
+  if (draftMemberIds.value.has(addressId)) {
     await subtractRange(name, a.city, n, n)
-    flash(`Removed ${a.street} from the draft.`)
+    flash(`Removed ${a.street} from the turf.`)
   } else {
-    await addSegment(name, a.city, n, n, 'both')
-    flash(`Added just ${a.street}.`)
+    const nearest = nearestDraftDoor(a)
+    if (nearest) {
+      const ranges = walkRanges(nearest, a, addressById.values())
+      for (const r of ranges) await addSegment(r.street_name, r.city, r.lo, r.hi, 'both')
+      flash(`Connected ${a.street} to the turf.`)
+    } else {
+      await addSegment(name, a.city, n, n, 'both')
+      flash(`Added just ${a.street}.`)
+    }
   }
   restyleAll()
 }
@@ -992,9 +1024,25 @@ function removeSegmentWithUndo(seg: DraftSegment) {
   removeSegment(seg)
 }
 
-function clearDraftWithUndo() {
-  if (segments.value.length) snapshotDraft()
+/** Fully abandon an edit — unlike Start Over, this leaves edit mode
+ * entirely, so nothing about this session is worth keeping in Undo. */
+function cancelEdit() {
   clearDraft()
+  undoStack.value = []
+}
+
+/** Re-cut from scratch WITHOUT losing the name/assignee already picked (or,
+ * mid-edit, without leaving edit mode) — just the swept streets go away. */
+function startOverDraft() {
+  if (segments.value.length) snapshotDraft()
+  segments.value = []
+  wipeDraftDrawing()
+  expandedSegKey.value = null
+  anchor.value = null
+  saveError.value = ''
+  defaultDraftParent()
+  restyleAll()
+  buildSavedAreas()
 }
 
 async function onSegmentRangeChange(seg: DraftSegment) {
@@ -1089,10 +1137,6 @@ async function onMapDoubleClick(latLng: google.maps.LatLng) {
     snapshotDraft()
     for (const s of already) removeSegment(s)
     flash(`Removed ${name} from the draft.`)
-    return
-  }
-  if (sweepMode.value === 'erase') {
-    flash(`${name} isn't in the draft — nothing to erase there.`)
     return
   }
   await sweepWholeStreet(name, hit.door.city)
@@ -1386,26 +1430,12 @@ onUnmounted(() => {
       </div>
     </div>
     <div v-else class="stack">
-      <!-- Sweep status + controls: add/erase mode and the side filter. -->
-      <div class="sweep-bar" :class="{ erase: sweepMode === 'erase' }" :style="{ '--draft-color': draftColor }">
-        <span class="sweep-dot" :class="{ armed: !!anchor }" aria-hidden="true"></span>
+      <!-- Sweep status + side filter. Every gesture is contextual now (touch
+           a drafted door to erase, a fresh one to add), so the bar just
+           reflects what the armed anchor will do next — no mode switch. -->
+      <div class="sweep-bar" :class="{ erasing: anchorErasing }" :style="{ '--draft-color': draftColor }">
+        <span class="sweep-dot" :class="{ armed: !!anchor, erasing: anchorErasing }" aria-hidden="true"></span>
         <p class="sweep-hint">{{ hint }}</p>
-        <div class="parity-toggle" role="group" aria-label="Add to or erase from the draft">
-          <button
-            class="parity-btn"
-            :class="{ active: sweepMode === 'add' }"
-            @click="sweepMode = 'add'"
-          >
-            Add
-          </button>
-          <button
-            class="parity-btn erase-btn"
-            :class="{ active: sweepMode === 'erase' }"
-            @click="sweepMode = 'erase'"
-          >
-            Erase
-          </button>
-        </div>
         <div class="parity-toggle" role="group" aria-label="Which side of the street to sweep">
           <button
             v-for="p in (['both', 'even', 'odd'] as const)"
@@ -1620,8 +1650,11 @@ onUnmounted(() => {
             <button v-if="canUndo" class="btn btn-ghost" :disabled="saving || sweepBusy" @click="undoDraft">
               Undo
             </button>
-            <button v-if="segments.length || editingTurfId" class="btn btn-ghost" :disabled="saving" @click="clearDraftWithUndo">
-              {{ editingTurfId ? 'Cancel edit' : 'Clear all' }}
+            <button v-if="segments.length" class="btn btn-ghost" :disabled="saving" @click="startOverDraft">
+              Start over
+            </button>
+            <button v-if="editingTurfId" class="btn btn-ghost" :disabled="saving" @click="cancelEdit">
+              Cancel edit
             </button>
           </div>
           <p v-if="draftTakenCount" class="muted">
@@ -1750,16 +1783,14 @@ onUnmounted(() => {
 }
 
 /* Erase mode reads as "careful, you're taking doors away". */
-.erase-btn.active {
-  background: var(--danger);
-}
-
-.sweep-bar.erase {
+/* Tints red the moment the armed anchor is already in the turf — the next
+ * tap is about to take something OUT, not add to it. */
+.sweep-bar.erasing {
   border-left-color: var(--danger);
   background: color-mix(in srgb, var(--danger) 6%, var(--surface));
 }
 
-.sweep-bar.erase .sweep-dot {
+.sweep-dot.erasing {
   background: var(--danger);
 }
 
