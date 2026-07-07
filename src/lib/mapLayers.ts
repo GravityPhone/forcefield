@@ -183,6 +183,37 @@ export class CityLimitsLayer {
   }
 }
 
+/** Cluster bubbles as plain density dots — a circle that grows with how many
+ * pins it swallowed, no count text (the default renderer's numbers read like
+ * house numbers next to number-mode pins, which was confusing). Shared by
+ * every map that clusters door pins (Hunt, Squad, Turf). */
+export function dotClusterRenderer(color = '#2f6fed') {
+  return {
+    render({ count, position }: { count: number; position: google.maps.LatLng }) {
+      const el = document.createElement('div')
+      const size = Math.round(Math.min(44, 16 + Math.sqrt(count) * 2.8))
+      const s = el.style
+      s.boxSizing = 'border-box'
+      s.width = `${size}px`
+      s.height = `${size}px`
+      s.borderRadius = '50%'
+      s.background = color
+      s.border = '2px solid #fff'
+      // Translucent halo scaled with the dot — the "this stands for an area"
+      // cue the count used to (half-heartedly) provide.
+      s.boxShadow = `0 0 0 ${Math.max(4, Math.round(size / 5))}px ${color}40, 0 0 4px rgba(0, 0, 0, 0.4)`
+      s.cursor = 'pointer'
+      return new google.maps.marker.AdvancedMarkerElement({
+        position,
+        content: el,
+        // Above single pins, below anything intentionally raised (anchors,
+        // member avatars).
+        zIndex: 300,
+      })
+    },
+  }
+}
+
 // --- Per-device layer preferences (same pattern as Hunt's pin mode). ---
 
 export function readMapPref(key: string, fallback: boolean): boolean {

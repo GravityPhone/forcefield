@@ -24,6 +24,7 @@ import {
   CityLimitsLayer,
   TurfAreasLayer,
   corridorFor,
+  dotClusterRenderer,
   readMapPref,
   writeMapPref,
 } from '@/lib/mapLayers'
@@ -532,7 +533,7 @@ async function initialize() {
   map.addListener('dblclick', (e: google.maps.MapMouseEvent) => {
     if (e.latLng) void onMapDoubleClick(e.latLng)
   })
-  clusterer = new MarkerClusterer({ map, markers: [] })
+  clusterer = new MarkerClusterer({ map, markers: [], renderer: dotClusterRenderer() })
 
   areasLayer = new TurfAreasLayer(map)
   areasLayer.setVisible(showAreas.value)

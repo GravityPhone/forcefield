@@ -5,7 +5,7 @@ import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import { Geolocation } from '@capacitor/geolocation'
 import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
-import { CityLimitsLayer, TurfAreasLayer, readMapPref, writeMapPref } from '@/lib/mapLayers'
+import { CityLimitsLayer, TurfAreasLayer, dotClusterRenderer, readMapPref, writeMapPref } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
 import { geocodeAndCache, geocodeMissing, streetsAtPoints } from '@/lib/geocode'
 import { supabase } from '@/lib/supabase'
@@ -22,6 +22,10 @@ import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockLog, Kn
 const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
 const NEARBY_CAP = 50
 const DEFAULT_ZOOM = 14
+/** Below this zoom, numbers mode falls back to plain dots — house numbers
+ * only mean something when you're close enough to be looking at one street,
+ * and number chips floating over a whole town read as noise. */
+const NUMBERS_MIN_ZOOM = 16
 
 /** `persons(count)` is a PostgREST aggregate embed — one row per address
  * with a single { count } entry, giving household roster size in the same
@@ -52,6 +56,10 @@ const pinsLoading = ref(false)
 type PinMode = 'dots' | 'numbers'
 const pinMode = ref<PinMode>(readStoredPinMode())
 const locatedAddressId = ref<string | null>(null)
+/** Tracked so numbers mode can fall back to dots when zoomed out; only
+ * threshold CROSSINGS trigger a restyle (per-tick loops over every marker
+ * were the map's old perf sin). */
+let mapZoom = DEFAULT_ZOOM
 
 function readStoredPinMode(): PinMode {
   try {
@@ -281,8 +289,9 @@ function styleMarker(marker: google.maps.marker.AdvancedMarkerElement, addressId
   marker.zIndex = isLocated ? 1000 : 1
 
   // `data-house` is stamped in addOrUpdateMarker; fall back to a dot when a
-  // row has no parseable house number so those pins never render blank.
-  if (pinMode.value === 'numbers' && el.dataset.house) {
+  // row has no parseable house number so those pins never render blank —
+  // or when the map is zoomed too far out for house numbers to mean much.
+  if (pinMode.value === 'numbers' && mapZoom >= NUMBERS_MIN_ZOOM && el.dataset.house) {
     el.textContent = el.dataset.house
     s.borderRadius = '7px'
     s.width = 'auto'
@@ -388,7 +397,15 @@ async function initialize() {
   // instead of bubbling to this one) means "let me see the map", so bring
   // it into view. Tapping a pin doesn't hit this listener at all.
   map.addListener('click', scrollHuntToTop)
-  clusterer = new MarkerClusterer({ map, markers: [] })
+  mapZoom = map.getZoom() ?? DEFAULT_ZOOM
+  map.addListener('zoom_changed', () => {
+    const wasClose = mapZoom >= NUMBERS_MIN_ZOOM
+    mapZoom = map?.getZoom() ?? mapZoom
+    if (pinMode.value === 'numbers' && wasClose !== mapZoom >= NUMBERS_MIN_ZOOM) {
+      refreshAllPinStyles()
+    }
+  })
+  clusterer = new MarkerClusterer({ map, markers: [], renderer: dotClusterRenderer() })
 
   areasLayer = new TurfAreasLayer(map)
   areasLayer.setVisible(showAreas.value)

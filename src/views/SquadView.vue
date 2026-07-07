@@ -10,7 +10,7 @@ import { fadeUp } from '@/lib/motion'
 import { supabase } from '@/lib/supabase'
 import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
-import { TurfAreasLayer } from '@/lib/mapLayers'
+import { TurfAreasLayer, dotClusterRenderer } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
 import { rangeCovers, walkRanges } from '@/lib/doorPath'
 import { geocodeMissing } from '@/lib/geocode'
@@ -30,6 +30,9 @@ const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
 // "done vs to-do" reads the same in every color scheme).
 const DOOR_KNOCKED_HEX = '#2e9e5b'
 const DOOR_TODO_HEX = '#2f6fed'
+/** Below this zoom the house-number chips fall back to plain dots — numbers
+ * only mean something when you're close enough to read a street. */
+const NUMBERS_MIN_ZOOM = 16
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -254,6 +257,9 @@ const markersByMember = new Map<string, google.maps.marker.AdvancedMarkerElement
 const markersByDoor = new Map<string, google.maps.marker.AdvancedMarkerElement>()
 let doorClusterer: MarkerClusterer | null = null
 const mapFailed = ref(false)
+/** Tracked so number chips can fall back to dots when zoomed out; only
+ * threshold crossings restyle. */
+let mapZoom = 13
 
 const turfColorById = computed(() => new Map(squadTurfs.value.map((t) => [t.id, t.color])))
 const turfById = computed(() => new Map(squadTurfs.value.map((t) => [t.id, t])))
@@ -294,7 +300,13 @@ async function initMap() {
     gestureHandling: 'greedy',
   })
   areasLayer = new TurfAreasLayer(map)
-  doorClusterer = new MarkerClusterer({ map, markers: [] })
+  doorClusterer = new MarkerClusterer({ map, markers: [], renderer: dotClusterRenderer() })
+  mapZoom = map.getZoom() ?? mapZoom
+  map.addListener('zoom_changed', () => {
+    const wasClose = mapZoom >= NUMBERS_MIN_ZOOM
+    mapZoom = map?.getZoom() ?? mapZoom
+    if (wasClose !== mapZoom >= NUMBERS_MIN_ZOOM) restyleAllDoors()
+  })
   applyMapData(true)
 }
 
@@ -342,17 +354,18 @@ function styleDoorMarker(marker: google.maps.marker.AdvancedMarkerElement, door:
   const s = el.style
   const knocked = knockedDoors.value.has(door.id)
   const turfColor = turfColorById.value.get(door.turf_id)
-  el.textContent = el.dataset.house || ''
+  const showNumber = !!el.dataset.house && mapZoom >= NUMBERS_MIN_ZOOM
+  el.textContent = showNumber ? el.dataset.house! : ''
   s.boxSizing = 'border-box'
   s.cursor = 'pointer'
   s.display = 'flex'
   s.alignItems = 'center'
   s.justifyContent = 'center'
-  s.height = '19px'
-  s.minWidth = '19px'
-  s.padding = el.dataset.house ? '0 5px' : '0'
-  s.borderRadius = el.dataset.house ? '7px' : '50%'
-  s.width = el.dataset.house ? 'auto' : '14px'
+  s.height = showNumber ? '19px' : '14px'
+  s.minWidth = showNumber ? '19px' : '14px'
+  s.padding = showNumber ? '0 5px' : '0'
+  s.borderRadius = showNumber ? '7px' : '50%'
+  s.width = showNumber ? 'auto' : '14px'
   s.fontSize = '11px'
   s.fontWeight = '700'
   s.lineHeight = '1'
