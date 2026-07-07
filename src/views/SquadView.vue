@@ -12,6 +12,8 @@ import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import { TurfAreasLayer } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
+import { rangeCovers, walkRanges } from '@/lib/doorPath'
+import { geocodeMissing } from '@/lib/geocode'
 import { avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
@@ -57,7 +59,9 @@ interface TurfLite {
 interface TurfDoor {
   id: string
   street: string
+  unit: string | null
   city: string
+  zip: string | null
   lat: number | null
   lng: number | null
   turf_id: string
@@ -166,7 +170,7 @@ async function loadDashboard() {
     turfIds.length
       ? supabase
           .from('addresses')
-          .select('id, street, city, lat, lng, turf_id')
+          .select('id, street, unit, city, zip, lat, lng, turf_id')
           .in('turf_id', turfIds)
           .limit(10000)
       : Promise.resolve({ data: [] as TurfDoor[] }),
@@ -362,10 +366,16 @@ function styleDoorMarker(marker: google.maps.marker.AdvancedMarkerElement, door:
     ? `0 0 0 2px ${turfColor}, 0 0 3px rgba(0, 0, 0, 0.45)`
     : '0 0 3px rgba(0, 0, 0, 0.45)'
   const member = assigningMember.value
+  s.animation = ''
   if (member) {
     if (assignSelected.value.has(door.id)) {
       s.background = memberColor(member)
       s.boxShadow = '0 0 0 2.5px #fff, 0 0 5px rgba(0, 0, 0, 0.55)'
+      // The walk anchor pulses: the next unselected door tapped sweeps the
+      // whole walk from here.
+      if (door.id === assignAnchorId.value) {
+        s.animation = 'squad-anchor-pulse 1.1s ease-in-out infinite'
+      }
     } else if (poolParentOf(door) === null) {
       s.opacity = '0.35'
     }
@@ -533,6 +543,56 @@ function focusTurf(turfId: string) {
   if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
 }
 
+// --- Geolocate the turf's unpinned doors ---
+// Turf doors normally geocode at cut time, but imports and misses leave
+// gaps — this pins whatever's still missing so the map shows the whole
+// assignment. Batches over 100 get a confirm (one door at a time is slow).
+
+const GEOLOCATE_WARN_AT = 100
+const geolocating = ref(false)
+const geoProgress = ref('')
+let squadUnmounted = false
+
+const missingDoorCount = computed(
+  () => [...turfDoors.value.values()].filter((d) => d.lat == null || d.lng == null).length,
+)
+
+async function geolocateTurfDoors() {
+  if (geolocating.value) return
+  const missing = [...turfDoors.value.values()].filter((d) => d.lat == null || d.lng == null)
+  if (!missing.length) return
+  if (
+    missing.length > GEOLOCATE_WARN_AT &&
+    !window.confirm(
+      `Geolocate ${missing.length} doors? That's a big batch — they geocode one at a time, so it can take several minutes. Continue?`,
+    )
+  ) {
+    return
+  }
+  geolocating.value = true
+  let done = 0
+  geoProgress.value = `0/${missing.length}`
+  try {
+    await geocodeMissing(
+      missing,
+      (id, loc) => {
+        const d = turfDoors.value.get(id)
+        if (d) {
+          d.lat = loc.lat
+          d.lng = loc.lng
+        }
+        geoProgress.value = `${++done}/${missing.length}`
+        applyDoorMarkers()
+      },
+      () => squadUnmounted,
+    )
+    if (!squadUnmounted) applyMapData(false)
+  } finally {
+    geolocating.value = false
+    geoProgress.value = ''
+  }
+}
+
 // --- Live knocks: squadmates' doors land on the page as they happen ---
 
 let knockFeed: RealtimeChannel | null = null
@@ -583,6 +643,8 @@ async function onLiveKnock(knock: KnockLog) {
 
 const assigningMemberId = ref<string | null>(null)
 const assignSelected = ref<ReadonlySet<string>>(new Set())
+/** The last door selected by tap — the start of a two-tap walk sweep. */
+const assignAnchorId = ref<string | null>(null)
 const assignSaving = ref(false)
 const assignError = ref('')
 
@@ -628,6 +690,7 @@ function startAssign(memberId: string) {
     }
   }
   assignSelected.value = pre
+  assignAnchorId.value = null
   restyleAllDoors()
   mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
@@ -635,19 +698,48 @@ function startAssign(memberId: string) {
 function cancelAssign() {
   assigningMemberId.value = null
   assignSelected.value = new Set()
+  assignAnchorId.value = null
   assignError.value = ''
   restyleAllDoors()
 }
 
+/** Tap an unselected door: it joins the pile and becomes the walk anchor.
+ * Tap ANOTHER unselected door while one is anchored: every door along the
+ * walk between them joins too (same street = the range between; different
+ * streets = up the first street to the corner, then along the second).
+ * Tap a selected door: just that door leaves the pile. */
 function toggleAssignDoor(addressId: string) {
   const door = turfDoors.value.get(addressId)
   if (!door || poolParentOf(door) === null) return
   const next = new Set(assignSelected.value)
-  if (next.has(addressId)) next.delete(addressId)
-  else next.add(addressId)
+
+  if (next.has(addressId)) {
+    next.delete(addressId)
+    assignAnchorId.value = null
+    assignSelected.value = next
+    const marker = markersByDoor.get(addressId)
+    if (marker) styleDoorMarker(marker, door)
+    return
+  }
+
+  const anchor = assignAnchorId.value ? turfDoors.value.get(assignAnchorId.value) : null
+  if (anchor && next.has(anchor.id) && anchor.id !== addressId) {
+    const ranges = walkRanges(anchor, door, turfDoors.value.values())
+    for (const d of turfDoors.value.values()) {
+      if (next.has(d.id) || poolParentOf(d) === null) continue
+      if (ranges.some((r) => rangeCovers(r, d))) next.add(d.id)
+    }
+    next.add(addressId)
+    assignAnchorId.value = null
+    assignSelected.value = next
+    restyleAllDoors()
+    return
+  }
+
+  next.add(addressId)
+  assignAnchorId.value = addressId
   assignSelected.value = next
-  const marker = markersByDoor.get(addressId)
-  if (marker) styleDoorMarker(marker, door)
+  restyleAllDoors()
 }
 
 interface SegmentDraft {
@@ -788,6 +880,7 @@ async function saveAssignment() {
     }
     assigningMemberId.value = null
     assignSelected.value = new Set()
+    assignAnchorId.value = null
     await loadDashboard()
   } catch {
     assignError.value = "Couldn't save that assignment — try again."
@@ -875,6 +968,7 @@ watch(mapEl, (el) => {
 }, { flush: 'post' })
 
 onUnmounted(() => {
+  squadUnmounted = true
   squads.unsubscribeFromRosters()
   if (knockFeed) void supabase.removeChannel(knockFeed)
   areasLayer?.dispose()
@@ -981,7 +1075,8 @@ watch(
           <span class="assign-dot" aria-hidden="true"></span>
           <p class="assign-text">
             Assigning doors to <strong>{{ memberName(assigningMember) }}</strong> — tap doors to
-            add or remove them. <strong>{{ assignSelected.size }}</strong> selected.
+            add or remove them; tap one door, then another, to take the whole walk between them
+            (even around a corner). <strong>{{ assignSelected.size }}</strong> selected.
           </p>
           <div class="assign-actions">
             <button class="btn btn-sm btn-primary" :disabled="assignSaving" @click="saveAssignment">
@@ -996,7 +1091,19 @@ watch(
         <p v-if="mapsAuthError || mapFailed" class="error map-error">
           Couldn't load Google Maps — check the connection and reload.
         </p>
-        <div v-else ref="mapEl" class="squad-map"></div>
+        <div v-else class="squad-map-wrap">
+          <div ref="mapEl" class="squad-map"></div>
+          <button
+            v-if="missingDoorCount || geolocating"
+            type="button"
+            class="geolocate-btn"
+            :disabled="geolocating"
+            title="Geolocate the turf doors that have no pin yet"
+            @click="geolocateTurfDoors"
+          >
+            {{ geolocating ? geoProgress || 'Pinning…' : `Geolocate ${missingDoorCount} doors` }}
+          </button>
+        </div>
       </div>
 
       <!-- Member cards -->
@@ -1245,10 +1352,37 @@ watch(
   overflow: hidden;
 }
 
+.squad-map-wrap {
+  position: relative;
+}
+
 .squad-map {
   width: 100%;
   height: min(52vh, 420px);
   min-height: 260px;
+}
+
+/* Same chrome as the turf cutter's map controls. */
+.geolocate-btn {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  min-height: 36px;
+  padding: 0 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.geolocate-btn:disabled {
+  cursor: default;
+  color: var(--text-muted);
 }
 
 .map-error {
@@ -1463,5 +1597,17 @@ watch(
 
 .member-marker.selected {
   transform: scale(1.25);
+}
+
+/* Assign mode's walk-anchor pulse — lives on marker content in Google's map
+ * pane, outside this component's subtree, so it must be global. */
+@keyframes squad-anchor-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.3);
+  }
 }
 </style>

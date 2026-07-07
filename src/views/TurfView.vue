@@ -28,6 +28,7 @@ import {
   writeMapPref,
 } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
+import { walkRanges } from '@/lib/doorPath'
 import { geocodeAndCache, geocodeMissing } from '@/lib/geocode'
 import { supabase } from '@/lib/supabase'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
@@ -577,6 +578,74 @@ async function geocodeTurfDoors(turfId: string) {
   if (!unmounted) buildSavedAreas()
 }
 
+// --- Geolocate what's on screen ---
+// Coordinates are the only way to know a door is "on screen", so the button
+// works street-wise: every street with at least one pinned door in view gets
+// ALL of its doors geocoded (a warning gates batches over 100 — the Maps
+// Geocoder runs one door at a time, so big batches take minutes).
+
+const GEOLOCATE_WARN_AT = 100
+const geolocating = ref(false)
+const geoProgress = ref('')
+
+async function geolocateVisible() {
+  if (!map || geolocating.value) return
+  const bounds = map.getBounds()
+  if (!bounds) return
+  const streets = new Map<string, { name: string; city: string }>()
+  for (const a of addressById.values()) {
+    if (a.lat == null || a.lng == null) continue
+    if (!bounds.contains({ lat: a.lat, lng: a.lng })) continue
+    const name = streetNameOf(a.street)
+    if (name) streets.set(`${name}|${a.city.toUpperCase()}`, { name, city: a.city })
+  }
+  if (!streets.size) {
+    flash('No pinned streets in view — pan to where the pins are first.')
+    return
+  }
+  geolocating.value = true
+  try {
+    const rowsByStreet = await Promise.all(
+      [...streets.values()].map((s) => fetchStreetRows(s.name, s.city)),
+    )
+    const missing = rowsByStreet.flat().filter((a) => a.lat == null || a.lng == null)
+    if (!missing.length) {
+      flash('Every door on the streets in view is already pinned.')
+      return
+    }
+    if (
+      missing.length > GEOLOCATE_WARN_AT &&
+      !window.confirm(
+        `Geolocate ${missing.length} doors? That's a big batch — they geocode one at a time, so it can take several minutes. Continue?`,
+      )
+    ) {
+      return
+    }
+    let done = 0
+    geoProgress.value = `0/${missing.length}`
+    await geocodeMissing(
+      missing,
+      (id, loc) => {
+        const a = missing.find((m) => m.id === id)
+        if (a) {
+          a.lat = loc.lat
+          a.lng = loc.lng
+          upsertMarker(a)
+        }
+        geoProgress.value = `${++done}/${missing.length}`
+      },
+      () => unmounted,
+    )
+    if (!unmounted) {
+      buildSavedAreas()
+      flash(`Pinned ${done} of ${missing.length} doors.`)
+    }
+  } finally {
+    geolocating.value = false
+    geoProgress.value = ''
+  }
+}
+
 // --- Sweeping ---
 
 async function onPinTap(addressId: string) {
@@ -593,17 +662,18 @@ async function onPinTap(addressId: string) {
     return
   }
   const from = anchor.value
-  if (streetNameOf(from.street) !== streetNameOf(a.street)) {
-    // Different street: move the anchor rather than erroring — tapping around
-    // to find the right starting door shouldn't require a cancel step.
-    anchor.value = a
-    restyleAll()
-    return
-  }
-  const lo = Math.min(houseNumber(from.street), houseNumber(a.street))
-  const hi = Math.max(houseNumber(from.street), houseNumber(a.street))
   anchor.value = null
-  await addSegment(streetNameOf(from.street), from.city, lo, hi, parityChoice.value)
+  // Same street: sweep the range between the taps. Different streets: sweep
+  // the WALK between the taps — up the anchor's street to the corner where
+  // the two streets come closest, then along the second street to the tap.
+  // Two taps can cover doors on two streets.
+  const ranges = walkRanges(from, a, addressById.values())
+  for (const r of ranges) {
+    await addSegment(r.street_name, r.city, r.lo, r.hi, parityChoice.value)
+  }
+  if (ranges.length > 1) {
+    flash(`Swept the walk: ${ranges.map((r) => `${r.street_name} ${r.lo}–${r.hi}`).join(' + ')}.`)
+  }
 }
 
 async function fetchStreetRows(streetName: string, city: string | null): Promise<AddressLite[]> {
@@ -701,6 +771,28 @@ async function addSegment(
   hi: number,
   parity: TurfParity,
 ) {
+  // A sweep that overlaps an existing draft segment on the same street folds
+  // into it (the ranges union) — the same doors must never sit in a turf's
+  // segment list twice.
+  const existing = segments.value.find(
+    (s) =>
+      s.street_name === streetName &&
+      (!s.city || !city || s.city.toUpperCase() === city.toUpperCase()) &&
+      s.parity === parity &&
+      lo <= s.range_end &&
+      hi >= s.range_start,
+  )
+  if (existing) {
+    sweepBusy.value = true
+    try {
+      existing.range_start = Math.min(existing.range_start, lo)
+      existing.range_end = Math.max(existing.range_end, hi)
+      await computeSegment(existing)
+    } finally {
+      sweepBusy.value = false
+    }
+    return
+  }
   sweepBusy.value = true
   try {
     // reactive(): computeSegment fills memberIds/doorCount in AFTER the push,
@@ -945,6 +1037,16 @@ function onStreetInput(value: string) {
   }, 250)
 }
 
+/** Tapping a search result just SHOWS the street — zooms to it and drops
+ * pins for its doors (geocoding a capped batch of unmapped ones) without
+ * adding anything to the draft. Sweeping it is the separate, explicit
+ * "Entire street" button. */
+async function locateStreet(m: { street_name: string; city: string }) {
+  mapEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  flash(`Showing ${m.street_name} — pins only. Tap doors to sweep, or use "Entire street".`)
+  await materializeStreetPins(m.street_name, m.city, true)
+}
+
 async function addWholeStreet(m: { street_name: string; city: string }) {
   streetQuery.value = ''
   streetMatches.value = []
@@ -1145,6 +1247,15 @@ onUnmounted(() => {
           >
             City
           </button>
+          <button
+            type="button"
+            class="layer-btn"
+            :disabled="geolocating"
+            title="Geolocate every door on the streets in view"
+            @click="geolocateVisible"
+          >
+            {{ geolocating ? geoProgress || 'Pinning…' : 'Geolocate' }}
+          </button>
         </div>
       </div>
       <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
@@ -1153,21 +1264,27 @@ onUnmounted(() => {
         the key. The exact reason is logged in the browser console.
       </p>
 
-      <!-- Non-map entry point: sweep a whole street by name. -->
+      <!-- Non-map entry point: find a street by name. Tapping a match shows
+           its pins; "Entire street" is the explicit add-to-draft action. -->
       <input
         :value="streetQuery"
         class="street-search"
         type="search"
-        placeholder="…or search a street to sweep it whole"
-        aria-label="Search streets to add to the turf"
+        placeholder="…or search a street to see its doors"
+        aria-label="Search streets"
         @input="onStreetInput(($event.target as HTMLInputElement).value)"
       />
       <div v-if="streetSearching" class="muted search-note">Searching…</div>
       <div v-else-if="streetMatches.length" class="street-matches">
-        <button v-for="m in streetMatches" :key="m.street_name + m.city" class="street-match" @click="addWholeStreet(m)">
-          <span class="street-match-name">{{ m.street_name }}</span>
-          <span class="muted">{{ m.city }} · {{ m.count }} doors · {{ m.lo }}–{{ m.hi }}</span>
-        </button>
+        <div v-for="m in streetMatches" :key="m.street_name + m.city" class="street-match">
+          <button class="street-match-main" @click="locateStreet(m)">
+            <span class="street-match-name">{{ m.street_name }}</span>
+            <span class="muted">{{ m.city }} · {{ m.count }} doors · {{ m.lo }}–{{ m.hi }}</span>
+          </button>
+          <button class="btn btn-sm btn-primary street-match-add" @click="addWholeStreet(m)">
+            Entire street
+          </button>
+        </div>
       </div>
 
       <!-- Draft tray: the turf being cut. -->
@@ -1521,22 +1638,38 @@ onUnmounted(() => {
 
 .street-match {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   gap: 0.6rem;
   min-height: 44px;
-  padding: 0.5rem 0.75rem;
+  padding: 0.35rem 0.5rem 0.35rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+}
+
+.street-match-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  border: none;
+  background: transparent;
   cursor: pointer;
   font: inherit;
   color: inherit;
   text-align: left;
+  padding: 0;
 }
 
-.street-match:hover {
-  background: var(--surface-2);
+.street-match-main:hover .street-match-name {
+  text-decoration: underline;
+}
+
+.street-match-add {
+  flex-shrink: 0;
 }
 
 .street-match-name {

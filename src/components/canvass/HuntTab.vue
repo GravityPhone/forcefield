@@ -7,7 +7,7 @@ import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import { CityLimitsLayer, TurfAreasLayer, readMapPref, writeMapPref } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
-import { geocodeAndCache } from '@/lib/geocode'
+import { geocodeAndCache, geocodeMissing } from '@/lib/geocode'
 import { supabase } from '@/lib/supabase'
 import { localToday, startOfLocalDayISO } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
@@ -441,6 +441,92 @@ function focusTurf(turfId: string) {
   if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
 }
 
+// --- Geolocate what's on screen ---
+// Coordinates are the only way to know a door is "on screen", so the button
+// works street-wise: every street with at least one pinned door in view gets
+// ALL of its doors geocoded. A confirm gates batches over 100 (the Geocoder
+// runs one door at a time, so big batches take minutes).
+
+const GEOLOCATE_WARN_AT = 100
+const geolocating = ref(false)
+const geoProgress = ref('')
+const geoNote = ref('')
+let geoNoteTimer: ReturnType<typeof setTimeout> | undefined
+let huntUnmounted = false
+
+function flashGeoNote(msg: string) {
+  geoNote.value = msg
+  clearTimeout(geoNoteTimer)
+  geoNoteTimer = setTimeout(() => {
+    geoNote.value = ''
+  }, 3500)
+}
+
+async function geolocateVisible() {
+  if (!map || geolocating.value) return
+  const bounds = map.getBounds()
+  if (!bounds) return
+  const names = new Set<string>()
+  for (const [id, marker] of markersByAddress) {
+    if (!marker.position || !bounds.contains(marker.position)) continue
+    const info = doorInfoByAddress.get(id)
+    const name = info ? streetNameOf(info.street) : ''
+    if (name) names.add(name)
+  }
+  if (!names.size) {
+    flashGeoNote('No pinned streets in view — pan to where the pins are first.')
+    return
+  }
+  geolocating.value = true
+  try {
+    const missing: AddressWithRoster[] = []
+    for (const name of names) {
+      const { data } = await supabase
+        .from('addresses')
+        .select('*, persons(count)')
+        .ilike('street', `%${name}`)
+        .is('lat', null)
+      for (const r of (data ?? []) as AddressWithRoster[]) {
+        if (streetNameOf(r.street) === name) missing.push(r)
+      }
+    }
+    if (!missing.length) {
+      flashGeoNote('Every door on the streets in view is already pinned.')
+      return
+    }
+    if (
+      missing.length > GEOLOCATE_WARN_AT &&
+      !window.confirm(
+        `Geolocate ${missing.length} doors? That's a big batch — they geocode one at a time, so it can take several minutes. Continue?`,
+      )
+    ) {
+      return
+    }
+    let done = 0
+    geoProgress.value = `0/${missing.length}`
+    await geocodeMissing(
+      missing,
+      (id, loc) => {
+        const a = missing.find((m) => m.id === id)
+        if (a) {
+          a.lat = loc.lat
+          a.lng = loc.lng
+          addOrUpdateMarker(a)
+        }
+        geoProgress.value = `${++done}/${missing.length}`
+      },
+      () => huntUnmounted,
+    )
+    if (!huntUnmounted) {
+      rebuildTurfAreas()
+      flashGeoNote(`Pinned ${done} of ${missing.length} doors.`)
+    }
+  } finally {
+    geolocating.value = false
+    geoProgress.value = ''
+  }
+}
+
 /** Re-frame around every turf that's yours — same view the map opens with. */
 function focusAllMyTurf() {
   if (!map) return
@@ -792,6 +878,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  huntUnmounted = true
   resizeObserver?.disconnect()
   if (knockFeed) {
     void supabase.removeChannel(knockFeed)
@@ -917,7 +1004,17 @@ onUnmounted(() => {
         >
           City
         </button>
+        <button
+          type="button"
+          class="layer-btn"
+          :disabled="geolocating"
+          title="Geolocate every door on the streets in view"
+          @click="geolocateVisible"
+        >
+          {{ geolocating ? geoProgress || 'Pinning…' : 'Geolocate' }}
+        </button>
       </div>
+      <div v-if="geoNote" class="pins-loading" role="status" aria-live="polite">{{ geoNote }}</div>
       <button
         type="button"
         class="map-fullscreen-btn"
