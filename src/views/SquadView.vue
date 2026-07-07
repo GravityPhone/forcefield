@@ -564,7 +564,7 @@ async function geolocateTurfDoors() {
   if (
     missing.length > GEOLOCATE_WARN_AT &&
     !window.confirm(
-      `Geolocate ${missing.length} doors? That's a big batch — they geocode one at a time, so it can take several minutes. Continue?`,
+      `Place pins for ${missing.length} doors? That's a big batch — they geocode one at a time, so it can take several minutes. Continue?`,
     )
   ) {
     return
@@ -1098,10 +1098,10 @@ watch(
             type="button"
             class="geolocate-btn"
             :disabled="geolocating"
-            title="Geolocate the turf doors that have no pin yet"
+            title="Place a pin for every turf door that has none yet"
             @click="geolocateTurfDoors"
           >
-            {{ geolocating ? geoProgress || 'Pinning…' : `Geolocate ${missingDoorCount} doors` }}
+            {{ geolocating ? geoProgress || 'Placing…' : `Place ${missingDoorCount} pins` }}
           </button>
         </div>
       </div>

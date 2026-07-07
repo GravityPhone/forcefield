@@ -491,13 +491,13 @@ async function geolocateVisible() {
       }
     }
     if (!missing.length) {
-      flashGeoNote('Every door on the streets in view is already pinned.')
+      flashGeoNote('Every door on the streets in view already has a pin.')
       return
     }
     if (
       missing.length > GEOLOCATE_WARN_AT &&
       !window.confirm(
-        `Geolocate ${missing.length} doors? That's a big batch — they geocode one at a time, so it can take several minutes. Continue?`,
+        `Place pins for ${missing.length} doors? That's a big batch — they geocode one at a time, so it can take several minutes. Continue?`,
       )
     ) {
       return
@@ -519,7 +519,7 @@ async function geolocateVisible() {
     )
     if (!huntUnmounted) {
       rebuildTurfAreas()
-      flashGeoNote(`Pinned ${done} of ${missing.length} doors.`)
+      flashGeoNote(`Placed ${done} of ${missing.length} pins.`)
     }
   } finally {
     geolocating.value = false
@@ -989,10 +989,10 @@ onUnmounted(() => {
           class="layer-btn"
           :class="{ active: showAreas }"
           :aria-pressed="showAreas"
-          title="Shade turf areas"
+          title="Shade each turf's area in its color"
           @click="toggleAreas"
         >
-          Areas
+          Shade
         </button>
         <button
           type="button"
@@ -1004,16 +1004,16 @@ onUnmounted(() => {
         >
           City
         </button>
-        <button
-          type="button"
-          class="layer-btn"
-          :disabled="geolocating"
-          title="Geolocate every door on the streets in view"
-          @click="geolocateVisible"
-        >
-          {{ geolocating ? geoProgress || 'Pinning…' : 'Geolocate' }}
-        </button>
       </div>
+      <button
+        type="button"
+        class="place-pins-btn"
+        :disabled="geolocating"
+        title="Place a pin for every door on the streets in view"
+        @click="geolocateVisible"
+      >
+        {{ geolocating ? geoProgress || 'Placing…' : 'Place pins' }}
+      </button>
       <div v-if="geoNote" class="pins-loading" role="status" aria-live="polite">{{ geoNote }}</div>
       <button
         type="button"
@@ -1325,6 +1325,34 @@ onUnmounted(() => {
 }
 
 /* Layers control, stacked directly beneath the pin-style toggle. */
+/* Standalone pin-filling action, stacked under the layer toggles (it's an
+ * action, not a toggle, so it doesn't share their strip). */
+.place-pins-btn {
+  position: absolute;
+  top: calc(0.6rem + 36px + 0.5rem + 36px + 0.5rem);
+  left: 0.6rem;
+  min-height: 36px;
+  padding: 0 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.place-pins-btn:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.place-pins-btn:not(:disabled):hover {
+  background: var(--surface-2);
+}
+
 .layer-toggle {
   position: absolute;
   top: calc(0.6rem + 36px + 0.5rem);

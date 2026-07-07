@@ -97,6 +97,16 @@ const draftName = ref('')
 const segments = ref<DraftSegment[]>([])
 const anchor = ref<AddressLite | null>(null)
 const parityChoice = ref<TurfParity>('both')
+/** Add paints doors into the draft; Erase takes them back out with the very
+ * same gestures (two-tap walk, double-tap street, hold a single door). */
+const sweepMode = ref<'add' | 'erase'>('add')
+/** Which draft segment's inline editor is open (pill tap toggles it). */
+const expandedSegKey = ref<string | null>(null)
+const expandedSeg = computed(() => segments.value.find((s) => s.key === expandedSegKey.value) ?? null)
+
+function toggleSegEditor(key: string) {
+  expandedSegKey.value = expandedSegKey.value === key ? null : key
+}
 const editingTurfId = ref<string | null>(null)
 /** Which of the lead's turfs a NEW sub-turf carves from (auto when one). */
 const draftParentId = ref<string | null>(null)
@@ -279,14 +289,19 @@ function flash(msg: string) {
 }
 
 const hint = computed(() => {
-  if (sweepBusy.value) return 'Sweeping…'
+  if (sweepBusy.value) return sweepMode.value === 'erase' ? 'Erasing…' : 'Sweeping…'
   if (flashMsg.value) return flashMsg.value
   if (anchor.value) {
     const a = anchor.value
-    return `Anchor down at ${a.street} — tap another door on ${streetNameOf(a.street)} to sweep the range (or tap the anchor again to cancel).`
+    return sweepMode.value === 'erase'
+      ? `Anchor down at ${a.street} — tap another door to erase the walk between them (tap the anchor again to cancel).`
+      : `Anchor down at ${a.street} — tap another door to sweep the walk between them, even onto another street (tap the anchor again to cancel).`
+  }
+  if (sweepMode.value === 'erase') {
+    return 'Erasing: tap two doors to remove that stretch, hold a door to remove just it, double-tap a street to drop it whole.'
   }
   const base =
-    'Double-tap the map to add or remove a whole street. For part of a street, tap a door, then a second door on it.'
+    'Tap two doors to sweep the walk between them, hold a door to add just it, double-tap a street to add it whole.'
   return isSubcutter.value
     ? `${base} Only doors inside your assigned turf count toward a sub-turf.`
     : base
@@ -387,10 +402,12 @@ function upsertMarker(a: AddressLite) {
   if (a.lat == null || a.lng == null || !map) return
   let marker = markersByAddress.get(a.id)
   if (!marker) {
+    const content = document.createElement('div')
+    attachHoldGesture(content, a.id)
     marker = new google.maps.marker.AdvancedMarkerElement({
       position: { lat: a.lat, lng: a.lng },
       title: `${a.street}${a.unit ? ' ' + a.unit : ''}`,
-      content: document.createElement('div'),
+      content,
       gmpClickable: true,
     })
     marker.addListener('gmp-click', () => void onPinTap(a.id))
@@ -610,13 +627,13 @@ async function geolocateVisible() {
     )
     const missing = rowsByStreet.flat().filter((a) => a.lat == null || a.lng == null)
     if (!missing.length) {
-      flash('Every door on the streets in view is already pinned.')
+      flash('Every door on the streets in view already has a pin.')
       return
     }
     if (
       missing.length > GEOLOCATE_WARN_AT &&
       !window.confirm(
-        `Geolocate ${missing.length} doors? That's a big batch — they geocode one at a time, so it can take several minutes. Continue?`,
+        `Place pins for ${missing.length} doors? That's a big batch — they geocode one at a time, so it can take several minutes. Continue?`,
       )
     ) {
       return
@@ -638,7 +655,7 @@ async function geolocateVisible() {
     )
     if (!unmounted) {
       buildSavedAreas()
-      flash(`Pinned ${done} of ${missing.length} doors.`)
+      flash(`Placed ${done} of ${missing.length} pins.`)
     }
   } finally {
     geolocating.value = false
@@ -648,7 +665,15 @@ async function geolocateVisible() {
 
 // --- Sweeping ---
 
+/** Set when a hold gesture fires so the click the browser sends right after
+ * releasing the finger doesn't ALSO drop an anchor on the same pin. */
+let suppressTapId: string | null = null
+
 async function onPinTap(addressId: string) {
+  if (suppressTapId === addressId) {
+    suppressTapId = null
+    return
+  }
   const a = addressById.get(addressId)
   if (!a || sweepBusy.value) return
   if (!anchor.value) {
@@ -663,17 +688,72 @@ async function onPinTap(addressId: string) {
   }
   const from = anchor.value
   anchor.value = null
-  // Same street: sweep the range between the taps. Different streets: sweep
-  // the WALK between the taps — up the anchor's street to the corner where
-  // the two streets come closest, then along the second street to the tap.
-  // Two taps can cover doors on two streets.
+  // Same street: the range between the taps. Different streets: the WALK
+  // between them — up the anchor's street to the corner where the two
+  // streets come closest, then along the second street to the tap. Two taps
+  // can cover doors on two streets. Erase mode runs the same walk backwards.
   const ranges = walkRanges(from, a, addressById.values())
+  snapshotDraft()
+  if (sweepMode.value === 'erase') {
+    for (const r of ranges) await subtractRange(r.street_name, r.city, r.lo, r.hi)
+    flash(`Erased ${ranges.map((r) => `${r.street_name} ${r.lo}–${r.hi}`).join(' + ')}.`)
+    return
+  }
   for (const r of ranges) {
     await addSegment(r.street_name, r.city, r.lo, r.hi, parityChoice.value)
   }
   if (ranges.length > 1) {
     flash(`Swept the walk: ${ranges.map((r) => `${r.street_name} ${r.lo}–${r.hi}`).join(' + ')}.`)
   }
+}
+
+/** Holding a pin (~half a second) takes exactly that one door — added to the
+ * draft in Add mode, carved out of it in Erase mode. */
+async function onPinHold(addressId: string) {
+  const a = addressById.get(addressId)
+  if (!a || sweepBusy.value) return
+  anchor.value = null
+  const name = streetNameOf(a.street)
+  const n = houseNumber(a.street)
+  snapshotDraft()
+  if (sweepMode.value === 'erase') {
+    await subtractRange(name, a.city, n, n)
+    flash(`Removed ${a.street} from the draft.`)
+  } else {
+    await addSegment(name, a.city, n, n, 'both')
+    flash(`Added just ${a.street}.`)
+  }
+  restyleAll()
+}
+
+/** Long-press detection on a pin's DOM content (AdvancedMarker has no native
+ * hold event). Movement past a thumb-jitter threshold cancels, so panning
+ * the map over a pin never fires it. */
+function attachHoldGesture(el: HTMLElement, addressId: string) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let startX = 0
+  let startY = 0
+  const cancel = () => clearTimeout(timer)
+  el.addEventListener('pointerdown', (e) => {
+    startX = e.clientX
+    startY = e.clientY
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      suppressTapId = addressId
+      // If the browser swallows the follow-up click, don't leave the pin
+      // permanently deaf to its next real tap.
+      setTimeout(() => {
+        if (suppressTapId === addressId) suppressTapId = null
+      }, 700)
+      void onPinHold(addressId)
+    }, 450)
+  })
+  el.addEventListener('pointermove', (e) => {
+    if (Math.hypot(e.clientX - startX, e.clientY - startY) > 8) cancel()
+  })
+  el.addEventListener('pointerup', cancel)
+  el.addEventListener('pointercancel', cancel)
+  el.addEventListener('pointerleave', cancel)
 }
 
 async function fetchStreetRows(streetName: string, city: string | null): Promise<AddressLite[]> {
@@ -820,7 +900,101 @@ function removeSegment(seg: DraftSegment) {
   segPolylines.get(seg.key)?.setMap(null)
   segPolylines.delete(seg.key)
   removeDraftShading(seg.key)
+  if (expandedSegKey.value === seg.key) expandedSegKey.value = null
   restyleAll()
+}
+
+/** Take a range OUT of the draft: segments covering it shrink (or split in
+ * two around the hole); pieces left with no doors at all just disappear. */
+async function subtractRange(streetName: string, city: string | null, lo: number, hi: number) {
+  const affected = segments.value.filter(
+    (s) =>
+      s.street_name === streetName &&
+      (!s.city || !city || s.city.toUpperCase() === city.toUpperCase()) &&
+      lo <= s.range_end &&
+      hi >= s.range_start,
+  )
+  for (const seg of affected) {
+    const pieces: { lo: number; hi: number }[] = []
+    if (seg.range_start < lo) pieces.push({ lo: seg.range_start, hi: lo - 1 })
+    if (seg.range_end > hi) pieces.push({ lo: hi + 1, hi: seg.range_end })
+    removeSegment(seg)
+    const rows = pieces.length ? await fetchStreetRows(seg.street_name, seg.city) : []
+    for (const p of pieces) {
+      const hasDoors = rows.some((a) => {
+        const n = houseNumber(a.street)
+        return n >= p.lo && n <= p.hi
+      })
+      if (hasDoors) await addSegment(seg.street_name, seg.city, p.lo, p.hi, seg.parity)
+    }
+  }
+}
+
+// --- Undo ---
+// Every gesture that changes the draft's street list (sweep, erase, street
+// toggle, hold, tray ✕, Clear) files a snapshot first; Undo rebuilds the
+// draft from the latest one. Range/side tweaks in the pill editor are
+// hand-reversible, so they don't clutter the stack.
+
+type SegSnapshot = Pick<DraftSegment, 'street_name' | 'city' | 'range_start' | 'range_end' | 'parity'>
+const undoStack = ref<SegSnapshot[][]>([])
+const UNDO_CAP = 25
+const canUndo = computed(() => undoStack.value.length > 0)
+
+function snapshotDraft() {
+  undoStack.value.push(
+    segments.value.map((s) => ({
+      street_name: s.street_name,
+      city: s.city,
+      range_start: s.range_start,
+      range_end: s.range_end,
+      parity: s.parity,
+    })),
+  )
+  if (undoStack.value.length > UNDO_CAP) undoStack.value.shift()
+}
+
+/** Clear every draft stroke/shade from the map (the segment list itself is
+ * the caller's business). */
+function wipeDraftDrawing() {
+  for (const line of segPolylines.values()) line.setMap(null)
+  segPolylines.clear()
+  for (const key of [...draftFeaturesBySeg.keys()]) removeDraftShading(key)
+}
+
+async function undoDraft() {
+  const snap = undoStack.value.pop()
+  if (!snap || sweepBusy.value) return
+  sweepBusy.value = true
+  try {
+    wipeDraftDrawing()
+    segments.value = []
+    expandedSegKey.value = null
+    for (const s of snap) {
+      const seg: DraftSegment = reactive({
+        key: `seg-${++segKeyCounter}`,
+        ...s,
+        memberIds: [],
+        doorCount: 0,
+        takenCount: 0,
+      })
+      segments.value.push(seg)
+      await computeSegment(seg)
+    }
+    restyleAll()
+  } finally {
+    sweepBusy.value = false
+  }
+}
+
+function removeSegmentWithUndo(seg: DraftSegment) {
+  snapshotDraft()
+  removeSegment(seg)
+}
+
+function clearDraftWithUndo() {
+  if (segments.value.length) snapshotDraft()
+  clearDraft()
 }
 
 async function onSegmentRangeChange(seg: DraftSegment) {
@@ -837,9 +1011,8 @@ async function onSegmentParityChange(seg: DraftSegment, parity: string) {
 
 function clearDraft() {
   segments.value = []
-  for (const line of segPolylines.values()) line.setMap(null)
-  segPolylines.clear()
-  for (const key of [...draftFeaturesBySeg.keys()]) removeDraftShading(key)
+  wipeDraftDrawing()
+  expandedSegKey.value = null
   anchor.value = null
   editingTurfId.value = null
   draftName.value = ''
@@ -913,8 +1086,13 @@ async function onMapDoubleClick(latLng: google.maps.LatLng) {
   const name = streetNameOf(hit.door.street)
   const already = matchingSegments(name, hit.door.city)
   if (already.length) {
+    snapshotDraft()
     for (const s of already) removeSegment(s)
     flash(`Removed ${name} from the draft.`)
+    return
+  }
+  if (sweepMode.value === 'erase') {
+    flash(`${name} isn't in the draft — nothing to erase there.`)
     return
   }
   await sweepWholeStreet(name, hit.door.city)
@@ -948,6 +1126,7 @@ async function sweepWholeStreet(streetName: string, city: string | null, zoomTo 
     return
   }
   const nums = rows.map((r) => houseNumber(r.street))
+  snapshotDraft()
   await addSegment(streetName, city, Math.min(...nums), Math.max(...nums), parityChoice.value)
   flash(`Added ${streetName} — ${rows.length} doors. Double-tap it again to remove it.`)
   await materializeStreetPins(streetName, city, zoomTo)
@@ -1060,14 +1239,17 @@ async function addWholeStreet(m: { street_name: string; city: string }) {
 
 async function saveTurf() {
   saveError.value = ''
-  const name = draftName.value.trim()
-  if (!name) {
-    saveError.value = 'Give the turf a name.'
-    return
-  }
   if (!segments.value.length) {
     saveError.value = 'Sweep at least one street range first.'
     return
+  }
+  // Naming is optional — a turf is usually just "whoever it's assigned to's
+  // turf", so default to exactly that.
+  let name = draftName.value.trim()
+  if (!name) {
+    const opt = assignOptions.value.find((o) => o.value === assignChoice.value)
+    const who = assignChoice.value !== 'none' && opt ? opt.label.split(' — ')[1] : ''
+    name = who ? `${who}'s turf` : `Turf ${turfs.value.length + 1}`
   }
   if (isSubcutter.value && !editingTurfId.value && !draftParentId.value) {
     saveError.value = 'No turf is assigned to you yet — your campaign manager assigns turf first.'
@@ -1114,6 +1296,7 @@ async function saveTurf() {
     })
     if (rpcError) throw rpcError
     clearDraft()
+    undoStack.value = []
     await reloadAll()
     // Fill in pins for every door now in this turf, in the background —
     // never blocks the save.
@@ -1127,6 +1310,7 @@ async function saveTurf() {
 
 async function editTurf(t: TurfWithMeta) {
   clearDraft()
+  undoStack.value = []
   editingTurfId.value = t.id
   draftName.value = t.name
   assignChoice.value = assignChoiceOf(t)
@@ -1202,10 +1386,26 @@ onUnmounted(() => {
       </div>
     </div>
     <div v-else class="stack">
-      <!-- Sweep status + side filter: the "controls" of the highlighter. -->
-      <div class="sweep-bar" :style="{ '--draft-color': draftColor }">
+      <!-- Sweep status + controls: add/erase mode and the side filter. -->
+      <div class="sweep-bar" :class="{ erase: sweepMode === 'erase' }" :style="{ '--draft-color': draftColor }">
         <span class="sweep-dot" :class="{ armed: !!anchor }" aria-hidden="true"></span>
         <p class="sweep-hint">{{ hint }}</p>
+        <div class="parity-toggle" role="group" aria-label="Add to or erase from the draft">
+          <button
+            class="parity-btn"
+            :class="{ active: sweepMode === 'add' }"
+            @click="sweepMode = 'add'"
+          >
+            Add
+          </button>
+          <button
+            class="parity-btn erase-btn"
+            :class="{ active: sweepMode === 'erase' }"
+            @click="sweepMode = 'erase'"
+          >
+            Erase
+          </button>
+        </div>
         <div class="parity-toggle" role="group" aria-label="Which side of the street to sweep">
           <button
             v-for="p in (['both', 'even', 'odd'] as const)"
@@ -1232,10 +1432,10 @@ onUnmounted(() => {
             class="layer-btn"
             :class="{ active: showAreas }"
             :aria-pressed="showAreas"
-            title="Shade turf areas"
+            title="Shade each saved turf's area in its color"
             @click="toggleAreas"
           >
-            Areas
+            Shade
           </button>
           <button
             type="button"
@@ -1247,16 +1447,18 @@ onUnmounted(() => {
           >
             City
           </button>
-          <button
-            type="button"
-            class="layer-btn"
-            :disabled="geolocating"
-            title="Geolocate every door on the streets in view"
-            @click="geolocateVisible"
-          >
-            {{ geolocating ? geoProgress || 'Pinning…' : 'Geolocate' }}
-          </button>
         </div>
+        <!-- Fills in pins for every door on the streets in view (unmapped
+             doors have no coordinates, so they ride in via their street). -->
+        <button
+          type="button"
+          class="place-pins-btn"
+          :disabled="geolocating"
+          title="Place a pin for every door on the streets in view"
+          @click="geolocateVisible"
+        >
+          {{ geolocating ? geoProgress || 'Placing…' : 'Place pins' }}
+        </button>
       </div>
       <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
       <p v-if="mapsAuthError" class="muted map-error">
@@ -1328,58 +1530,77 @@ onUnmounted(() => {
         </p>
 
         <template v-if="segments.length">
-          <div class="seg-list">
-            <div v-for="seg in segments" :key="seg.key" class="seg-chip">
-              <div class="seg-chip-main">
-                <span class="seg-street">{{ seg.street_name }}</span>
-                <span class="muted seg-city">{{ seg.city ?? 'any city' }}</span>
-              </div>
-              <div class="seg-chip-controls">
-                <input
-                  type="number"
-                  class="seg-num"
-                  :value="seg.range_start"
-                  min="0"
-                  aria-label="Range start"
-                  @change="seg.range_start = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(seg)"
-                />
-                <span class="muted">–</span>
-                <input
-                  type="number"
-                  class="seg-num"
-                  :value="seg.range_end"
-                  min="0"
-                  aria-label="Range end"
-                  @change="seg.range_end = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(seg)"
-                />
-                <AppSelect
-                  class="seg-parity"
-                  small
-                  :options="[
-                    { value: 'both', label: 'Both sides' },
-                    { value: 'even', label: 'Even side' },
-                    { value: 'odd', label: 'Odd side' },
-                  ]"
-                  :model-value="seg.parity"
-                  aria-label="Which side of the street"
-                  @update:model-value="onSegmentParityChange(seg, $event)"
-                />
-                <span class="seg-doors" :class="{ 'seg-doors-empty': !seg.doorCount }">
-                  {{ seg.doorCount }} doors
+          <!-- One pill per swept stretch — tap it to fine-tune, ✕ to drop it. -->
+          <div class="seg-pills">
+            <div
+              v-for="seg in segments"
+              :key="seg.key"
+              class="seg-pill"
+              :class="{ open: expandedSegKey === seg.key, empty: !seg.doorCount }"
+            >
+              <button class="seg-pill-main" @click="toggleSegEditor(seg.key)">
+                <span class="seg-pill-street">{{ seg.street_name }}</span>
+                <span class="seg-pill-range">
+                  {{ seg.range_start }}–{{ seg.range_end }}<template v-if="seg.parity !== 'both'"> · {{ seg.parity }}</template>
                 </span>
-                <button class="btn btn-ghost btn-sm seg-remove" aria-label="Remove this street range" @click="removeSegment(seg)">
-                  ✕
-                </button>
-              </div>
-              <p v-if="seg.takenCount" class="muted seg-taken">
-                {{ seg.takenCount }} of these doors already belong to another turf and stay there.
-              </p>
+                <span class="seg-pill-count">{{ seg.doorCount }}</span>
+              </button>
+              <button
+                class="seg-pill-x"
+                :aria-label="`Remove ${seg.street_name} ${seg.range_start}–${seg.range_end}`"
+                @click="removeSegmentWithUndo(seg)"
+              >
+                ✕
+              </button>
             </div>
+          </div>
+          <div v-if="expandedSeg" class="seg-editor">
+            <div class="seg-editor-title">
+              <strong>{{ expandedSeg.street_name }}</strong>
+              <span class="muted">{{ expandedSeg.city ?? 'any city' }}</span>
+            </div>
+            <div class="seg-editor-controls">
+              <input
+                type="number"
+                class="seg-num"
+                :value="expandedSeg.range_start"
+                min="0"
+                aria-label="Range start"
+                @change="expandedSeg.range_start = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(expandedSeg)"
+              />
+              <span class="muted">–</span>
+              <input
+                type="number"
+                class="seg-num"
+                :value="expandedSeg.range_end"
+                min="0"
+                aria-label="Range end"
+                @change="expandedSeg.range_end = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(expandedSeg)"
+              />
+              <AppSelect
+                class="seg-parity"
+                small
+                :options="[
+                  { value: 'both', label: 'Both sides' },
+                  { value: 'even', label: 'Even side' },
+                  { value: 'odd', label: 'Odd side' },
+                ]"
+                :model-value="expandedSeg.parity"
+                aria-label="Which side of the street"
+                @update:model-value="onSegmentParityChange(expandedSeg, $event)"
+              />
+              <span class="seg-doors" :class="{ 'seg-doors-empty': !expandedSeg.doorCount }">
+                {{ expandedSeg.doorCount }} doors
+              </span>
+            </div>
+            <p v-if="expandedSeg.takenCount" class="muted seg-taken">
+              {{ expandedSeg.takenCount }} of these doors already belong to another turf and stay there.
+            </p>
           </div>
         </template>
         <p v-else class="muted empty-note">
-          No streets swept yet — double-tap the map near a street, tap two doors for part of one,
-          or search a street by name.
+          Nothing swept yet — tap two doors to take the walk between them, double-tap a street to
+          take it whole, hold a single door, or search below.
         </p>
 
         <div class="draft-form">
@@ -1388,16 +1609,19 @@ onUnmounted(() => {
             class="draft-name"
             type="text"
             maxlength="80"
-            placeholder="Turf name (e.g. Walnut &amp; Maple loop)"
-            aria-label="Turf name"
+            placeholder="Turf name (optional — defaults to the assignee)"
+            aria-label="Turf name (optional)"
           />
           <AppSelect v-model="assignChoice" :options="assignOptions" aria-label="Assign this turf to" />
           <div class="draft-actions">
             <button class="btn btn-primary" :disabled="saving" @click="saveTurf">
               {{ saving ? 'Saving…' : editingTurfId ? 'Save changes' : 'Create turf' }}
             </button>
-            <button v-if="segments.length || editingTurfId" class="btn btn-ghost" :disabled="saving" @click="clearDraft">
-              {{ editingTurfId ? 'Cancel edit' : 'Clear' }}
+            <button v-if="canUndo" class="btn btn-ghost" :disabled="saving || sweepBusy" @click="undoDraft">
+              Undo
+            </button>
+            <button v-if="segments.length || editingTurfId" class="btn btn-ghost" :disabled="saving" @click="clearDraftWithUndo">
+              {{ editingTurfId ? 'Cancel edit' : 'Clear all' }}
             </button>
           </div>
           <p v-if="draftTakenCount" class="muted">
@@ -1525,6 +1749,20 @@ onUnmounted(() => {
   color: #fff;
 }
 
+/* Erase mode reads as "careful, you're taking doors away". */
+.erase-btn.active {
+  background: var(--danger);
+}
+
+.sweep-bar.erase {
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 6%, var(--surface));
+}
+
+.sweep-bar.erase .sweep-dot {
+  background: var(--danger);
+}
+
 /* --- Map --- */
 
 .map-wrap {
@@ -1592,6 +1830,34 @@ onUnmounted(() => {
 }
 
 .layer-btn:not(.active):hover {
+  background: var(--surface-2);
+}
+
+/* Standalone pin-filling button, top-right on the map (deliberately NOT in
+ * the layers strip — it's an action, not a toggle). */
+.place-pins-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  min-height: 36px;
+  padding: 0 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.place-pins-btn:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.place-pins-btn:not(:disabled):hover {
   background: var(--surface-2);
 }
 
@@ -1704,37 +1970,112 @@ onUnmounted(() => {
   color: var(--draft-color);
 }
 
-.seg-list {
+/* --- Draft pills: one compact chip per swept stretch --- */
+
+.seg-pills {
   display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
 }
 
-.seg-chip {
-  padding: 0.5rem 0.65rem;
+.seg-pill {
+  display: inline-flex;
+  align-items: center;
+  border: 1.5px solid color-mix(in srgb, var(--draft-color) 55%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--draft-color) 10%, var(--surface));
+  overflow: hidden;
+}
+
+.seg-pill.open {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--draft-color) 40%, transparent);
+}
+
+.seg-pill.empty {
+  border-color: var(--danger);
+}
+
+.seg-pill-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 40px;
+  padding: 0 0.15rem 0 0.7rem;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.seg-pill-street {
+  font-weight: 700;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.seg-pill-range {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.seg-pill-count {
+  min-width: 1.7em;
+  padding: 0.12rem 0.4rem;
+  border-radius: 999px;
+  background: var(--draft-color);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.seg-pill.empty .seg-pill-count {
+  background: var(--danger);
+}
+
+.seg-pill-x {
+  min-height: 40px;
+  padding: 0 0.6rem 0 0.35rem;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.seg-pill-x:hover {
+  color: var(--danger);
+}
+
+/* Inline editor for whichever pill is open. */
+.seg-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  margin-bottom: 0.6rem;
   border: 1px solid var(--border);
   border-left: 4px solid var(--draft-color);
   border-radius: var(--radius);
   background: var(--surface);
 }
 
-.seg-chip-main {
+.seg-editor-title {
   display: flex;
   align-items: baseline;
   gap: 0.5rem;
-  margin-bottom: 0.35rem;
 }
 
-.seg-street {
-  font-weight: 700;
-}
-
-.seg-city {
+.seg-editor-title .muted {
   font-size: 0.82rem;
 }
 
-.seg-chip-controls {
+.seg-editor-controls {
   display: flex;
   align-items: center;
   gap: 0.4rem;
@@ -1771,10 +2112,6 @@ onUnmounted(() => {
 
 .seg-doors-empty {
   color: var(--danger);
-}
-
-.seg-remove {
-  margin-left: auto;
 }
 
 .seg-taken {
