@@ -79,12 +79,13 @@ const router = createRouter({
     { path: '/turf', name: 'turf', component: () => import('@/views/TurfView.vue'), meta: { roles: [] } },
 
     // Management area. Campaign managers run the day-to-day (dashboard, AI
-    // chat, settings); true admins keep user management to themselves.
+    // chat, settings) and manage the non-admin roster on /admin/users; true
+    // admins additionally manage admins and org-wide oversight.
     { path: '/admin', name: 'admin', component: () => import('@/views/AdminHomeView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
     { path: '/admin/chat', name: 'admin-chat', component: () => import('@/views/AdminChatView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
     { path: '/admin/settings', name: 'admin-settings', component: () => import('@/views/AdminSettingsView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
     { path: '/admin/campaigns', name: 'admin-campaigns', component: () => import('@/views/AdminCampaignsView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
-    { path: '/admin/users', name: 'admin-users', component: () => import('@/views/AdminUsersView.vue'), meta: { roles: ['admin'] } },
+    { path: '/admin/users', name: 'admin-users', component: () => import('@/views/AdminUsersView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
 
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],

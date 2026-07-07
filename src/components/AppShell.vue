@@ -75,6 +75,7 @@ const moreItems = computed<NavItem[]>(() => {
   }
   if (auth.profile.role === 'campaign_manager') {
     return [
+      { to: '/admin/users', label: 'Users', icon: 'squads' },
       { to: '/admin/chat', label: 'AI Chat', icon: 'sparkle' },
       { to: '/turf', label: 'Turf', icon: 'map' },
       { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
@@ -175,6 +176,7 @@ onUnmounted(() => {
           <router-link to="/admin">Dashboard</router-link>
           <!-- Managers go out canvassing themselves, not just run the org. -->
           <router-link to="/canvass">Canvass</router-link>
+          <router-link to="/admin/users">Users</router-link>
           <router-link to="/turf">Turf</router-link>
           <router-link to="/admin/chat">AI Chat</router-link>
           <router-link to="/admin/settings">Settings</router-link>

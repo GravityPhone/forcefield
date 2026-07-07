@@ -3,12 +3,10 @@ import { onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import { supabase } from '@/lib/supabase'
-import { useAuthStore } from '@/stores/auth'
 import { METRIC_LABELS } from '@/types'
 import type { LeaderboardMetric, LeaderboardSettings } from '@/types'
 
 const metricOptions = Object.entries(METRIC_LABELS).map(([value, label]) => ({ value, label }))
-const auth = useAuthStore()
 
 const settings = ref<LeaderboardSettings | null>(null)
 const saving = ref(false)
@@ -84,9 +82,9 @@ async function saveSettings() {
         <router-link class="btn btn-primary btn-sm" to="/admin/campaigns">Manage</router-link>
       </div>
 
-      <!-- User management is true-admin-only; campaign managers see the
-           rest of the dashboard without it. -->
-      <div v-if="auth.profile?.role === 'admin'" class="card">
+      <!-- Campaign managers manage the whole non-admin roster; true admins
+           additionally manage admin accounts (the Users screen adapts). -->
+      <div class="card">
         <h3>Users &amp; Roles</h3>
         <p class="muted">Elevate roles, assign teams, place people in today's squads.</p>
         <router-link class="btn btn-primary btn-sm" to="/admin/users">Manage</router-link>

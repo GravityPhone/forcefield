@@ -108,6 +108,23 @@ function squadOf(userId: string): (Squad & { memberIds: string[] }) | null {
 
 const isSelf = computed(() => editing.value?.id === auth.profile?.id)
 
+// Only true admins manage admin accounts or hand out the admin role. Campaign
+// managers run the whole non-admin roster but can't touch (or mint) admins —
+// the DB enforces this too (guard_profile_privileges + the profiles UPDATE
+// policy); the UI just hides what they can't do.
+const isSuperAdmin = computed(() => auth.profile?.role === 'admin')
+
+const roleOptions = computed(() =>
+  (Object.entries(ROLE_LABELS) as [AppRole, string][]).filter(
+    ([value]) => isSuperAdmin.value || value !== 'admin',
+  ),
+)
+
+/** A manager may not edit an admin at all — the sheet goes read-only for them. */
+const canManageEditing = computed(
+  () => isSuperAdmin.value || editing.value?.role !== 'admin',
+)
+
 // --- Saves: instant on tap, with a section-scoped flash. On failure the
 // list reloads so the UI never shows a state the DB doesn't hold. ---
 
@@ -280,18 +297,21 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
             </div>
             <div class="segmented" role="group" aria-label="Role">
               <button
-                v-for="(label, value) in ROLE_LABELS"
+                v-for="[value, label] in roleOptions"
                 :key="value"
                 class="segment"
                 :class="{ active: editing.role === value }"
-                :disabled="isSelf"
+                :disabled="isSelf || !canManageEditing"
                 :aria-pressed="editing.role === value"
-                @click="setRole(editing, value as AppRole)"
+                @click="setRole(editing, value)"
               >
                 {{ label }}
               </button>
             </div>
             <p v-if="isSelf" class="muted hint">You can't change your own role.</p>
+            <p v-else-if="!canManageEditing" class="muted hint">
+              Only admins can manage admin accounts.
+            </p>
           </div>
 
           <!-- Admins run the org — they're never on a team or in a squad. -->
@@ -539,6 +559,10 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
 
 .role-admin {
   background: #7c3aed;
+}
+
+.role-campaign_manager {
+  background: #c2410c;
 }
 
 .role-team_lead {
