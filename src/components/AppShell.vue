@@ -1,13 +1,17 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore, roleHome } from '@/stores/auth'
 import { ROLE_LABELS } from '@/types'
 import AppLogo from '@/components/AppLogo.vue'
-import EdgeScrollbar from '@/components/EdgeScrollbar.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import ChatDrawer from '@/components/chat/ChatDrawer.vue'
 import { hapticTap } from '@/lib/native'
+import { canvassGameOpen } from '@/lib/easterEgg'
+
+// Easter-egg mini game (25 rapid taps on the chat handle) — async so the
+// canvas code never ships to anyone who hasn't found it.
+const CanvassGame = defineAsyncComponent(() => import('@/components/game/CanvassGame.vue'))
 
 defineProps<{ title?: string }>()
 
@@ -145,7 +149,6 @@ onUnmounted(() => {
 
 <template>
   <div class="shell">
-    <EdgeScrollbar />
     <header class="shell-header">
       <div class="shell-header-inner">
         <div class="brand">
@@ -204,6 +207,9 @@ onUnmounted(() => {
          The right-edge handle opens it; the handle drags up/down to wherever
          the thumb likes. -->
     <ChatDrawer />
+
+    <!-- Clipboard Canvass — the easter egg. Only mounts once discovered. -->
+    <CanvassGame v-if="canvassGameOpen" @close="canvassGameOpen = false" />
 
     <!-- Phone bottom tab bar -->
     <nav v-if="auth.profile" class="tab-bar" aria-label="Primary">

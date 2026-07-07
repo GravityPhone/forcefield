@@ -11,6 +11,7 @@ import { useThemeStore } from '@/stores/theme'
 import { vacStyles } from '@/lib/themes'
 import { avatarUrl } from '@/lib/avatars'
 import { hapticTap } from '@/lib/native'
+import { canvassGameOpen } from '@/lib/easterEgg'
 import type { ChatProfile } from '@/types'
 
 const chat = useChatStore()
@@ -79,10 +80,46 @@ function onHandleMove(e: PointerEvent) {
   }
 }
 
+// --- Easter egg: 25 rapid taps on the handle launch Clipboard Canvass.
+// Tap 1 behaves normally (opens the drawer); once a rapid streak is going
+// (taps < 600ms apart) the drawer is held closed and the handle kept
+// visible so the remaining taps have something to land on. ---
+
+const TAP_STREAK_WINDOW = 600
+const TAP_STREAK_GOAL = 25
+let tapStreak = 0
+let lastTapAt = 0
+const streakAlive = ref(false)
+let streakTimer: ReturnType<typeof setTimeout> | undefined
+
+function registerHandleTap(): number {
+  const now = Date.now()
+  tapStreak = now - lastTapAt < TAP_STREAK_WINDOW ? tapStreak + 1 : 1
+  lastTapAt = now
+  streakAlive.value = true
+  clearTimeout(streakTimer)
+  streakTimer = setTimeout(() => {
+    streakAlive.value = false
+    tapStreak = 0
+  }, TAP_STREAK_WINDOW)
+  return tapStreak
+}
+
 function onHandleUp() {
   if (dragMode === 'none') {
     hapticTap('light')
-    chat.drawerOpen ? chat.closeDrawer() : chat.openDrawer()
+    const streak = registerHandleTap()
+    if (streak >= TAP_STREAK_GOAL) {
+      clearTimeout(streakTimer)
+      streakAlive.value = false
+      tapStreak = 0
+      chat.closeDrawer()
+      canvassGameOpen.value = true
+    } else if (streak > 1) {
+      chat.closeDrawer()
+    } else {
+      chat.drawerOpen ? chat.closeDrawer() : chat.openDrawer()
+    }
   } else if (dragMode === 'move') {
     localStorage.setItem(HANDLE_POS_KEY, String(Math.round(handleTopPct.value)))
   } else if (dragMode === 'open') {
@@ -430,7 +467,7 @@ async function addPeople() {
   <template v-if="auth.profile">
     <!-- Edge handle — the drawer's always-there front door -->
     <button
-      v-show="!chat.drawerOpen || draggingOpen"
+      v-show="!chat.drawerOpen || draggingOpen || streakAlive"
       class="drawer-handle"
       :style="{ top: `${handleTopPct}dvh` }"
       aria-label="Open chat"
