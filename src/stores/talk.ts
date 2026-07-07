@@ -15,6 +15,13 @@ export interface PersonHit extends Person {
   addresses: Pick<Address, 'street' | 'unit' | 'city'> | null
 }
 
+/** A knock in a door's history, with who it was about and who logged it
+ * embedded — what the Talk screen's history list renders. */
+export interface KnockHistoryEntry extends KnockLog {
+  person: { name: string } | null
+  canvasser: { username: string; display_name: string | null } | null
+}
+
 interface TalkState {
   activeTab: 'talk' | 'hunt'
   searchQuery: string
@@ -22,7 +29,7 @@ interface TalkState {
   searching: boolean
   selectedAddress: Address | null
   roster: Person[]
-  history: KnockLog[]
+  history: KnockHistoryEntry[]
   selectedPerson: Person | null
   notes: string
   /** Outcome logged for the CURRENT selection (person, or household if no
@@ -108,17 +115,19 @@ export const useTalkStore = defineStore('talk', {
       const [addressRes, rosterRes, historyRes] = await Promise.all([
         supabase.from('addresses').select('*').eq('id', addressId).single(),
         supabase.from('persons').select('*').eq('household_id', addressId).order('name'),
+        // The door's ENTIRE visit history, with who each knock was about and
+        // who logged it — the Talk screen shows all of it, day and time.
         supabase
           .from('knock_logs')
-          .select('*')
+          .select('*, person:persons(name), canvasser:profiles(username, display_name)')
           .eq('household_id', addressId)
           .order('occurred_at', { ascending: false })
-          .limit(50),
+          .limit(500),
       ])
       if (addressRes.error || !addressRes.data) return
       this.selectedAddress = addressRes.data as Address
       this.roster = (rosterRes.data ?? []) as Person[]
-      this.history = (historyRes.data ?? []) as KnockLog[]
+      this.history = (historyRes.data ?? []) as unknown as KnockHistoryEntry[]
       this.selectedPerson = preselectPersonId
         ? (this.roster.find((p) => p.id === preselectPersonId) ?? null)
         : null
@@ -199,7 +208,16 @@ export const useTalkStore = defineStore('talk', {
       // household's history, replacing any prior entry for the same log.
       if (knock.household_id) {
         this.history = [
-          { ...knock, id: clientId, created_at: knock.occurred_at },
+          {
+            ...knock,
+            id: clientId,
+            created_at: knock.occurred_at,
+            person: this.selectedPerson ? { name: this.selectedPerson.name } : null,
+            canvasser: {
+              username: auth.profile.username,
+              display_name: auth.profile.display_name,
+            },
+          },
           ...this.history.filter((h) => h.client_id !== clientId),
         ]
       }

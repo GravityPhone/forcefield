@@ -7,7 +7,7 @@ import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import { CityLimitsLayer, TurfAreasLayer, readMapPref, writeMapPref } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
-import { geocodeAndCache, geocodeMissing } from '@/lib/geocode'
+import { geocodeAndCache, geocodeMissing, streetsAtPoints } from '@/lib/geocode'
 import { supabase } from '@/lib/supabase'
 import { localToday, startOfLocalDayISO } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
@@ -466,19 +466,36 @@ async function geolocateVisible() {
   if (!map || geolocating.value) return
   const bounds = map.getBounds()
   if (!bounds) return
-  const names = new Set<string>()
-  for (const [id, marker] of markersByAddress) {
-    if (!marker.position || !bounds.contains(marker.position)) continue
-    const info = doorInfoByAddress.get(id)
-    const name = info ? streetNameOf(info.street) : ''
-    if (name) names.add(name)
-  }
-  if (!names.size) {
-    flashGeoNote('No pinned streets in view — pan to where the pins are first.')
-    return
-  }
   geolocating.value = true
   try {
+    // Streets in view, two ways: any street with a pinned door on screen,
+    // plus reverse-geocoding a spread of viewport points — so panning over
+    // a completely pinless neighborhood still finds its streets.
+    const names = new Set<string>()
+    for (const [id, marker] of markersByAddress) {
+      if (!marker.position || !bounds.contains(marker.position)) continue
+      const info = doorInfoByAddress.get(id)
+      const name = info ? streetNameOf(info.street) : ''
+      if (name) names.add(name)
+    }
+    const ne = bounds.getNorthEast()
+    const sw = bounds.getSouthWest()
+    const cLat = (ne.lat() + sw.lat()) / 2
+    const cLng = (ne.lng() + sw.lng()) / 2
+    const qLat = (ne.lat() - sw.lat()) / 4
+    const qLng = (ne.lng() - sw.lng()) / 4
+    const sampled = await streetsAtPoints([
+      { lat: cLat, lng: cLng },
+      { lat: cLat + qLat, lng: cLng + qLng },
+      { lat: cLat + qLat, lng: cLng - qLng },
+      { lat: cLat - qLat, lng: cLng + qLng },
+      { lat: cLat - qLat, lng: cLng - qLng },
+    ])
+    for (const s of sampled) names.add(s.name)
+    if (!names.size) {
+      flashGeoNote("Couldn't identify any streets here — zoom in on a neighborhood and try again.")
+      return
+    }
     const missing: AddressWithRoster[] = []
     for (const name of names) {
       const { data } = await supabase

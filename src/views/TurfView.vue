@@ -29,13 +29,14 @@ import {
 } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
 import { walkRanges } from '@/lib/doorPath'
-import { geocodeAndCache, geocodeMissing } from '@/lib/geocode'
+import { geocodeAndCache, geocodeMissing, streetsAtPoints } from '@/lib/geocode'
+import { OUTCOME_HEX, PIN_DEFAULT_HEX } from '@/lib/outcomes'
 import { supabase } from '@/lib/supabase'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import { useAuthStore } from '@/stores/auth'
 import { useSquadsStore } from '@/stores/squads'
 import { PARITY_LABELS } from '@/types'
-import type { AppRole, ChatProfile, Turf, TurfParity, TurfSegment } from '@/types'
+import type { AppRole, ChatProfile, HouseholdLatestKnock, KnockOutcome, Turf, TurfParity, TurfSegment } from '@/types'
 
 // Same fallback as Hunt: Richwood, OH (the imported demo subset).
 const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
@@ -91,6 +92,9 @@ const saving = ref(false)
 
 const turfs = ref<TurfWithMeta[]>([])
 const people = ref<ChatProfile[]>([])
+/** Latest outcome per door — pins wear the same status colors as Hunt, so
+ * knocked/unknocked history reads the same while cutting. */
+const statusByAddress = ref<Map<string, KnockOutcome>>(new Map())
 
 // --- Draft turf state ---
 const draftName = ref('')
@@ -372,22 +376,29 @@ function styleMarker(marker: google.maps.marker.AdvancedMarkerElement, a: Addres
   const isAnchor = anchor.value?.id === a.id
   const inDraft = draftMemberIds.value.has(a.id)
   // While editing, doors still stamped to the turf but swept OUT of the
-  // draft show as unclaimed — the map previews the save.
+  // draft show as ringless — the map previews the save.
   const stampedColor =
     a.turf_id && !(editingTurfId.value && a.turf_id === editingTurfId.value)
       ? turfColorById.value.get(a.turf_id)
       : undefined
 
-  const color = inDraft ? draftColor.value : stampedColor ?? '#9aa0a6'
+  // Fill = knock status, same colors as Hunt (blue = never knocked), so the
+  // door's history reads identically while cutting. Ring = turf membership:
+  // the draft's color while swept into the cut being drawn, otherwise the
+  // saved turf's color, no ring for unclaimed doors.
+  const outcome = statusByAddress.value.get(a.id)
+  const ring = inDraft ? draftColor.value : stampedColor
   const size = isAnchor ? 24 : inDraft ? 17 : 13
   s.boxSizing = 'border-box'
   s.cursor = 'pointer'
   s.width = `${size}px`
   s.height = `${size}px`
   s.borderRadius = '50%'
-  s.background = color
+  s.background = outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
   s.border = isAnchor ? '3px solid #111' : '1.5px solid #ffffff'
-  s.boxShadow = '0 0 3px rgba(0, 0, 0, 0.45)'
+  s.boxShadow = ring
+    ? `0 0 0 2.5px ${ring}, 0 0 3px rgba(0, 0, 0, 0.45)`
+    : '0 0 3px rgba(0, 0, 0, 0.45)'
   s.animation = isAnchor ? 'turf-anchor-pulse 1.1s ease-in-out infinite' : ''
   marker.zIndex = isAnchor ? 1000 : inDraft ? 500 : 1
 }
@@ -439,6 +450,14 @@ async function fetchTurfs() {
   turfs.value = (data ?? []) as TurfWithMeta[]
 }
 
+/** Latest outcome per door, for the status-colored pin fills. */
+async function fetchKnockStatuses() {
+  const { data } = await supabase.from('household_latest_knock').select('*')
+  statusByAddress.value = new Map(
+    ((data ?? []) as HouseholdLatestKnock[]).map((r) => [r.household_id, r.outcome]),
+  )
+}
+
 /** Which of my squads have no team_lead/campaign_manager/admin member — the
  * only ones a plain canvasser may sub-cut inside. Kept in step with the DB's
  * can_member_subcut so the UI offers exactly what the RPC will accept. */
@@ -483,6 +502,7 @@ async function initialize() {
         .then((res) => {
           mySquadIds.value = new Set((res.data ?? []).map((r) => r.squad_id as string))
         }),
+      fetchKnockStatuses(),
     ])
     await computeLeaderlessSquads()
     defaultDraftParent()
@@ -560,7 +580,7 @@ function buildSavedAreas() {
 /** Re-pull addresses + turfs after a save/delete (turf_id stamps changed
  * server-side) and repaint. */
 async function reloadAll() {
-  const [rows] = await Promise.all([fetchAddresses(), fetchTurfs()])
+  const [rows] = await Promise.all([fetchAddresses(), fetchTurfs(), fetchKnockStatuses()])
   for (const a of rows) upsertMarker(a)
   streetCache.clear()
   defaultDraftParent()
@@ -597,33 +617,59 @@ async function geocodeTurfDoors(turfId: string) {
   if (!unmounted) buildSavedAreas()
 }
 
-// --- Geolocate what's on screen ---
-// Coordinates are the only way to know a door is "on screen", so the button
-// works street-wise: every street with at least one pinned door in view gets
-// ALL of its doors geocoded (a warning gates batches over 100 — the Maps
-// Geocoder runs one door at a time, so big batches take minutes).
+// --- Place pins for what's on screen ---
+// An unpinned door has no coordinates to test against the viewport, so the
+// button works street-wise, finding streets in view two ways: any street
+// with a pinned door in view, PLUS reverse-geocoding a spread of viewport
+// sample points — so panning over a completely pinless neighborhood still
+// pins it. Every found street gets ALL of its doors geocoded (a warning
+// gates batches over 100 — the Geocoder runs one door at a time).
 
 const GEOLOCATE_WARN_AT = 100
 const geolocating = ref(false)
 const geoProgress = ref('')
 
+/** Center + the four quadrant midpoints of the current viewport. */
+function viewportSamples(bounds: google.maps.LatLngBounds): { lat: number; lng: number }[] {
+  const ne = bounds.getNorthEast()
+  const sw = bounds.getSouthWest()
+  const cLat = (ne.lat() + sw.lat()) / 2
+  const cLng = (ne.lng() + sw.lng()) / 2
+  const qLat = (ne.lat() - sw.lat()) / 4
+  const qLng = (ne.lng() - sw.lng()) / 4
+  return [
+    { lat: cLat, lng: cLng },
+    { lat: cLat + qLat, lng: cLng + qLng },
+    { lat: cLat + qLat, lng: cLng - qLng },
+    { lat: cLat - qLat, lng: cLng + qLng },
+    { lat: cLat - qLat, lng: cLng - qLng },
+  ]
+}
+
 async function geolocateVisible() {
   if (!map || geolocating.value) return
   const bounds = map.getBounds()
   if (!bounds) return
-  const streets = new Map<string, { name: string; city: string }>()
-  for (const a of addressById.values()) {
-    if (a.lat == null || a.lng == null) continue
-    if (!bounds.contains({ lat: a.lat, lng: a.lng })) continue
-    const name = streetNameOf(a.street)
-    if (name) streets.set(`${name}|${a.city.toUpperCase()}`, { name, city: a.city })
-  }
-  if (!streets.size) {
-    flash('No pinned streets in view — pan to where the pins are first.')
-    return
-  }
   geolocating.value = true
   try {
+    const streets = new Map<string, { name: string; city: string | null }>()
+    for (const a of addressById.values()) {
+      if (a.lat == null || a.lng == null) continue
+      if (!bounds.contains({ lat: a.lat, lng: a.lng })) continue
+      const name = streetNameOf(a.street)
+      if (name) streets.set(`${name}|${a.city.toUpperCase()}`, { name, city: a.city })
+    }
+    for (const s of await streetsAtPoints(viewportSamples(bounds))) {
+      // A pinned-door entry for the same street wins — its city spelling is
+      // the DB's own.
+      if (![...streets.keys()].some((k) => k.startsWith(`${s.name}|`))) {
+        streets.set(`${s.name}|${(s.city ?? '').toUpperCase()}`, s)
+      }
+    }
+    if (!streets.size) {
+      flash("Couldn't identify any streets here — zoom in on a neighborhood and try again.")
+      return
+    }
     const rowsByStreet = await Promise.all(
       [...streets.values()].map((s) => fetchStreetRows(s.name, s.city)),
     )

@@ -3,9 +3,30 @@ import CanvassSearch from './CanvassSearch.vue'
 import RosterList from './RosterList.vue'
 import OutcomeButtons from './OutcomeButtons.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
-import { useTalkStore } from '@/stores/talk'
+import { OUTCOME_HEX, OUTCOME_LABELS } from '@/lib/outcomes'
+import { useTalkStore, type KnockHistoryEntry } from '@/stores/talk'
 
 const talk = useTalkStore()
+
+// --- Door history display helpers ---
+
+function historyWho(h: KnockHistoryEntry): string {
+  return h.canvasser ? h.canvasser.display_name || h.canvasser.username : 'unknown'
+}
+
+/** "Sat, Jul 5 · 3:12 PM" — day AND time for every visit, with the year
+ * spelled out once it isn't this year's. */
+function historyWhen(iso: string): string {
+  const d = new Date(iso)
+  const sameYear = d.getFullYear() === new Date().getFullYear()
+  const day = d.toLocaleDateString([], {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  })
+  return `${day} · ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+}
 
 // Walk-order options — govern which house the Next button below advances to.
 const DIRECTION_OPTIONS = [
@@ -42,6 +63,28 @@ const PARTLY_SIGNED_OPTIONS = [
         <button class="btn btn-sm" @click="talk.clearAddress()">Clear</button>
       </div>
       <RosterList />
+
+      <!-- Everything that's ever happened at this door, newest first. -->
+      <div v-if="talk.history.length" class="history">
+        <h4 class="history-title">
+          Door history
+          <span class="muted history-count">{{ talk.history.length }} visit{{ talk.history.length === 1 ? '' : 's' }}</span>
+        </h4>
+        <ul class="history-list">
+          <li v-for="h in talk.history" :key="h.client_id" class="history-row">
+            <span class="history-dot" :style="{ background: OUTCOME_HEX[h.outcome] }" aria-hidden="true"></span>
+            <span class="history-main">
+              <span class="history-what">
+                <strong>{{ OUTCOME_LABELS[h.outcome] }}</strong>
+                <template v-if="h.person?.name"> — {{ h.person.name }}</template>
+              </span>
+              <span class="muted history-meta">{{ historyWho(h) }} · {{ historyWhen(h.occurred_at) }}</span>
+              <span v-if="h.notes" class="muted history-notes">“{{ h.notes }}”</span>
+            </span>
+          </li>
+        </ul>
+      </div>
+      <p v-else class="muted history-none">No visits logged at this door yet.</p>
     </div>
     <p v-else class="muted walkup-hint">
       Load an address (search above, or via Hunt) to log an outcome.
@@ -120,6 +163,82 @@ const PARTLY_SIGNED_OPTIONS = [
 .walkup-hint {
   margin: 0;
   font-size: 0.88rem;
+}
+
+/* --- Door history --- */
+
+.history {
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+}
+
+.history-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.history-count {
+  font-weight: 500;
+  font-size: 0.8rem;
+}
+
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  /* Long histories scroll inside the card instead of stretching the page. */
+  max-height: 14rem;
+  overflow-y: auto;
+}
+
+.history-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.history-dot {
+  flex-shrink: 0;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  margin-top: 0.25rem;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
+}
+
+.history-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+.history-what {
+  font-size: 0.9rem;
+}
+
+.history-meta {
+  font-size: 0.8rem;
+}
+
+.history-notes {
+  font-size: 0.82rem;
+  font-style: italic;
+  overflow-wrap: anywhere;
+}
+
+.history-none {
+  margin: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+  font-size: 0.85rem;
 }
 
 .notes-label {
