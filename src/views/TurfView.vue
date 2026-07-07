@@ -97,6 +97,33 @@ const people = ref<ChatProfile[]>([])
  * knocked/unknocked history reads the same while cutting. */
 const statusByAddress = ref<Map<string, KnockOutcome>>(new Map())
 
+// --- Pin style: dots or house numbers, same toggle as Hunt ---
+type PinMode = 'dots' | 'numbers'
+/** Below this zoom, numbers mode falls back to plain dots — house numbers
+ * only mean something when you're close enough to be looking at one street. */
+const NUMBERS_MIN_ZOOM = 16
+function readStoredPinMode(): PinMode {
+  try {
+    return localStorage.getItem('turf-pin-mode') === 'numbers' ? 'numbers' : 'dots'
+  } catch {
+    return 'dots'
+  }
+}
+const pinMode = ref<PinMode>(readStoredPinMode())
+/** Tracked so numbers mode can fall back to dots when zoomed out; only
+ * threshold crossings trigger a restyle. */
+let mapZoom = 14
+
+function setPinMode(mode: PinMode) {
+  pinMode.value = mode
+  try {
+    localStorage.setItem('turf-pin-mode', mode)
+  } catch {
+    /* private mode — the toggle still works this session */
+  }
+  restyleAll()
+}
+
 // --- Draft turf state ---
 const draftName = ref('')
 const segments = ref<DraftSegment[]>([])
@@ -277,11 +304,11 @@ const draftMemberIds = computed(() => {
 const draftDoorCount = computed(() => draftMemberIds.value.size)
 const draftTakenCount = computed(() => segments.value.reduce((n, s) => n + s.takenCount, 0))
 
-/** Every gesture is contextual instead of mode-based: touching a door
- * already in the draft takes it OUT, touching one that isn't takes it (and
- * whatever it's connected to) IN. This tells whichever pin is currently
- * armed as a sweep anchor which way the next tap will go. */
-const anchorErasing = computed(() =>
+/** Whether the armed anchor is already part of the turf — informs the hint
+ * text. The actual add-vs-erase outcome isn't knowable until the SECOND tap
+ * (erase only fires when both taps land on already-included doors), so this
+ * doesn't drive any red/danger styling on its own anymore. */
+const anchorInTurf = computed(() =>
   anchor.value ? draftMemberIds.value.has(anchor.value.id) : false,
 )
 
@@ -299,16 +326,16 @@ function flash(msg: string) {
 }
 
 const hint = computed(() => {
-  if (sweepBusy.value) return anchorErasing.value ? 'Erasing…' : 'Sweeping…'
+  if (sweepBusy.value) return 'Sweeping…'
   if (flashMsg.value) return flashMsg.value
   if (anchor.value) {
     const a = anchor.value
-    return anchorErasing.value
-      ? `Anchor down at ${a.street} (already in the turf) — tap another door to erase the walk between them (tap the anchor again to cancel).`
+    return anchorInTurf.value
+      ? `Anchor down at ${a.street} (already in the turf) — tap a new door to extend the turf out to it, or another door already in the turf to erase the stretch between (tap the anchor again to cancel).`
       : `Anchor down at ${a.street} — tap another door to sweep the walk between them, even onto another street (tap the anchor again to cancel).`
   }
   const base =
-    'Tap a door already in the turf, then another, to erase the walk between — tap two NEW doors to sweep them in. Hold a door to take just it (connects to the rest of the turf); double-tap a street to add or remove it whole.'
+    'Tap two doors to sweep the walk between them — an existing pin plus a new one extends the turf; two existing pins erase the stretch between. Hold a door to take just it (connects to the rest of the turf); double-tap a street to add or remove it whole.'
   return isSubcutter.value
     ? `${base} Only doors inside your assigned turf count toward a sub-turf.`
     : base
@@ -389,12 +416,33 @@ function styleMarker(marker: google.maps.marker.AdvancedMarkerElement, a: Addres
   // saved turf's color, no ring for unclaimed doors.
   const outcome = statusByAddress.value.get(a.id)
   const ring = inDraft ? draftColor.value : stampedColor
-  const size = isAnchor ? 24 : inDraft ? 17 : 13
+  const showNumber = pinMode.value === 'numbers' && mapZoom >= NUMBERS_MIN_ZOOM && !!el.dataset.house
+  el.textContent = showNumber ? el.dataset.house! : ''
   s.boxSizing = 'border-box'
   s.cursor = 'pointer'
-  s.width = `${size}px`
-  s.height = `${size}px`
-  s.borderRadius = '50%'
+  s.display = 'flex'
+  s.alignItems = 'center'
+  s.justifyContent = 'center'
+  s.color = '#fff'
+  s.fontWeight = '700'
+  s.lineHeight = '1'
+  if (showNumber) {
+    const h = isAnchor ? 24 : inDraft ? 20 : 19
+    s.width = 'auto'
+    s.height = `${h}px`
+    s.minWidth = `${h}px`
+    s.padding = '0 5px'
+    s.borderRadius = '7px'
+    s.fontSize = isAnchor ? '13px' : '11px'
+  } else {
+    const size = isAnchor ? 24 : inDraft ? 17 : 13
+    s.width = `${size}px`
+    s.height = `${size}px`
+    s.minWidth = ''
+    s.padding = ''
+    s.borderRadius = '50%'
+    s.fontSize = ''
+  }
   s.background = outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
   s.border = isAnchor ? '3px solid #111' : '1.5px solid #ffffff'
   s.boxShadow = ring
@@ -417,6 +465,8 @@ function upsertMarker(a: AddressLite) {
   let marker = markersByAddress.get(a.id)
   if (!marker) {
     const content = document.createElement('div')
+    const num = houseNumber(a.street)
+    if (num > 0) content.dataset.house = String(num)
     attachHoldGesture(content, a.id)
     marker = new google.maps.marker.AdvancedMarkerElement({
       position: { lat: a.lat, lng: a.lng },
@@ -532,6 +582,12 @@ async function initialize() {
   })
   map.addListener('dblclick', (e: google.maps.MapMouseEvent) => {
     if (e.latLng) void onMapDoubleClick(e.latLng)
+  })
+  mapZoom = map.getZoom() ?? mapZoom
+  map.addListener('zoom_changed', () => {
+    const wasClose = mapZoom >= NUMBERS_MIN_ZOOM
+    mapZoom = map?.getZoom() ?? mapZoom
+    if (pinMode.value === 'numbers' && wasClose !== mapZoom >= NUMBERS_MIN_ZOOM) restyleAll()
   })
   clusterer = new MarkerClusterer({ map, markers: [], renderer: dotClusterRenderer() })
 
@@ -740,11 +796,12 @@ async function onPinTap(addressId: string) {
   // Same street: the range between the taps. Different streets: the WALK
   // between them — up the anchor's street to the corner where the two
   // streets come closest, then along the second street to the tap. Two taps
-  // can cover doors on two streets. Whether this ADDS or ERASES is decided
-  // by the anchor: starting from a door already in the turf erases the walk
-  // between the taps; starting from a fresh door sweeps it in.
+  // can cover doors on two streets. An already-included pin plus a NEW pin
+  // extends the turf, connecting the two along that walk. Only when BOTH
+  // taps land on doors already in the turf does it erase the stretch
+  // between them — the one case left where there's nothing to add.
   const ranges = walkRanges(from, a, addressById.values())
-  const erasing = draftMemberIds.value.has(from.id)
+  const erasing = draftMemberIds.value.has(from.id) && draftMemberIds.value.has(a.id)
   snapshotDraft()
   if (erasing) {
     for (const r of ranges) await subtractRange(r.street_name, r.city, r.lo, r.hi)
@@ -1477,23 +1534,24 @@ onUnmounted(() => {
       </div>
     </div>
     <div v-else class="stack">
-      <!-- Sweep status + side filter. Every gesture is contextual now (touch
-           a drafted door to erase, a fresh one to add), so the bar just
-           reflects what the armed anchor will do next — no mode switch. -->
-      <div class="sweep-bar" :class="{ erasing: anchorErasing }" :style="{ '--draft-color': draftColor }">
-        <span class="sweep-dot" :class="{ armed: !!anchor, erasing: anchorErasing }" aria-hidden="true"></span>
+      <!-- Sweep status: every gesture is contextual (touch a drafted door to
+           erase, a fresh one to add/extend) — this bar just carries the
+           instructions. The side filter lives in its own row below, not
+           boxed in with the text. -->
+      <div class="sweep-bar" :style="{ '--draft-color': draftColor }">
+        <span class="sweep-dot" :class="{ armed: !!anchor }" aria-hidden="true"></span>
         <p class="sweep-hint">{{ hint }}</p>
-        <div class="parity-toggle" role="group" aria-label="Which side of the street to sweep">
-          <button
-            v-for="p in (['both', 'even', 'odd'] as const)"
-            :key="p"
-            class="parity-btn"
-            :class="{ active: parityChoice === p }"
-            @click="parityChoice = p"
-          >
-            {{ p === 'both' ? 'Both' : p === 'even' ? 'Even' : 'Odd' }}
-          </button>
-        </div>
+      </div>
+      <div class="parity-toggle" role="group" aria-label="Which side of the street to sweep">
+        <button
+          v-for="p in (['both', 'even', 'odd'] as const)"
+          :key="p"
+          class="parity-btn"
+          :class="{ active: parityChoice === p }"
+          @click="parityChoice = p"
+        >
+          {{ p === 'both' ? 'Both' : p === 'even' ? 'Even' : 'Odd' }}
+        </button>
       </div>
 
       <div class="map-wrap">
@@ -1501,6 +1559,34 @@ onUnmounted(() => {
         <div v-if="pinsLoading" class="pins-loading" role="status" aria-live="polite">
           <span class="pins-loading-spinner" aria-hidden="true"></span>
           Loading pins…
+        </div>
+        <!-- Flip every pin between a colored dot and its house number, same
+             toggle as Hunt. Sits top-left, above the layer toggle. -->
+        <div class="pin-mode-toggle" role="group" aria-label="Pin style">
+          <button
+            type="button"
+            class="pin-mode-btn"
+            :class="{ active: pinMode === 'dots' }"
+            :aria-pressed="pinMode === 'dots'"
+            aria-label="Show pins as dots"
+            title="Dots"
+            @click="setPinMode('dots')"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <circle cx="12" cy="12" r="6" fill="currentColor" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="pin-mode-btn"
+            :class="{ active: pinMode === 'numbers' }"
+            :aria-pressed="pinMode === 'numbers'"
+            aria-label="Show pins as house numbers"
+            title="House numbers"
+            @click="setPinMode('numbers')"
+          >
+            123
+          </button>
         </div>
         <!-- Map layers: turf area shading and city/village limits. -->
         <div class="layer-toggle" role="group" aria-label="Map layers">
@@ -1802,7 +1888,10 @@ onUnmounted(() => {
 
 .parity-toggle {
   display: flex;
-  flex-shrink: 0;
+  /* Sits below the sweep-bar box now, not inside it — size to its content
+   * rather than stretching the full row width (the default for a column
+   * flex child). */
+  align-self: flex-start;
   border: 1px solid var(--border);
   border-radius: 6px;
   overflow: hidden;
@@ -1827,18 +1916,6 @@ onUnmounted(() => {
 .parity-btn.active {
   background: var(--accent);
   color: #fff;
-}
-
-/* Erase mode reads as "careful, you're taking doors away". */
-/* Tints red the moment the armed anchor is already in the turf — the next
- * tap is about to take something OUT, not add to it. */
-.sweep-bar.erasing {
-  border-left-color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 6%, var(--surface));
-}
-
-.sweep-dot.erasing {
-  background: var(--danger);
 }
 
 /* --- Map --- */
@@ -1873,11 +1950,50 @@ onUnmounted(() => {
   pointer-events: none;
 }
 
-/* Segmented layers control, top-left on the map — same chrome as Hunt's
- * pin-mode toggle. */
-.layer-toggle {
+/* Pin style toggle, top-left on the map — same chrome/position as Hunt's. */
+.pin-mode-toggle {
   position: absolute;
   top: 0.6rem;
+  left: 0.6rem;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.pin-mode-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pin-mode-btn + .pin-mode-btn {
+  border-left: 1px solid var(--border);
+}
+
+.pin-mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.pin-mode-btn:not(.active):hover {
+  background: var(--surface-2);
+}
+
+/* Segmented layers control, stacked under the pin-style toggle. */
+.layer-toggle {
+  position: absolute;
+  top: calc(0.6rem + 36px + 0.5rem);
   left: 0.6rem;
   display: flex;
   border: 1px solid var(--border);
