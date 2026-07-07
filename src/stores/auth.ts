@@ -20,9 +20,8 @@ export function roleHome(role: AppRole): string {
       return '/admin/users'
     case 'campaign_manager':
       return '/admin'
-    case 'team_lead':
-      return '/team'
     default:
+      // Squad leaders and canvassers share the same home: the canvass screen.
       return '/canvass'
   }
 }

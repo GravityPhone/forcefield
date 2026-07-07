@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useAuthStore, roleHome } from '@/stores/auth'
+import { useAuthStore } from '@/stores/auth'
 import { ROLE_LABELS } from '@/types'
 import AppLogo from '@/components/AppLogo.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
@@ -18,8 +18,6 @@ defineProps<{ title?: string }>()
 const auth = useAuthStore()
 const router = useRouter()
 const route = useRoute()
-
-const homePath = computed(() => (auth.profile ? roleHome(auth.profile.role) : '/'))
 
 async function handleLogout() {
   moreOpen.value = false
@@ -59,8 +57,10 @@ const barItems = computed<NavItem[]>(() => {
       { to: '/leaderboard', label: 'Boards', icon: 'trophy' },
     ]
   }
+  // Canvassers and squad leaders share the same tabs — knocking doors is
+  // everyone's job, so the home tab is called Canvass everywhere.
   return [
-    { to: homePath.value, label: 'Home', icon: 'home' },
+    { to: '/canvass', label: 'Canvass', icon: 'pin' },
     { to: '/squad', label: 'Squad', icon: 'squads' },
     { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
     { to: '/leaderboard', label: 'Boards', icon: 'trophy' },
@@ -83,9 +83,7 @@ const moreItems = computed<NavItem[]>(() => {
       { to: '/admin/settings', label: 'Settings', icon: 'sliders' },
     ]
   }
-  if (auth.profile.role === 'team_lead') {
-    return [{ to: '/turf', label: 'Turf', icon: 'map' }, appearance]
-  }
+  // Squad leaders split turf right on the Squad page now — no Turf link.
   return [appearance]
 })
 
@@ -181,8 +179,7 @@ onUnmounted(() => {
           <router-link to="/admin/chat">AI Chat</router-link>
           <router-link to="/admin/settings">Settings</router-link>
         </template>
-        <router-link v-else :to="homePath">Home</router-link>
-        <router-link v-if="auth.profile.role === 'team_lead'" to="/turf">Turf</router-link>
+        <router-link v-else to="/canvass">Canvass</router-link>
         <!-- Campaign-life links — admins oversee, they don't participate.
              Managers assign rosters across all squads (/squads); everyone
              else lives on their own squad's page (/squad). -->

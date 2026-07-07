@@ -14,7 +14,7 @@ import { TurfAreasLayer } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
 import { avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
-import { houseNumber } from '@/lib/streetWalk'
+import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useSquadsStore, type SquadListItem } from '@/stores/squads'
@@ -51,11 +51,13 @@ interface TurfLite {
   color: string
   squad_id: string | null
   assignee_id: string | null
+  parent_turf_id: string | null
 }
 
 interface TurfDoor {
   id: string
   street: string
+  city: string
   lat: number | null
   lng: number | null
   turf_id: string
@@ -101,17 +103,31 @@ const doorsKnocked = computed(() => knockedDoors.value.size)
 
 // Splitting the squad's turf among members is a leader's / manager's job —
 // but if nobody on the crew outranks a canvasser today, any member can do it
-// (matches the DB's can_member_subcut). Show the shortcut to /turf when the
-// current user is allowed to divide this squad's turf.
+// (matches the DB's can_member_subcut). It happens right here on the squad
+// map: pick a member, tap doors, save — a sub-turf assigned to them.
 const squadHasRankedMember = computed(() =>
   (mySquad.value?.members ?? []).some((m) => m.role != null && m.role !== 'canvasser'),
 )
-const canSplitTurf = computed(() => {
-  if (!squadTurfs.value.length) return false
+/** Top-level squad turfs the current user may divide, mirroring the DB's
+ * can_lead_subcut / can_member_subcut so the UI offers exactly what the
+ * set_turf_segments RPC will accept. */
+const assignableParentIds = computed<Set<string>>(() => {
   const role = auth.profile?.role
-  if (role === 'team_lead' || role === 'campaign_manager' || role === 'admin') return true
-  return !squadHasRankedMember.value
+  const me = auth.profile?.id
+  const squadId = mySquad.value?.id
+  const out = new Set<string>()
+  for (const t of squadTurfs.value) {
+    if (t.parent_turf_id) continue
+    if (role === 'campaign_manager' || role === 'admin') out.add(t.id)
+    else if (role === 'team_lead') {
+      if (t.assignee_id === me || (t.squad_id !== null && t.squad_id === squadId)) out.add(t.id)
+    } else if (!squadHasRankedMember.value && t.squad_id !== null && t.squad_id === squadId) {
+      out.add(t.id)
+    }
+  }
+  return out
 })
+const canAssign = computed(() => assignableParentIds.value.size > 0)
 const progressPct = computed(() =>
   doorsTotal.value ? Math.round((doorsKnocked.value / doorsTotal.value) * 100) : 0,
 )
@@ -128,19 +144,29 @@ async function loadDashboard() {
 
   // Squad turf = assigned to the squad itself, or to any member directly —
   // same "your crew's assignment" definition the Hunt map opens framed on.
+  // Sub-turfs carved out of any of those ride along too, so splitting the
+  // turf never makes doors disappear from the squad's progress.
   const { data: turfData } = await supabase
     .from('turfs')
-    .select('id, name, color, squad_id, assignee_id')
-  const mine = ((turfData ?? []) as TurfLite[]).filter(
+    .select('id, name, color, squad_id, assignee_id, parent_turf_id')
+  const all = (turfData ?? []) as TurfLite[]
+  const direct = all.filter(
     (t) => t.squad_id === squad.id || (t.assignee_id !== null && memberIds.includes(t.assignee_id)),
   )
+  const directIds = new Set(direct.map((t) => t.id))
+  const mine = [
+    ...direct,
+    ...all.filter(
+      (t) => t.parent_turf_id !== null && directIds.has(t.parent_turf_id) && !directIds.has(t.id),
+    ),
+  ]
   const turfIds = mine.map((t) => t.id)
 
   const [doorsRes, knocksRes, ...recentRes] = await Promise.all([
     turfIds.length
       ? supabase
           .from('addresses')
-          .select('id, street, lat, lng, turf_id')
+          .select('id, street, city, lat, lng, turf_id')
           .in('turf_id', turfIds)
           .limit(10000)
       : Promise.resolve({ data: [] as TurfDoor[] }),
@@ -226,6 +252,7 @@ let doorClusterer: MarkerClusterer | null = null
 const mapFailed = ref(false)
 
 const turfColorById = computed(() => new Map(squadTurfs.value.map((t) => [t.id, t.color])))
+const turfById = computed(() => new Map(squadTurfs.value.map((t) => [t.id, t])))
 
 let mapInitBusy = false
 
@@ -303,7 +330,9 @@ function applyMapData(refit = false) {
 }
 
 /** House-number chip for one door: green once anyone's knocked it, blue while
- * it's still to-do — the door-level echo of the "X of Y knocked" bar. */
+ * it's still to-do — the door-level echo of the "X of Y knocked" bar. In
+ * assign mode, selected doors wear the member's color instead and doors the
+ * viewer can't hand out fade back. */
 function styleDoorMarker(marker: google.maps.marker.AdvancedMarkerElement, door: TurfDoor) {
   const el = marker.content as HTMLElement
   const s = el.style
@@ -324,6 +353,7 @@ function styleDoorMarker(marker: google.maps.marker.AdvancedMarkerElement, door:
   s.fontWeight = '700'
   s.lineHeight = '1'
   s.color = '#fff'
+  s.opacity = '1'
   s.background = knocked ? DOOR_KNOCKED_HEX : DOOR_TODO_HEX
   s.border = '1.5px solid #fff'
   // Thin ring in the turf's own color, so doors from different turfs (yours
@@ -331,6 +361,15 @@ function styleDoorMarker(marker: google.maps.marker.AdvancedMarkerElement, door:
   s.boxShadow = turfColor
     ? `0 0 0 2px ${turfColor}, 0 0 3px rgba(0, 0, 0, 0.45)`
     : '0 0 3px rgba(0, 0, 0, 0.45)'
+  const member = assigningMember.value
+  if (member) {
+    if (assignSelected.value.has(door.id)) {
+      s.background = memberColor(member)
+      s.boxShadow = '0 0 0 2.5px #fff, 0 0 5px rgba(0, 0, 0, 0.55)'
+    } else if (poolParentOf(door) === null) {
+      s.opacity = '0.35'
+    }
+  }
 }
 
 /** Sync the door pins with the current turf doors: add new ones, restyle
@@ -353,7 +392,7 @@ function applyDoorMarkers() {
         content,
         gmpClickable: true,
       })
-      marker.addListener('gmp-click', () => void openDoor(door.id))
+      marker.addListener('gmp-click', () => onDoorTap(door.id))
       markersByDoor.set(door.id, marker)
       fresh.push(marker)
     }
@@ -375,6 +414,16 @@ function restyleDoor(addressId: string) {
   const marker = markersByDoor.get(addressId)
   const door = turfDoors.value.get(addressId)
   if (marker && door) styleDoorMarker(marker, door)
+}
+
+/** Door pins do double duty: normally they open the door in Talk mode; in
+ * assign mode they toggle the door in and out of the member's pile. */
+function onDoorTap(addressId: string) {
+  if (assigningMemberId.value) {
+    toggleAssignDoor(addressId)
+    return
+  }
+  void openDoor(addressId)
 }
 
 /** Tap a door pin: load it into Talk mode and jump to the canvass screen —
@@ -442,15 +491,20 @@ function updateMemberMarker(member: ChatProfile, plink = false) {
   }
 }
 
-/** Frame the whole assignment: every turf door plus every member marker. */
+/** Frame the squad's TURF — that's the assignment, so that's the opening
+ * shot. Members' last knocks can be anywhere (a lead checking in from home,
+ * yesterday's doors across town), so they only set the frame when there are
+ * no mapped turf doors at all. */
 function fitToSquad() {
   if (!map) return
   const bounds = new google.maps.LatLngBounds()
   for (const d of turfDoors.value.values()) {
     if (d.lat != null && d.lng != null) bounds.extend({ lat: d.lat, lng: d.lng })
   }
-  for (const marker of markersByMember.values()) {
-    if (marker.position) bounds.extend(marker.position)
+  if (bounds.isEmpty()) {
+    for (const marker of markersByMember.values()) {
+      if (marker.position) bounds.extend(marker.position)
+    }
   }
   if (!bounds.isEmpty()) map.fitBounds(bounds, 48)
 }
@@ -519,6 +573,227 @@ async function onLiveKnock(knock: KnockLog) {
 
   const member = mySquad.value?.members.find((m) => m.id === knock.canvasser_id)
   if (member) updateMemberMarker(member, true)
+}
+
+// --- Assign mode: hand doors to a member right on the squad map ---
+// Tap "Assign doors" on a member's card, tap doors on the map, save. The
+// selection becomes a sub-turf assigned to that member ("<name>'s doors"),
+// cut with the same set_turf_segments machinery as the /turf sub-cutter, so
+// Hunt, progress bars, and RLS all keep working unchanged.
+
+const assigningMemberId = ref<string | null>(null)
+const assignSelected = ref<ReadonlySet<string>>(new Set())
+const assignSaving = ref(false)
+const assignError = ref('')
+
+const assigningMember = computed<ChatProfile | null>(
+  () => (mySquad.value?.members ?? []).find((m) => m.id === assigningMemberId.value) ?? null,
+)
+
+/** The top-level pool a door would be claimed from (itself for a door still
+ * in a parent turf, its parent for a door already in a sub-turf) — or null
+ * when the viewer isn't allowed to divide that turf. */
+function poolParentOf(door: TurfDoor): string | null {
+  const t = turfById.value.get(door.turf_id)
+  if (!t) return null
+  const pid = t.parent_turf_id ?? t.id
+  return assignableParentIds.value.has(pid) ? pid : null
+}
+
+function restyleAllDoors() {
+  for (const [id, marker] of markersByDoor) {
+    const door = turfDoors.value.get(id)
+    if (door) styleDoorMarker(marker, door)
+  }
+}
+
+function startAssign(memberId: string) {
+  if (assigningMemberId.value === memberId) {
+    mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    return
+  }
+  assignError.value = ''
+  assigningMemberId.value = memberId
+  // Pre-select what's already theirs, so re-opening a member edits their
+  // existing pile instead of starting from scratch.
+  const pre = new Set<string>()
+  for (const d of turfDoors.value.values()) {
+    const t = turfById.value.get(d.turf_id)
+    if (
+      t?.parent_turf_id &&
+      t.assignee_id === memberId &&
+      assignableParentIds.value.has(t.parent_turf_id)
+    ) {
+      pre.add(d.id)
+    }
+  }
+  assignSelected.value = pre
+  restyleAllDoors()
+  mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+function cancelAssign() {
+  assigningMemberId.value = null
+  assignSelected.value = new Set()
+  assignError.value = ''
+  restyleAllDoors()
+}
+
+function toggleAssignDoor(addressId: string) {
+  const door = turfDoors.value.get(addressId)
+  if (!door || poolParentOf(door) === null) return
+  const next = new Set(assignSelected.value)
+  if (next.has(addressId)) next.delete(addressId)
+  else next.add(addressId)
+  assignSelected.value = next
+  const marker = markersByDoor.get(addressId)
+  if (marker) styleDoorMarker(marker, door)
+}
+
+interface SegmentDraft {
+  street_name: string
+  city: string
+  range_start: number
+  range_end: number
+  parity: 'both'
+}
+
+/** Compress a door pile into street segments for set_turf_segments. Runs of
+ * house numbers merge into one range, but never across a "blocker": a door
+ * the RPC could also claim from the same pool (poolDoors) that ISN'T in the
+ * pile — a spanning range would swallow it. */
+function segmentsFor(doors: TurfDoor[], poolDoors: TurfDoor[]): SegmentDraft[] {
+  const keyOf = (d: TurfDoor) => `${streetNameOf(d.street)}|${d.city.toUpperCase()}`
+  const chosen = new Set(doors.map((d) => d.id))
+  const byStreet = new Map<string, { name: string; city: string; nums: Set<number>; blocked: Set<number> }>()
+  for (const d of doors) {
+    const key = keyOf(d)
+    let g = byStreet.get(key)
+    if (!g) byStreet.set(key, (g = { name: streetNameOf(d.street), city: d.city, nums: new Set(), blocked: new Set() }))
+    g.nums.add(houseNumber(d.street))
+  }
+  for (const d of poolDoors) {
+    if (chosen.has(d.id)) continue
+    const g = byStreet.get(keyOf(d))
+    if (!g) continue
+    const n = houseNumber(d.street)
+    // A left-out unit at a picked house number can't split the range (the
+    // RPC claims whole numbers) — it just rides along with its neighbors.
+    if (!g.nums.has(n)) g.blocked.add(n)
+  }
+  const segs: SegmentDraft[] = []
+  for (const g of byStreet.values()) {
+    const nums = [...g.nums].sort((a, b) => a - b)
+    const blocked = [...g.blocked].sort((a, b) => a - b)
+    let start = nums[0]
+    let prev = nums[0]
+    for (let i = 1; i <= nums.length; i++) {
+      const n = nums[i]
+      if (n === undefined || blocked.some((b) => b > prev && b < n)) {
+        segs.push({ street_name: g.name, city: g.city, range_start: start, range_end: prev, parity: 'both' })
+        if (n !== undefined) start = n
+      }
+      if (n !== undefined) prev = n
+    }
+  }
+  return segs
+}
+
+async function saveAssignment() {
+  const member = assigningMember.value
+  if (!member || assignSaving.value) return
+  assignSaving.value = true
+  assignError.value = ''
+  try {
+    // Selection grouped by which top-level turf's pool each door sits in
+    // (a squad can hold more than one turf; each needs its own sub-turf).
+    const byParent = new Map<string, TurfDoor[]>()
+    for (const id of assignSelected.value) {
+      const d = turfDoors.value.get(id)
+      const p = d ? poolParentOf(d) : null
+      if (!d || !p) continue
+      const list = byParent.get(p)
+      if (list) list.push(d)
+      else byParent.set(p, [d])
+    }
+    // The member's existing sub-turfs, so a deselected-to-empty one is
+    // deleted (its doors return to the parent via the DB trigger).
+    const ownByParent = new Map<string, TurfLite>()
+    for (const t of squadTurfs.value) {
+      if (
+        t.parent_turf_id !== null &&
+        t.assignee_id === member.id &&
+        assignableParentIds.value.has(t.parent_turf_id)
+      ) {
+        ownByParent.set(t.parent_turf_id, t)
+      }
+    }
+    const doorsIn = (turfId: string) =>
+      [...turfDoors.value.values()].filter((d) => d.turf_id === turfId)
+
+    for (const parentId of new Set([...byParent.keys(), ...ownByParent.keys()])) {
+      const sel = byParent.get(parentId) ?? []
+      const selIds = new Set(sel.map((d) => d.id))
+      const own = ownByParent.get(parentId) ?? null
+
+      // 1. Doors taken over from a squadmate's sub-turf get released first by
+      //    re-cutting that sub-turf without them — the RPC only claims doors
+      //    from the parent's pool, so a straight cut can't steal them.
+      for (const sib of squadTurfs.value) {
+        if (sib.parent_turf_id !== parentId || sib.id === own?.id) continue
+        const sibDoors = doorsIn(sib.id)
+        const keep = sibDoors.filter((d) => !selIds.has(d.id))
+        if (keep.length === sibDoors.length) continue
+        if (!keep.length) {
+          const { error } = await supabase.from('turfs').delete().eq('id', sib.id)
+          if (error) throw error
+        } else {
+          const { error } = await supabase.rpc('set_turf_segments', {
+            target_turf_id: sib.id,
+            segments: segmentsFor(keep, [...doorsIn(parentId), ...sibDoors]),
+          })
+          if (error) throw error
+        }
+      }
+
+      // 2. The member's own sub-turf: create, re-cut, or delete when emptied.
+      if (!sel.length) {
+        if (own) {
+          const { error } = await supabase.from('turfs').delete().eq('id', own.id)
+          if (error) throw error
+        }
+        continue
+      }
+      let turfId = own?.id ?? null
+      if (!turfId) {
+        const { data, error } = await supabase
+          .from('turfs')
+          .insert({
+            name: `${memberName(member)}'s doors`,
+            color: memberColor(member),
+            assignee_id: member.id,
+            parent_turf_id: parentId,
+            created_by: auth.profile?.id,
+          })
+          .select('id')
+          .single()
+        if (error || !data) throw error ?? new Error('insert failed')
+        turfId = data.id as string
+      }
+      const { error } = await supabase.rpc('set_turf_segments', {
+        target_turf_id: turfId,
+        segments: segmentsFor(sel, [...doorsIn(parentId), ...(own ? doorsIn(own.id) : [])]),
+      })
+      if (error) throw error
+    }
+    assigningMemberId.value = null
+    assignSelected.value = new Set()
+    await loadDashboard()
+  } catch {
+    assignError.value = "Couldn't save that assignment — try again."
+  } finally {
+    assignSaving.value = false
+  }
 }
 
 // --- No-squad state: form or join today's crew right here ---
@@ -685,9 +960,10 @@ watch(
               <span class="turf-dot" :style="{ background: t.color }"></span>{{ t.name }}
             </button>
           </div>
-          <router-link v-if="canSplitTurf" to="/turf" class="btn btn-sm btn-ghost split-turf-btn">
-            Split up the turf between the crew →
-          </router-link>
+          <p v-if="canAssign" class="muted assign-hint">
+            Tap <strong>Assign doors</strong> on a member below to hand them their share of the
+            turf right on this map.
+          </p>
         </template>
         <p v-else-if="!dashboardLoading" class="muted no-turf">
           No turf assigned to your squad yet — your campaign manager cuts and assigns turf.
@@ -697,6 +973,26 @@ watch(
 
       <!-- Map -->
       <div ref="mapCardEl" class="card map-card">
+        <div
+          v-if="assigningMember"
+          class="assign-bar"
+          :style="{ '--assign-color': memberColor(assigningMember) }"
+        >
+          <span class="assign-dot" aria-hidden="true"></span>
+          <p class="assign-text">
+            Assigning doors to <strong>{{ memberName(assigningMember) }}</strong> — tap doors to
+            add or remove them. <strong>{{ assignSelected.size }}</strong> selected.
+          </p>
+          <div class="assign-actions">
+            <button class="btn btn-sm btn-primary" :disabled="assignSaving" @click="saveAssignment">
+              {{ assignSaving ? 'Saving…' : 'Save' }}
+            </button>
+            <button class="btn btn-sm btn-ghost" :disabled="assignSaving" @click="cancelAssign">
+              Cancel
+            </button>
+          </div>
+          <p v-if="assignError" class="error assign-error">{{ assignError }}</p>
+        </div>
         <p v-if="mapsAuthError || mapFailed" class="error map-error">
           Couldn't load Google Maps — check the connection and reload.
         </p>
@@ -705,16 +1001,19 @@ watch(
 
       <!-- Member cards -->
       <div class="member-grid">
-        <button
+        <div
           v-for="(m, i) in orderedMembers"
           :key="m.id"
           v-motion="fadeUp(Math.min(i, 8) * 45)"
           class="member-card"
-          :class="{ selected: selectedMemberId === m.id }"
+          :class="{ selected: selectedMemberId === m.id, assigning: assigningMemberId === m.id }"
           :style="{
             '--member-color': memberColor(m),
           }"
+          role="button"
+          tabindex="0"
           @click="selectMember(m.id)"
+          @keydown.enter.prevent="selectMember(m.id)"
         >
           <div class="member-top">
             <span class="member-avatar" :style="!avatarUrl(m.avatar) ? { background: memberColor(m) } : {}">
@@ -736,12 +1035,20 @@ watch(
             </li>
           </ul>
           <p v-else class="muted no-knocks">No doors knocked yet.</p>
-        </button>
+          <button
+            v-if="canAssign"
+            class="btn btn-sm assign-btn"
+            @click.stop="startAssign(m.id)"
+          >
+            {{ assigningMemberId === m.id ? 'Picking doors…' : 'Assign doors' }}
+          </button>
+        </div>
       </div>
       <p class="muted color-tip">
         Tap a door pin to open it in Talk mode — green pins are already knocked, blue ones aren't
-        yet. Tap a squadmate to zoom to the last door they knocked. Pick your card color and avatar
-        under Appearance.
+        yet. Tap a squadmate to zoom to the last door they knocked.<template v-if="canAssign">
+          Use "Assign doors" on a member's card to divvy the turf up on the map.</template>
+        Pick your card color and avatar under Appearance.
       </p>
     </div>
 
@@ -926,9 +1233,9 @@ watch(
   font-size: 0.9rem;
 }
 
-.split-turf-btn {
-  align-self: flex-start;
-  text-decoration: none;
+.assign-hint {
+  margin: 0;
+  font-size: 0.85rem;
 }
 
 /* --- Map --- */
@@ -946,6 +1253,59 @@ watch(
 
 .map-error {
   padding: 1rem;
+}
+
+/* --- Assign mode --- */
+
+.assign-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  border-left: 6px solid var(--assign-color);
+  background: color-mix(in srgb, var(--assign-color) 8%, var(--surface));
+}
+
+.assign-dot {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--assign-color);
+  border: 2px solid #fff;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.4);
+}
+
+.assign-text {
+  margin: 0;
+  flex: 1;
+  min-width: 12rem;
+  font-size: 0.88rem;
+}
+
+.assign-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.assign-error {
+  width: 100%;
+}
+
+.assign-btn {
+  align-self: flex-start;
+  border: 1.5px solid var(--member-color);
+  color: var(--member-color);
+  background: transparent;
+  font-weight: 700;
+}
+
+.member-card.assigning .assign-btn {
+  background: var(--member-color);
+  color: #fff;
 }
 
 /* --- Member cards --- */

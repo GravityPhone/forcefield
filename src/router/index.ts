@@ -68,8 +68,9 @@ const router = createRouter({
     // Per-account cosmetic color scheme — every role can set their own.
     { path: '/appearance', name: 'appearance', component: () => import('@/views/AppearanceView.vue'), meta: { roles: [] } },
 
-    // Squad leader home (managers/admins can view too)
-    { path: '/team', name: 'team', component: () => import('@/views/TeamLeadHomeView.vue'), meta: { roles: ['team_lead', 'campaign_manager', 'admin'] } },
+    // Old squad-leader home — leads canvass like everyone else now, and turf
+    // splitting lives on the Squad page. Kept only for stale bookmarks.
+    { path: '/team', redirect: '/canvass' },
 
     // Turf cutting/assignment — a campaign-manager job. Squad leaders get
     // the same page as a scoped sub-cutter (sub-turfs inside turf assigned to
