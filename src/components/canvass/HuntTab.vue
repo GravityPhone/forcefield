@@ -113,6 +113,7 @@ interface TurfLite {
   color: string
   squad_id: string | null
   assignee_id: string | null
+  parent_turf_id: string | null
 }
 const allTurfs = ref<TurfLite[]>([])
 const myTurfIds = ref<Set<string>>(new Set())
@@ -176,8 +177,11 @@ async function fetchMapData() {
   return (addressesRes.data ?? []) as AddressWithRoster[]
 }
 
-/** All turfs (for the area shading), plus which of them are mine — assigned
- * to me directly or to a squad I'm in today. */
+/** All turfs (for the area shading), plus which of them are mine — dispatched
+ * to me directly or to a squad I'm in today. A sub-turf of mine (my slice of
+ * a crew's split) counts only while its parent is still pointed at one of my
+ * today-squads — or at a person, which is durable. Turf left pointing at a
+ * past day's squad is nobody's until the campaign manager re-dispatches it. */
 async function fetchTurfs() {
   if (!auth.profile) return
   const me = auth.profile.id
@@ -187,13 +191,23 @@ async function fetchTurfs() {
       .select('squad_id, squads!inner(squad_date)')
       .eq('user_id', me)
       .eq('squads.squad_date', localToday()),
-    supabase.from('turfs').select('id, name, color, squad_id, assignee_id'),
+    supabase.from('turfs').select('id, name, color, squad_id, assignee_id, parent_turf_id'),
   ])
   const mySquadIds = new Set((smRes.data ?? []).map((r) => r.squad_id as string))
-  allTurfs.value = (turfRes.data ?? []) as TurfLite[]
+  const all = (turfRes.data ?? []) as TurfLite[]
+  allTurfs.value = all
+  const byId = new Map(all.map((t) => [t.id, t]))
+  const topMine = (t: TurfLite) =>
+    t.parent_turf_id == null &&
+    (t.assignee_id === me || (t.squad_id != null && mySquadIds.has(t.squad_id)))
   myTurfIds.value = new Set(
-    allTurfs.value
-      .filter((t) => t.assignee_id === me || (t.squad_id != null && mySquadIds.has(t.squad_id)))
+    all
+      .filter((t) => {
+        if (topMine(t)) return true
+        if (t.parent_turf_id == null || t.assignee_id !== me) return false
+        const parent = byId.get(t.parent_turf_id)
+        return !!parent && (parent.squad_id == null || mySquadIds.has(parent.squad_id))
+      })
       .map((t) => t.id),
   )
   if (mySquadIds.size) {

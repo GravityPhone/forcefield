@@ -97,7 +97,8 @@ Tools:
 - campaigns(id, name, description, is_active)
 - squads(id, name, squad_date, chat_id, created_by)
 - squad_members(squad_id -> squads.id, user_id -> profiles.id, joined_at)
-- turfs(id, name, color, squad_id -> squads.id, assignee_id -> profiles.id, parent_turf_id -> turfs.id) — assigned to a squad OR one canvasser, never both; parent_turf_id set means it's a sub-turf carved from that parent
+- turfs(id, name, color, squad_id -> squads.id, assignee_id -> profiles.id, parent_turf_id -> turfs.id) — assigned to a squad OR one canvasser, never both; parent_turf_id set means it's a sub-turf carved from that parent. Squads last ONE DAY (squad_date), turf is durable: squad_id is the CURRENT dispatch, re-pointed to a new squad each morning
+- turf_assignments(turf_id -> turfs.id, squad_id -> squads.id, squad_name, assignee_id -> profiles.id, assigned_on, assigned_by, created_at) — append-only dispatch history: which crew a turf was sent to on which day (squad_name snapshotted at assignment; a row with both squad_id and assignee_id NULL records the turf being pulled back). Use it for "which crews worked turf X" / "what did squad Y work over the week"
 - canvasser_leaderboard(canvasser_id, username, display_name, doors_knocked, signatures) — view, all-time per-canvasser totals; zero-knock canvassers included. CAUTION: doors_knocked counts knock EVENTS despite the name, not distinct doors. The go-to for "best performers" / leaderboard questions: ORDER BY signatures DESC.
 - household_knock_summary(household_id -> addresses.id, total_knocks, signed_count, didnt_sign_count, maybe_count, not_home_count, skip_count, hostile_count, reached) — view, one row per knocked HOUSEHOLD; reached = any outcome besides not_home
 - household_latest_knock(household_id -> addresses.id, outcome, occurred_at) — view, each knocked door's MOST RECENT outcome — a door's current status, and what the app's map pins show

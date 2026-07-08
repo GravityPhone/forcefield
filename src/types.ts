@@ -220,7 +220,13 @@ export const PARITY_LABELS: Record<TurfParity, string> = {
  *
  * Cutting top-level turf is a campaign-manager job. A row with
  * parent_turf_id set is a SUB-TURF — a squad leader's cut inside a turf
- * assigned to them, its doors carved out of (and returned to) the parent. */
+ * assigned to them, its doors carved out of (and returned to) the parent.
+ *
+ * Turf is durable but squads last one day, so squad_id is a DISPATCH: the
+ * campaign manager re-points turf at each day's crews from /turf. Turf left
+ * on a past day's squad hides from Squad/Hunt until re-dispatched;
+ * re-dispatching dissolves the old crew's sub-turfs (DB trigger) and appends
+ * to the turf_assignments history. */
 export interface Turf {
   id: string
   name: string

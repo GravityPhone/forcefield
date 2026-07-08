@@ -149,16 +149,21 @@ async function loadDashboard() {
   dashboardLoading.value = true
   const memberIds = squad.members.map((m) => m.id)
 
-  // Squad turf = assigned to the squad itself, or to any member directly —
-  // same "your crew's assignment" definition the Hunt map opens framed on.
-  // Sub-turfs carved out of any of those ride along too, so splitting the
-  // turf never makes doors disappear from the squad's progress.
+  // Squad turf = dispatched to this squad, or to a member directly — same
+  // "your crew's assignment" definition the Hunt map opens framed on.
+  // Top-level turf only: sub-turfs ride in via their parent below, so
+  // splitting the turf never makes doors disappear from the squad's progress
+  // — but yesterday's "<name>'s doors" splits (sub-turfs assigned to members
+  // under some OTHER crew's turf) can't follow people into today's squad.
   const { data: turfData } = await supabase
     .from('turfs')
     .select('id, name, color, squad_id, assignee_id, parent_turf_id')
   const all = (turfData ?? []) as TurfLite[]
   const direct = all.filter(
-    (t) => t.squad_id === squad.id || (t.assignee_id !== null && memberIds.includes(t.assignee_id)),
+    (t) =>
+      !t.parent_turf_id &&
+      (t.squad_id === squad.id ||
+        (t.assignee_id !== null && memberIds.includes(t.assignee_id))),
   )
   const directIds = new Set(direct.map((t) => t.id))
   const mine = [
@@ -1073,8 +1078,8 @@ watch(
           </p>
         </template>
         <p v-else-if="!dashboardLoading" class="muted no-turf">
-          No turf assigned to your squad yet — your campaign manager cuts and assigns turf.
-          The map still follows everyone's knocks meanwhile.
+          No turf assigned to your squad yet today — your campaign manager sends turf out to
+          each day's crews. The map still follows everyone's knocks meanwhile.
         </p>
       </div>
 

@@ -31,6 +31,7 @@ import {
 import type { DoorPoint } from '@/lib/mapLayers'
 import { walkRanges } from '@/lib/doorPath'
 import { geocodeAndCache, geocodeMissing, streetsAtPoints } from '@/lib/geocode'
+import { localToday } from '@/lib/day'
 import { OUTCOME_HEX, PIN_DEFAULT_HEX } from '@/lib/outcomes'
 import { supabase } from '@/lib/supabase'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
@@ -58,6 +59,19 @@ interface TurfWithMeta extends Turf {
   turf_segments: TurfSegment[]
   assignee: ChatProfile | null
   squad: { id: string; name: string; squad_date: string } | null
+}
+
+/** One row of a turf's dispatch history ("Jul 6 — Kool krew"). squad_name is
+ * snapshotted server-side at assignment time (day-squad rows are deletable);
+ * assignee names resolve live via the join. */
+interface AssignmentLog {
+  turf_id: string
+  squad_id: string | null
+  squad_name: string | null
+  assignee_id: string | null
+  assigned_on: string
+  created_at: string
+  assignee: { username: string; display_name: string | null } | null
 }
 
 /** A sweep in the draft tray. memberIds/doorCount come from the full address
@@ -92,6 +106,8 @@ const saveError = ref('')
 const saving = ref(false)
 
 const turfs = ref<TurfWithMeta[]>([])
+/** turf id -> its dispatch history, oldest first (trigger-written). */
+const historyByTurf = ref<Map<string, AssignmentLog[]>>(new Map())
 const people = ref<ChatProfile[]>([])
 /** Latest outcome per door — pins wear the same status colors as Hunt, so
  * knocked/unknocked history reads the same while cutting. */
@@ -173,8 +189,11 @@ const isManager = computed(
   () => auth.profile?.role === 'campaign_manager' || auth.profile?.role === 'admin',
 )
 const isLead = computed(() => auth.profile?.role === 'team_lead')
-/** Squads I'm a member of, any date — the squad row itself is the turf's
- * assignment target, so membership in that squad is the credential. */
+/** Squads I'm on TODAY. Turf follows the day's dispatch: a sub-cutter's
+ * scope is only turf pointed at a crew that's actually out today —
+ * yesterday's squads don't count, the campaign manager re-dispatches each
+ * morning. (The DB-side guards stay date-agnostic on purpose — squad_date is
+ * a client-local day — so this filter is what keeps the UI honest.) */
 const mySquadIds = ref<Set<string>>(new Set())
 /** The subset of my squads with no team_lead/campaign_manager/admin member —
  * the only turf a plain canvasser may sub-cut (mirrors the DB's
@@ -352,7 +371,10 @@ function assignOptionsFor(t: TurfWithMeta | null): SelectOption[] {
     opts.push({ value: `squad:${s.id}`, label: `Squad — ${s.name}` })
   }
   if (t?.squad && !squadIds.has(t.squad.id)) {
-    opts.push({ value: `squad:${t.squad.id}`, label: `Squad — ${t.squad.name} (${t.squad.squad_date})` })
+    opts.push({
+      value: `squad:${t.squad.id}`,
+      label: `Squad — ${t.squad.name} (${prettyDay(t.squad.squad_date)})`,
+    })
   }
   for (const p of people.value) {
     opts.push({ value: `user:${p.id}`, label: `Canvasser — ${p.display_name || p.username}` })
@@ -366,6 +388,43 @@ const assignOptions = computed<SelectOption[]>(() =>
 
 function assignChoiceOf(t: TurfWithMeta): string {
   return t.squad_id ? `squad:${t.squad_id}` : t.assignee_id ? `user:${t.assignee_id}` : 'none'
+}
+
+// --- Dispatch status: turf is durable, squads last one day. A turf still
+// pointed at a past day's squad is hidden from the Squad page and Hunt until
+// it's re-pointed, so this list is where a manager sees (and clears) the
+// morning's dispatch queue. ---
+
+/** "2026-07-06" → "Jul 6". Parsed as local date parts — new Date('YYYY-MM-DD')
+ * would read UTC midnight and drift the day in US timezones. */
+function prettyDay(dateStr: string): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return new Date(y, m - 1, d).toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
+/** Non-empty when the turf is still pointed at a past day's crew — the row's
+ * warning text, which doubles as the explanation for why no squad sees it. */
+function staleDispatchLabel(t: TurfWithMeta): string {
+  if (t.parent_turf_id || !t.squad || t.squad.squad_date === localToday()) return ''
+  return `Not out today — last crew was ${t.squad.name} (${prettyDay(t.squad.squad_date)}). Reassign it to send a squad back.`
+}
+
+function historyTarget(r: AssignmentLog): string {
+  if (r.squad_name) return r.squad_name
+  if (r.assignee) return r.assignee.display_name || r.assignee.username
+  return 'unassigned'
+}
+
+/** "Jul 5 Terrarium 2 · Jul 6 Kool krew" — the turf's last few crews. Only
+ * shown once there's more than the current assignment to tell. */
+const HISTORY_SHOWN = 5
+function crewHistory(t: TurfWithMeta): string {
+  const rows = historyByTurf.value.get(t.id) ?? []
+  if (rows.length < 2) return ''
+  return rows
+    .slice(-HISTORY_SHOWN)
+    .map((r) => `${prettyDay(r.assigned_on)} ${historyTarget(r)}`)
+    .join(' · ')
 }
 
 // Reassign straight from the turf list — no need to re-open the whole cut
@@ -492,13 +551,28 @@ async function fetchAddresses(): Promise<AddressLite[]> {
 }
 
 async function fetchTurfs() {
-  const { data } = await supabase
-    .from('turfs')
-    .select(
-      '*, turf_segments(*), assignee:profiles!turfs_assignee_id_fkey(id, username, display_name), squad:squads!turfs_squad_id_fkey(id, name, squad_date)',
-    )
-    .order('created_at')
-  turfs.value = (data ?? []) as TurfWithMeta[]
+  const [turfRes, histRes] = await Promise.all([
+    supabase
+      .from('turfs')
+      .select(
+        '*, turf_segments(*), assignee:profiles!turfs_assignee_id_fkey(id, username, display_name), squad:squads!turfs_squad_id_fkey(id, name, squad_date)',
+      )
+      .order('created_at'),
+    supabase
+      .from('turf_assignments')
+      .select(
+        'turf_id, squad_id, squad_name, assignee_id, assigned_on, created_at, assignee:profiles!turf_assignments_assignee_id_fkey(username, display_name)',
+      )
+      .order('created_at'),
+  ])
+  turfs.value = (turfRes.data ?? []) as TurfWithMeta[]
+  const hist = new Map<string, AssignmentLog[]>()
+  for (const row of (histRes.data ?? []) as unknown as AssignmentLog[]) {
+    const list = hist.get(row.turf_id)
+    if (list) list.push(row)
+    else hist.set(row.turf_id, [row])
+  }
+  historyByTurf.value = hist
 }
 
 /** Latest outcome per door, for the status-colored pin fills. */
@@ -548,8 +622,9 @@ async function initialize() {
         }),
       supabase
         .from('squad_members')
-        .select('squad_id')
+        .select('squad_id, squads!inner(squad_date)')
         .eq('user_id', auth.profile?.id ?? '')
+        .eq('squads.squad_date', localToday())
         .then((res) => {
           mySquadIds.value = new Set((res.data ?? []).map((r) => r.squad_id as string))
         }),
@@ -1822,6 +1897,12 @@ onUnmounted(() => {
                   <span class="muted turf-segments">
                     {{ t.turf_segments.map(segmentLabel).join(' · ') || 'No street ranges' }}
                   </span>
+                  <span v-if="staleDispatchLabel(t)" class="turf-stale">
+                    ⚠ {{ staleDispatchLabel(t) }}
+                  </span>
+                  <span v-if="crewHistory(t)" class="muted turf-history">
+                    Crews: {{ crewHistory(t) }}
+                  </span>
                 </span>
               </button>
               <div v-if="canManage(t)" class="turf-row-actions">
@@ -2434,6 +2515,20 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Dispatch flag: fixed amber (like the outcome hexes) so "waiting on you"
+ * reads as a warning in every color scheme, day or night. */
+.turf-stale {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #d97706;
+  white-space: normal;
+}
+
+.turf-history {
+  font-size: 0.75rem;
+  white-space: normal;
 }
 
 .turf-row-actions {
