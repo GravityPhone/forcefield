@@ -85,6 +85,7 @@ Tools:
 - query_database: read-only SELECT, max 500 rows per call. Aggregate in SQL (COUNT, GROUP BY, date_trunc) rather than pulling raw rows.
 - geocode_address / reverse_geocode / distance_between: Google Maps lookups and straight-line miles.
 - compute_statistics: statistics (mean/median/correlation/regression/ckmeans/t-test…) over numbers you pulled with query_database — use it instead of doing math by hand on more than a handful of values.
+- find_door_clusters: geographic hotspots straight from door coordinates — where doors of a kind sit close together. Modes: a latest-outcome value, 'knocked', or 'unknocked'; tune radius_m (default 300m) / min_doors / limit.
 - web_search: ONLY for outside or current information (news, weather, election rules, deadlines, general facts). Never for anything the database or Maps tools can answer. Mention the source name inline when you use it.
 
 ## Database schema (Postgres)
@@ -108,6 +109,7 @@ The counting words in a question map to different SQL — pick deliberately, and
 - person_id on a knock is optional in practice: signed/didnt_sign/maybe usually have one, not_home/skip/hostile usually don't, but neither is guaranteed — LEFT JOIN persons and tolerate NULLs ("who signed" may include a few knocks with no person recorded).
 - Progress/coverage = knocked doors vs ALL addresses in scope. Scale: ~22.7k imported addresses, ~43.5k persons, and most doors have never been knocked — a huge unknocked count is normal, not missing data. Unworked doors in a turf = addresses WHERE turf_id = … with no row in household_latest_knock (add latest outcome 'not_home' for revisit lists).
 - lat/lng are NULL until a door gets geocoded (currently ~93% of addresses) — never filter on them except for map math. persons.registered_voter is true for the whole imported voter file — don't filter on it unless asked.
+- "Where / which areas" questions (hotspots, dense pockets, where to send people, good revisit zones): call find_door_clusters. Geography lives in addresses.lat/lng — turfs are OPTIONAL admin labels, and knocked doors are often outside any turf, so NEVER answer "can't tell, no turfs defined" or group by turf unless the admin asked about turfs. Then reverse_geocode the best cluster's center to name the spot ("the W 5th St area in Marysville"), and mention how many candidate doors were invisible for lack of coordinates.
 - Turf rollups: sub-turfs OWN their doors (addresses.turf_id points at the sub-turf), so a parent turf's direct count excludes doors carved into children — include turfs WHERE parent_turf_id = parent to cover the whole area. "How's squad X doing" can mean knocks by its members (via squad_members) or progress on its turf (turfs WHERE squad_id) — match the wording.
 - Rates: contact rate = knocks with outcome IN ('signed','didnt_sign','maybe') / all knocks; conversion = signed / contacted. Guard every denominator with NULLIF(…, 0).
 - Timeframe filters (only when the admin names one): occurred_at is UTC, so compare in their zone — "today" is (occurred_at AT TIME ZONE '${timezone}')::date = (now() AT TIME ZONE '${timezone}')::date. Never occurred_at::date or current_date alone (those are UTC days and will slice the day wrong).
@@ -326,6 +328,33 @@ const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'find_door_clusters',
+    description:
+      'Find geographic hotspots of doors — groups of addresses near each other — from stored ' +
+      'coordinates. Turfs are NOT involved; this is pure geography. Call it for any "which ' +
+      'areas / where should we send people / dense pockets of X" question. mode picks the ' +
+      "doors: a latest-outcome value ('not_home', 'signed', 'maybe', 'didnt_sign', 'skip', " +
+      "'hostile'), 'knocked' (any latest outcome), or 'unknocked' (never visited). Returns the " +
+      'top clusters (door count, center lat/lng, most-common streets) plus how many candidate ' +
+      'doors lack coordinates. Follow up with reverse_geocode on the best center to name the area.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        mode: {
+          type: 'string',
+          enum: ['not_home', 'signed', 'maybe', 'didnt_sign', 'skip', 'hostile', 'knocked', 'unknocked'],
+        },
+        radius_m: {
+          type: 'number',
+          description: 'Approximate cluster radius in meters (default 300, max 2000).',
+        },
+        min_doors: { type: 'number', description: 'Minimum doors for a cluster to count (default 3).' },
+        limit: { type: 'number', description: 'Max clusters to return (default 5, max 10).' },
+      },
+      required: ['mode'],
+    },
+  },
+  {
     name: 'compute_statistics',
     description:
       'Run a statistical computation over numeric data pulled via query_database. ' +
@@ -487,6 +516,181 @@ function runDistanceBetween(lat1: number, lng1: number, lat2: number, lng2: numb
   return JSON.stringify({ miles: Math.round(miles * 100) / 100 })
 }
 
+const CLUSTER_OUTCOMES = new Set(['signed', 'didnt_sign', 'maybe', 'not_home', 'skip', 'hostile'])
+
+interface ClusterDoor {
+  id: string
+  lat: number
+  lng: number
+  street: string | null
+}
+
+/** addresses.street holds the full house-number line ("1037 WATKINS GLEN CT")
+ * — strip the leading number so clusters group by actual street name. */
+function streetName(street: string): string {
+  const stripped = street.replace(/^\s*\d[\w/-]*\s+/, '').trim()
+  return stripped || street
+}
+
+/** PostgREST `.in()` rides the URL, so chunk large id lists. */
+async function fetchAddressesByIds(ids: string[]): Promise<ClusterDoor[]> {
+  const out: ClusterDoor[] = []
+  for (let i = 0; i < ids.length && i < 3000; i += 150) {
+    const { data, error } = await supabaseAdmin
+      .from('addresses')
+      .select('id, lat, lng, street')
+      .in('id', ids.slice(i, i + 150))
+    if (error) throw new Error(error.message)
+    out.push(...((data ?? []) as ClusterDoor[]))
+  }
+  return out
+}
+
+/** Grid-bin doors by lat/lng (cell ≈ radius), score each cell with its 3×3
+ * neighborhood so clusters straddling a cell edge still read as one hotspot,
+ * then greedily pick non-overlapping tops. Pure geography — turfs never
+ * enter into it. Queries here are fixed app code (not model-written SQL),
+ * so the ai_readonly_query write-blocking isn't being bypassed in spirit. */
+async function runFindDoorClusters(
+  mode: string,
+  radiusRaw?: number,
+  minDoorsRaw?: number,
+  limitRaw?: number,
+): Promise<string> {
+  if (!CLUSTER_OUTCOMES.has(mode) && mode !== 'knocked' && mode !== 'unknocked') {
+    return JSON.stringify({ error: `Unknown mode: ${mode}` })
+  }
+  const radius = Math.min(2000, Math.max(50, Number.isFinite(radiusRaw) ? Number(radiusRaw) : 300))
+  const minDoors = Math.min(50, Math.max(1, Math.round(Number.isFinite(minDoorsRaw) ? Number(minDoorsRaw) : 3)))
+  const limit = Math.min(10, Math.max(1, Math.round(Number.isFinite(limitRaw) ? Number(limitRaw) : 5)))
+
+  let doors: ClusterDoor[]
+  let totalCandidates: number
+  let fetchCapped = false
+
+  if (mode === 'unknocked') {
+    const { data: knockedRows, error: e1 } = await supabaseAdmin
+      .from('household_latest_knock')
+      .select('household_id')
+    if (e1) return JSON.stringify({ error: e1.message })
+    const knocked = new Set((knockedRows ?? []).map((r) => String(r.household_id)))
+    const { count: totalAddresses } = await supabaseAdmin
+      .from('addresses')
+      .select('id', { count: 'exact', head: true })
+    const { data: geocoded, error: e2 } = await supabaseAdmin
+      .from('addresses')
+      .select('id, lat, lng, street')
+      .not('lat', 'is', null)
+      .limit(8000)
+    if (e2) return JSON.stringify({ error: e2.message })
+    fetchCapped = (geocoded ?? []).length === 8000
+    doors = ((geocoded ?? []) as ClusterDoor[]).filter((a) => !knocked.has(a.id))
+    totalCandidates = Math.max(0, (totalAddresses ?? 0) - knocked.size)
+  } else {
+    const { data: latest, error } = await supabaseAdmin
+      .from('household_latest_knock')
+      .select('household_id, outcome')
+    if (error) return JSON.stringify({ error: error.message })
+    const wanted = (latest ?? []).filter((r) => (mode === 'knocked' ? true : r.outcome === mode))
+    totalCandidates = wanted.length
+    const addrs = wanted.length
+      ? await fetchAddressesByIds(wanted.map((r) => String(r.household_id)))
+      : []
+    doors = addrs.filter((a) => a.lat != null && a.lng != null)
+  }
+
+  const withCoords = doors.length
+  const withoutCoords = Math.max(0, totalCandidates - withCoords)
+  if (!withCoords) {
+    return JSON.stringify({
+      mode,
+      radius_m: radius,
+      total_candidates: totalCandidates,
+      with_coords: 0,
+      without_coords: withoutCoords,
+      clusters: [],
+      note: 'No candidate doors have coordinates yet — doors get lat/lng from turf cutting or the maps\' "Place pins" buttons.',
+    })
+  }
+
+  const latRef = doors.reduce((sum, d) => sum + d.lat, 0) / withCoords
+  const degLat = radius / 111320
+  const degLng = radius / (111320 * Math.max(0.2, Math.cos((latRef * Math.PI) / 180)))
+
+  interface Cell {
+    i: number
+    j: number
+    n: number
+    sumLat: number
+    sumLng: number
+    streets: Map<string, number>
+  }
+  const cells = new Map<string, Cell>()
+  for (const d of doors) {
+    const i = Math.floor(d.lat / degLat)
+    const j = Math.floor(d.lng / degLng)
+    const key = `${i}:${j}`
+    let cell = cells.get(key)
+    if (!cell) {
+      cell = { i, j, n: 0, sumLat: 0, sumLng: 0, streets: new Map() }
+      cells.set(key, cell)
+    }
+    cell.n++
+    cell.sumLat += d.lat
+    cell.sumLng += d.lng
+    if (d.street) {
+      const name = streetName(d.street)
+      cell.streets.set(name, (cell.streets.get(name) ?? 0) + 1)
+    }
+  }
+
+  const scored = [...cells.values()].map((c) => {
+    let n = 0
+    let sumLat = 0
+    let sumLng = 0
+    const streets = new Map<string, number>()
+    for (let di = -1; di <= 1; di++) {
+      for (let dj = -1; dj <= 1; dj++) {
+        const nb = cells.get(`${c.i + di}:${c.j + dj}`)
+        if (!nb) continue
+        n += nb.n
+        sumLat += nb.sumLat
+        sumLng += nb.sumLng
+        for (const [street, count] of nb.streets) streets.set(street, (streets.get(street) ?? 0) + count)
+      }
+    }
+    return { i: c.i, j: c.j, doors: n, lat: sumLat / n, lng: sumLng / n, streets }
+  })
+  scored.sort((a, b) => b.doors - a.doors)
+
+  const picked: typeof scored = []
+  for (const cand of scored) {
+    if (cand.doors < minDoors) break // sorted desc — everything after is smaller
+    if (picked.some((p) => Math.max(Math.abs(p.i - cand.i), Math.abs(p.j - cand.j)) < 2)) continue
+    picked.push(cand)
+    if (picked.length >= limit) break
+  }
+
+  return JSON.stringify({
+    mode,
+    radius_m: radius,
+    total_candidates: totalCandidates,
+    with_coords: withCoords,
+    without_coords: withoutCoords,
+    clusters: picked.map((c) => ({
+      doors: c.doors,
+      center: { lat: Number(c.lat.toFixed(5)), lng: Number(c.lng.toFixed(5)) },
+      streets: [...c.streets.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([street]) => street),
+    })),
+    ...(fetchCapped
+      ? { note: 'Coordinate fetch capped at 8000 geocoded addresses — treat counts as a sample.' }
+      : {}),
+  })
+}
+
 async function executeTool(name: string, input: Record<string, unknown>): Promise<string> {
   try {
     switch (name) {
@@ -506,6 +710,17 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
           Number(input.lng1),
           Number(input.lat2),
           Number(input.lng2),
+        )
+      case 'find_door_clusters':
+        return await withTimeout(
+          runFindDoorClusters(
+            String(input.mode ?? ''),
+            input.radius_m == null ? undefined : Number(input.radius_m),
+            input.min_doors == null ? undefined : Number(input.min_doors),
+            input.limit == null ? undefined : Number(input.limit),
+          ),
+          TOOL_TIMEOUT_MS,
+          name,
         )
       case 'compute_statistics':
         return runComputeStatistics(
@@ -538,6 +753,8 @@ function activityLabel(name: string, input: Record<string, unknown>): string {
       return 'Measured a distance'
     case 'compute_statistics':
       return `Stats: ${String(input.operation ?? '')}`
+    case 'find_door_clusters':
+      return `Clustered ${String(input.mode ?? '?')} doors (${Number(input.radius_m) || 300}m)`
     default:
       return `Tool: ${name}`
   }
