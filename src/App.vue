@@ -8,8 +8,12 @@ const theme = useThemeStore()
 
 theme.paintFromCache()
 watch(
-  () => auth.profile?.theme.scheme,
-  (scheme) => theme.loadForProfile(scheme),
+  () => auth.profile?.theme,
+  // No profile yet (startup, logged out) keeps the cached paint instead of
+  // flashing back to the default scheme.
+  (settings) => {
+    if (settings) theme.loadForProfile(settings)
+  },
   { immediate: true },
 )
 </script>

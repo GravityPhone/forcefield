@@ -17,6 +17,9 @@
   --scrollbar-width: 18px;
   --scrollbar-radius: 999px;
   --scrollbar-shadow: none;
+  /* Display prefs (lib/themes.ts applyDisplayPrefs paints these). */
+  --font-scale: 1;
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 
 * {
@@ -34,16 +37,87 @@ html {
   /* Fluid base size: every rem-based measurement in the app (padding, font
    * size, button height, gaps) scales smoothly with viewport width instead
    * of using fixed breakpoints. Prevents the class of bug where a control
-   * sized for desktop overflows or crowds its container on a narrow phone. */
-  font-size: clamp(14px, 3.5vw, 16px);
+   * sized for desktop overflows or crowds its container on a narrow phone.
+   * --font-scale is the user's Text size pref — because the whole app is
+   * rem-based, this one multiplier scales everything together. */
+  font-size: calc(clamp(14px, 3.5vw, 16px) * var(--font-scale, 1));
 }
 
 body {
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-body, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif);
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* --- Background flair (Appearance → lib/patterns.ts) ---
+ * Two fixed mask layers pinned behind everything (z-index -1 keeps them
+ * under all content but over the body background). The mask carries the
+ * shape; the ink is a low-opacity mix of the scheme's own accent/text
+ * colors, so patterns never fight text for contrast. */
+html[data-pattern] body::before,
+html[data-pattern] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  -webkit-mask-repeat: repeat;
+  mask-repeat: repeat;
+}
+
+html[data-pattern] body::before {
+  background: var(--pattern-ink-a, transparent);
+  -webkit-mask-image: var(--pattern-mask-a, none);
+  mask-image: var(--pattern-mask-a, none);
+  -webkit-mask-size: var(--pattern-size-a, auto);
+  mask-size: var(--pattern-size-a, auto);
+}
+
+html[data-pattern] body::after {
+  background: var(--pattern-ink-b, transparent);
+  -webkit-mask-image: var(--pattern-mask-b, none);
+  mask-image: var(--pattern-mask-b, none);
+  -webkit-mask-size: var(--pattern-size-b, auto);
+  mask-size: var(--pattern-size-b, auto);
+}
+
+/* --- Readability prefs (classes painted by applyDisplayPrefs) --- */
+
+/* Bold text: a hair of stroke on every glyph thickens ALL text while
+ * keeping the existing weight hierarchy (unlike a font-weight override,
+ * which would flatten headings and body to one weight). Inherits into the
+ * chat widget's shadow DOM too. */
+html.pref-bold body {
+  -webkit-text-stroke: 0.02em;
+}
+
+/* Compact spacing: tightens the shared primitives so more fits per screen.
+ * View-specific layouts keep their own spacing — this is a squeeze, not a
+ * relayout. */
+html.pref-compact .page {
+  padding: 0.85rem;
+}
+
+html.pref-compact .card {
+  padding: 0.9rem;
+}
+
+html.pref-compact .btn {
+  min-height: clamp(36px, 9.5vw, 42px);
+  padding: clamp(0.45rem, 1.6vw, 0.6rem) clamp(0.8rem, 3vw, 1.1rem);
+}
+
+html.pref-compact .field {
+  margin-bottom: 0.7rem;
+}
+
+html.pref-compact .field input,
+html.pref-compact .field textarea,
+html.pref-compact .field select {
+  min-height: clamp(36px, 9.5vw, 42px);
+  padding: clamp(0.45rem, 1.6vw, 0.6rem) clamp(0.7rem, 2.5vw, 0.9rem);
 }
 
 /* Keyboard-only focus ring for anything without its own focus style. */
@@ -52,6 +126,8 @@ body {
   outline-offset: 2px;
 }
 
+/* Honors both the OS setting and the in-app Reduce motion pref (a media
+ * query can't be forced from JS, so the pref mirrors it as a class). */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -60,6 +136,14 @@ body {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+html.pref-reduce-motion *,
+html.pref-reduce-motion *::before,
+html.pref-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
 }
 
 #app {

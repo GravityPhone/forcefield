@@ -13,11 +13,60 @@ export type ThemeId =
   | 'highContrast'
   | 'eighties'
   | 'nineties'
+  | 'seventies'
+  | 'jazzCup'
+  | 'diner'
+  | 'handheld'
+  | 'crtGreen'
+  | 'crtAmber'
+  | 'paperback'
+  | 'nightVision'
   | 'forest'
   | 'ocean'
   | 'sunset'
   | 'solarized'
   | 'midnight'
+
+/** Background flair drawn behind the page (lib/patterns.ts). Pure CSS
+ * masks/gradients tinted from the active scheme — no image downloads. */
+export type PatternId =
+  | 'none'
+  | 'jazz'
+  | 'memphis'
+  | 'waves'
+  | 'zigzag'
+  | 'grid'
+  | 'scanlines'
+  | 'stripes'
+  | 'dots'
+
+export type FontId = 'system' | 'rounded' | 'mono' | 'serif'
+
+/** Per-account display preferences beyond the color scheme — all cosmetic,
+ * all stored flat inside the same profiles.theme jsonb as `scheme`. */
+export interface DisplayPrefs {
+  /** Multiplies the app's fluid root font size — everything is rem-based,
+   * so this scales text, buttons, and spacing together. */
+  textScale: number
+  /** Adds a hair of stroke to every glyph — bolder without flattening
+   * weight hierarchy. */
+  bold: boolean
+  /** Sunlight boost: pulls muted text and borders hard toward full text
+   * color for glare-proof contrast on any scheme. */
+  sunlight: boolean
+  font: FontId
+  /** 'theme' defers to the scheme's own radius token. */
+  corners: 'theme' | 'sharp' | 'round'
+  compact: boolean
+  reduceMotion: boolean
+  pattern: PatternId
+  patternBold: boolean
+}
+
+/** Shape of the profiles.theme jsonb: the scheme plus any saved display
+ * prefs (older rows have only `scheme` — readers must fill defaults via
+ * normalizeThemeSettings in lib/themes.ts). */
+export type ThemeSettings = { scheme: ThemeId } & Partial<DisplayPrefs>
 
 export interface Profile {
   id: string
@@ -31,7 +80,7 @@ export interface Profile {
   color: string | null
   role: AppRole
   team_id: string | null
-  theme: { scheme: ThemeId }
+  theme: ThemeSettings
   created_at: string
   updated_at: string
 }

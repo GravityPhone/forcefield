@@ -1,4 +1,6 @@
-import type { ThemeId } from '@/types'
+import type { DisplayPrefs, FontId, ThemeId } from '@/types'
+import { getPattern, isPatternId } from '@/lib/patterns'
+import type { PatternLayer } from '@/lib/patterns'
 
 /** Every cosmetic design token a scheme controls. Deliberately excludes
  * anything outcome-related (see lib/outcomes.ts) — those colors are fixed
@@ -27,6 +29,9 @@ export interface ThemeTokens {
   scrollbarShadow: string
 }
 
+/** Groups the /appearance picker sorts schemes into. */
+export type ThemeGroup = 'day' | 'night' | 'retro'
+
 export interface ThemeDefinition {
   id: ThemeId
   label: string
@@ -34,6 +39,7 @@ export interface ThemeDefinition {
    * so untouched details (scrollbars, audio-recorder icons, etc.) still
    * read sensibly instead of defaulting to a jarring light chrome. */
   dark: boolean
+  group: ThemeGroup
   tokens: ThemeTokens
 }
 
@@ -42,6 +48,7 @@ export const THEMES: ThemeDefinition[] = [
     id: 'light',
     label: 'Light',
     dark: false,
+    group: 'day',
     tokens: {
       bg: '#f5f6fa',
       surface: '#ffffff',
@@ -66,6 +73,7 @@ export const THEMES: ThemeDefinition[] = [
     id: 'dark',
     label: 'Dark',
     dark: true,
+    group: 'night',
     tokens: {
       bg: '#14161f',
       surface: '#1c1f2b',
@@ -90,6 +98,7 @@ export const THEMES: ThemeDefinition[] = [
     id: 'highContrast',
     label: 'High Contrast',
     dark: true,
+    group: 'night',
     tokens: {
       bg: '#000000',
       surface: '#000000',
@@ -112,8 +121,10 @@ export const THEMES: ThemeDefinition[] = [
   },
   {
     id: 'eighties',
-    label: '80s Synthwave',
+    // Not "Synthwave" — that word is a 2000s invention; neon was there in '84.
+    label: "'80s Neon",
     dark: true,
+    group: 'retro',
     tokens: {
       bg: '#1a0b2e',
       surface: '#241242',
@@ -138,6 +149,7 @@ export const THEMES: ThemeDefinition[] = [
     id: 'nineties',
     label: '90s Desktop',
     dark: false,
+    group: 'retro',
     tokens: {
       bg: '#c0c0c0',
       surface: '#ffffff',
@@ -163,6 +175,7 @@ export const THEMES: ThemeDefinition[] = [
     id: 'forest',
     label: 'Forest',
     dark: false,
+    group: 'day',
     tokens: {
       bg: '#f1f4ec',
       surface: '#ffffff',
@@ -187,6 +200,7 @@ export const THEMES: ThemeDefinition[] = [
     id: 'ocean',
     label: 'Ocean',
     dark: false,
+    group: 'day',
     tokens: {
       bg: '#eaf6f8',
       surface: '#ffffff',
@@ -211,6 +225,7 @@ export const THEMES: ThemeDefinition[] = [
     id: 'sunset',
     label: 'Sunset',
     dark: false,
+    group: 'day',
     tokens: {
       bg: '#fff3ea',
       surface: '#fffaf5',
@@ -235,6 +250,7 @@ export const THEMES: ThemeDefinition[] = [
     id: 'solarized',
     label: 'Solarized',
     dark: true,
+    group: 'night',
     tokens: {
       bg: '#002b36',
       surface: '#073642',
@@ -259,6 +275,7 @@ export const THEMES: ThemeDefinition[] = [
     id: 'midnight',
     label: 'Midnight',
     dark: true,
+    group: 'night',
     tokens: {
       bg: '#05060a',
       surface: '#0d0f1a',
@@ -277,6 +294,208 @@ export const THEMES: ThemeDefinition[] = [
       scrollbarWidth: '18px',
       scrollbarRadius: '999px',
       scrollbarShadow: '0 0 8px rgba(124, 140, 255, 0.65)',
+    },
+  },
+  {
+    id: 'paperback',
+    label: 'Paperback',
+    dark: false,
+    group: 'day',
+    tokens: {
+      bg: '#f2e9d8',
+      surface: '#faf3e5',
+      surface2: '#e9dcc3',
+      text: '#33261a',
+      textMuted: '#75634c',
+      border: '#d6c5a4',
+      accent: '#8a5a2b',
+      accentContrast: '#faf3e5',
+      danger: '#b3402e',
+      success: '#4a7c3f',
+      warning: '#a97b1c',
+      shadow: '0 1px 3px rgba(70, 50, 20, 0.1), 0 4px 14px rgba(70, 50, 20, 0.08)',
+      radius: '10px',
+      scrollbarColor: '#8a5a2b',
+      scrollbarWidth: '16px',
+      scrollbarRadius: '6px',
+      scrollbarShadow: 'none',
+    },
+  },
+  {
+    id: 'nightVision',
+    label: 'Night Vision',
+    dark: true,
+    group: 'night',
+    tokens: {
+      // Deep red-on-black: easy on dark-adapted eyes for after-sundown walks.
+      bg: '#0a0304',
+      surface: '#150608',
+      surface2: '#200a0d',
+      text: '#ff8585',
+      textMuted: '#a85a5d',
+      border: '#521a1e',
+      accent: '#ff5c5c',
+      accentContrast: '#170506',
+      danger: '#ff2e2e',
+      success: '#7fae62',
+      warning: '#d9a748',
+      shadow: '0 0 10px rgba(255, 80, 80, 0.18)',
+      radius: '10px',
+      scrollbarColor: '#ff5c5c',
+      scrollbarWidth: '16px',
+      scrollbarRadius: '999px',
+      scrollbarShadow: '0 0 8px rgba(255, 92, 92, 0.5)',
+    },
+  },
+  {
+    id: 'seventies',
+    label: "'70s Groove",
+    dark: false,
+    group: 'retro',
+    tokens: {
+      bg: '#efe3c8',
+      surface: '#f9f1de',
+      surface2: '#e5d3ab',
+      text: '#3a2c16',
+      textMuted: '#77613c',
+      border: '#d2bb8a',
+      accent: '#b3591f',
+      accentContrast: '#f9f1de',
+      danger: '#a32b20',
+      success: '#647d2a',
+      warning: '#b98c15',
+      shadow: '0 2px 6px rgba(80, 60, 20, 0.18)',
+      radius: '18px',
+      scrollbarColor: 'linear-gradient(180deg, #b3591f, #d9a441, #647d2a)',
+      scrollbarWidth: '20px',
+      scrollbarRadius: '999px',
+      scrollbarShadow: 'none',
+    },
+  },
+  {
+    id: 'jazzCup',
+    label: 'Jazz Cup',
+    dark: false,
+    group: 'retro',
+    tokens: {
+      bg: '#f0fafa',
+      surface: '#ffffff',
+      surface2: '#dcf3f2',
+      text: '#182c3a',
+      textMuted: '#4e6f80',
+      border: '#b5e2e0',
+      accent: '#009aa6',
+      accentContrast: '#ffffff',
+      danger: '#d64545',
+      success: '#1f9e78',
+      warning: '#c98a1f',
+      shadow: '0 1px 3px rgba(0, 90, 100, 0.1), 0 4px 16px rgba(0, 90, 100, 0.08)',
+      radius: '14px',
+      scrollbarColor: 'linear-gradient(180deg, #00b2bd, #7a4bc8)',
+      scrollbarWidth: '20px',
+      scrollbarRadius: '999px',
+      scrollbarShadow: 'none',
+    },
+  },
+  {
+    id: 'diner',
+    label: 'Diner',
+    dark: false,
+    group: 'retro',
+    tokens: {
+      bg: '#f4f1ea',
+      surface: '#ffffff',
+      surface2: '#dff0e8',
+      text: '#26262e',
+      textMuted: '#5f5f6c',
+      border: '#c9dcd3',
+      accent: '#d3273e',
+      accentContrast: '#ffffff',
+      danger: '#8f1b2c',
+      success: '#1f8e5a',
+      warning: '#d69a1f',
+      shadow: '0 2px 4px rgba(40, 40, 60, 0.12)',
+      radius: '14px',
+      scrollbarColor: 'linear-gradient(180deg, #f2f3f7, #9aa2b1)',
+      scrollbarWidth: '22px',
+      scrollbarRadius: '999px',
+      scrollbarShadow: 'inset 0 0 4px rgba(0, 0, 0, 0.35)',
+    },
+  },
+  {
+    id: 'handheld',
+    label: 'Handheld LCD',
+    dark: false,
+    group: 'retro',
+    tokens: {
+      // The 1989 pea-green brick, four shades of it.
+      bg: '#9bbc0f',
+      surface: '#b0cc32',
+      surface2: '#8aa81c',
+      text: '#0f380f',
+      textMuted: '#2e5c1e',
+      border: '#306230',
+      accent: '#0f380f',
+      accentContrast: '#9bbc0f',
+      danger: '#7a3a10',
+      success: '#1e5c2f',
+      warning: '#6b5a10',
+      shadow: 'none',
+      radius: '6px',
+      scrollbarColor: '#0f380f',
+      scrollbarWidth: '22px',
+      scrollbarRadius: '0px',
+      scrollbarShadow: 'none',
+    },
+  },
+  {
+    id: 'crtGreen',
+    label: 'CRT Green',
+    dark: true,
+    group: 'retro',
+    tokens: {
+      bg: '#030b05',
+      surface: '#07160b',
+      surface2: '#0c2313',
+      text: '#45f077',
+      textMuted: '#2fa254',
+      border: '#175c2e',
+      accent: '#33ff66',
+      accentContrast: '#04180a',
+      danger: '#ff5c5c',
+      success: '#33ff66',
+      warning: '#ffd23f',
+      shadow: '0 0 12px rgba(51, 255, 102, 0.22)',
+      radius: '6px',
+      scrollbarColor: '#33ff66',
+      scrollbarWidth: '18px',
+      scrollbarRadius: '0px',
+      scrollbarShadow: '0 0 8px rgba(51, 255, 102, 0.7)',
+    },
+  },
+  {
+    id: 'crtAmber',
+    label: 'CRT Amber',
+    dark: true,
+    group: 'retro',
+    tokens: {
+      bg: '#0b0602',
+      surface: '#160d03',
+      surface2: '#221505',
+      text: '#ffb000',
+      textMuted: '#b8811a',
+      border: '#573d0e',
+      accent: '#ffb000',
+      accentContrast: '#160d03',
+      danger: '#ff6055',
+      success: '#9adf4f',
+      warning: '#ffd23f',
+      shadow: '0 0 12px rgba(255, 176, 0, 0.22)',
+      radius: '6px',
+      scrollbarColor: '#ffb000',
+      scrollbarWidth: '18px',
+      scrollbarRadius: '0px',
+      scrollbarShadow: '0 0 8px rgba(255, 176, 0, 0.6)',
     },
   },
 ]
@@ -317,6 +536,122 @@ export function applyThemeTokens(tokens: ThemeTokens) {
   for (const key of Object.keys(CSS_VAR_NAMES) as (keyof ThemeTokens)[]) {
     root.setProperty(CSS_VAR_NAMES[key], tokens[key])
   }
+}
+
+// --- Display preferences (readability + background flair) ---
+
+/** Sunlight boost: rebuilds the scheme's weakest-contrast tokens much closer
+ * to full text color. Works on ANY scheme — glare-proofing without forcing
+ * anyone off the palette they like. */
+export function sunlightTokens(t: ThemeTokens): ThemeTokens {
+  return {
+    ...t,
+    textMuted: `color-mix(in srgb, ${t.textMuted} 25%, ${t.text})`,
+    border: `color-mix(in srgb, ${t.border} 45%, ${t.text})`,
+    shadow: 'none',
+  }
+}
+
+/** System-font stacks only — a font choice must not add a single byte of
+ * webfont download. Unsupported entries fall back to the system face. */
+export const FONT_STACKS: Record<FontId, string> = {
+  system: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+  rounded: "ui-rounded, 'SF Pro Rounded', 'Nunito', 'Varela Round', system-ui, sans-serif",
+  mono: "ui-monospace, 'Cascadia Code', 'Roboto Mono', Menlo, Consolas, monospace",
+  serif: "ui-serif, Georgia, 'Times New Roman', serif",
+}
+
+export const TEXT_SCALES: { value: number; label: string }[] = [
+  { value: 0.92, label: 'Compact' },
+  { value: 1, label: 'Standard' },
+  { value: 1.1, label: 'Large' },
+  { value: 1.22, label: 'X-Large' },
+  { value: 1.35, label: 'Jumbo' },
+]
+
+export const DEFAULT_PREFS: DisplayPrefs = {
+  textScale: 1,
+  bold: false,
+  sunlight: false,
+  font: 'system',
+  corners: 'theme',
+  compact: false,
+  reduceMotion: false,
+  pattern: 'none',
+  patternBold: false,
+}
+
+/** Validates the profiles.theme jsonb (or the paint cache) into a scheme id
+ * plus a fully-populated prefs object. Tolerates legacy `{scheme}`-only
+ * rows, nulls, and junk values. */
+export function normalizeThemeSettings(raw: unknown): { scheme: ThemeId; prefs: DisplayPrefs } {
+  const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const scheme = getTheme(typeof obj.scheme === 'string' ? obj.scheme : undefined).id
+  return {
+    scheme,
+    prefs: {
+      textScale: TEXT_SCALES.some((s) => s.value === obj.textScale)
+        ? (obj.textScale as number)
+        : DEFAULT_PREFS.textScale,
+      bold: obj.bold === true,
+      sunlight: obj.sunlight === true,
+      font:
+        typeof obj.font === 'string' && obj.font in FONT_STACKS
+          ? (obj.font as FontId)
+          : DEFAULT_PREFS.font,
+      corners: obj.corners === 'sharp' || obj.corners === 'round' ? obj.corners : 'theme',
+      compact: obj.compact === true,
+      reduceMotion: obj.reduceMotion === true,
+      pattern: isPatternId(obj.pattern) ? obj.pattern : DEFAULT_PREFS.pattern,
+      patternBold: obj.patternBold === true,
+    },
+  }
+}
+
+const PATTERN_VAR_KEYS = ['a', 'b'] as const
+
+function applyPatternLayer(
+  style: CSSStyleDeclaration,
+  key: (typeof PATTERN_VAR_KEYS)[number],
+  layer: PatternLayer | undefined,
+  ink: string,
+) {
+  style.setProperty(`--pattern-mask-${key}`, layer ? layer.mask : 'none')
+  style.setProperty(`--pattern-size-${key}`, layer ? layer.size : 'auto')
+  style.setProperty(`--pattern-ink-${key}`, layer ? ink : 'transparent')
+}
+
+/** Applies everything a scheme's tokens don't cover: root font scale, font
+ * stack, bold/compact/reduce-motion classes, corner override, and the
+ * background-pattern mask layers (style.css owns the matching selectors).
+ * Call AFTER applyThemeTokens — the corner override wins over the scheme's
+ * radius token by running last. */
+export function applyDisplayPrefs(prefs: DisplayPrefs, tokens: ThemeTokens) {
+  const root = document.documentElement
+  const style = root.style
+
+  style.setProperty('--font-scale', String(prefs.textScale))
+  style.setProperty('--font-body', FONT_STACKS[prefs.font])
+  if (prefs.corners !== 'theme') {
+    style.setProperty('--radius', prefs.corners === 'sharp' ? '4px' : '18px')
+  }
+  root.classList.toggle('pref-bold', prefs.bold)
+  root.classList.toggle('pref-compact', prefs.compact)
+  root.classList.toggle('pref-reduce-motion', prefs.reduceMotion)
+
+  const pattern = getPattern(prefs.pattern)
+  if (!pattern.a && !pattern.b) {
+    root.removeAttribute('data-pattern')
+    for (const key of PATTERN_VAR_KEYS) applyPatternLayer(style, key, undefined, 'transparent')
+    return
+  }
+  root.setAttribute('data-pattern', pattern.id)
+  // Ink strength: low enough that text sitting directly on the page bg
+  // stays comfortably readable even on the Bold setting.
+  const aPct = prefs.patternBold ? 16 : 8
+  const bPct = prefs.patternBold ? 12 : 6
+  applyPatternLayer(style, 'a', pattern.a, `color-mix(in srgb, ${tokens.accent} ${aPct}%, transparent)`)
+  applyPatternLayer(style, 'b', pattern.b, `color-mix(in srgb, ${tokens.text} ${bPct}%, transparent)`)
 }
 
 /** Translates our tokens into vue-advanced-chat's `styles` prop shape so the
