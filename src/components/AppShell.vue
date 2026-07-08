@@ -8,6 +8,7 @@ import BottomSheet from '@/components/ui/BottomSheet.vue'
 import ChatDrawer from '@/components/chat/ChatDrawer.vue'
 import { hapticTap } from '@/lib/native'
 import { canvassGameOpen } from '@/lib/easterEgg'
+import { helpFor } from '@/lib/helpContent'
 
 // Easter-egg mini game (25 rapid taps on the chat handle) — async so the
 // canvas code never ships to anyone who hasn't found it.
@@ -90,6 +91,11 @@ const moreItems = computed<NavItem[]>(() => {
 const moreOpen = ref(false)
 const moreActive = computed(() => moreItems.value.some((i) => route.path === i.to))
 
+// --- Per-screen help: explanatory copy lives in helpContent.ts, one tap
+// away behind the header's "?" — not in paragraphs crowding the pages. ---
+const helpTopic = computed(() => helpFor(route.path))
+const helpOpen = ref(false)
+
 function goFromSheet(to: string) {
   moreOpen.value = false
   hapticTap('light')
@@ -155,6 +161,14 @@ onUnmounted(() => {
           <span class="brand-name">Forcefield</span>
         </div>
         <div class="user-area" v-if="auth.profile">
+          <button
+            v-if="helpTopic"
+            class="help-btn"
+            :aria-label="`About this screen: ${helpTopic.title}`"
+            @click="helpOpen = true"
+          >
+            ?
+          </button>
           <span class="badge">{{ ROLE_LABELS[auth.profile.role] }}</span>
           <span class="username">{{ auth.profile.username }}</span>
           <button class="btn btn-ghost btn-sm logout-top" @click="handleLogout">Log out</button>
@@ -259,6 +273,21 @@ onUnmounted(() => {
         </button>
       </nav>
     </BottomSheet>
+
+    <!-- Per-screen help sheet ("?" in the header) -->
+    <BottomSheet
+      v-if="helpTopic"
+      v-model:open="helpOpen"
+      :title="helpTopic.title"
+      aria-label="Screen help"
+    >
+      <div class="help-body">
+        <template v-for="(s, i) in helpTopic.sections" :key="i">
+          <h3 v-if="s.heading" class="help-heading">{{ s.heading }}</h3>
+          <p class="help-text">{{ s.body }}</p>
+        </template>
+      </div>
+    </BottomSheet>
   </div>
 </template>
 
@@ -304,6 +333,48 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+}
+
+.help-btn {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 800;
+  cursor: pointer;
+  flex-shrink: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.help-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.help-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.help-heading {
+  margin: 0.4rem 0 0;
+  font-size: 0.95rem;
+  font-weight: 800;
+}
+
+.help-text {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
 }
 
 .username {

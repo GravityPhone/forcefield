@@ -118,10 +118,6 @@ const campaignOptions = computed(() => [
 <template>
   <AppShell title="Campaigns &amp; Teams">
     <div class="stack">
-      <p class="muted intro">
-        Campaigns are the big efforts your org runs; each team works one campaign. Day-to-day
-        crews (squads) form themselves on the <router-link to="/squads">Squads</router-link> page.
-      </p>
       <p v-if="error" class="error">{{ error }}</p>
       <p v-if="loading" class="muted">Loading…</p>
 
@@ -253,11 +249,6 @@ const campaignOptions = computed(() => [
 
 .campaign-row:last-child {
   border-bottom: none;
-}
-
-.intro {
-  margin: 0;
-  font-size: 0.92rem;
 }
 
 .error {

@@ -1014,8 +1014,7 @@ watch(
     <!-- ============ No squad today ============ -->
     <div v-if="!squads.loading && !mySquad" class="stack">
       <p class="muted intro">
-        You're not in a squad yet today. Squads are today's door-knocking crews — everyone in
-        one shares a chat, this squad page, and turf. They reset at midnight.
+        You're not in a squad yet today — start one, or join a crew that's already out.
       </p>
       <button class="btn btn-primary big-btn" @click="openComposer">+ Start today's squad</button>
       <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>
@@ -1072,10 +1071,6 @@ watch(
               <span class="turf-dot" :style="{ background: t.color }"></span>{{ t.name }}
             </button>
           </div>
-          <p v-if="canAssign" class="muted assign-hint">
-            Tap <strong>Assign doors</strong> on a member below to hand them their share of the
-            turf right on this map.
-          </p>
         </template>
         <p v-else-if="!dashboardLoading" class="muted no-turf">
           No turf assigned to your squad yet today — your campaign manager sends turf out to
@@ -1169,22 +1164,12 @@ watch(
           </button>
         </div>
       </div>
-      <p class="muted color-tip">
-        Tap a door pin to open it in Talk mode — green pins are already knocked, blue ones aren't
-        yet. Tap a squadmate to zoom to the last door they knocked.<template v-if="canAssign">
-          Use "Assign doors" on a member's card to divvy the turf up on the map.</template>
-        Pick your card color and avatar under Appearance.
-      </p>
     </div>
 
     <p v-else class="muted">Loading your squad…</p>
 
     <!-- New squad sheet (no-squad state) -->
     <BottomSheet v-model:open="composing" title="New squad" aria-label="New squad">
-      <p class="muted hint">
-        Name today's crew and optionally add people now — anyone can also join on their own.
-        A squad chat is created automatically.
-      </p>
       <div class="field">
         <label for="squad-name">Squad name</label>
         <input id="squad-name" v-model="squadName" placeholder="e.g. Richwood crew" />
@@ -1209,8 +1194,7 @@ watch(
   gap: 0.75rem;
 }
 
-.intro,
-.hint {
+.intro {
   margin: 0;
   font-size: 0.92rem;
 }
@@ -1356,11 +1340,6 @@ watch(
 .no-turf {
   margin: 0;
   font-size: 0.9rem;
-}
-
-.assign-hint {
-  margin: 0;
-  font-size: 0.85rem;
 }
 
 /* --- Map --- */
@@ -1581,10 +1560,6 @@ watch(
   font-size: 0.8rem;
 }
 
-.color-tip {
-  margin: 0;
-  font-size: 0.82rem;
-}
 </style>
 
 <style>

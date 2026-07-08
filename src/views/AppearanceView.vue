@@ -117,12 +117,6 @@ async function pickColor(hex: string | null) {
 
 <template>
   <AppShell title="Appearance">
-    <p class="muted intro">
-      Purely cosmetic — everything here is your own account's look. The knock-outcome buttons,
-      the Hunt-mode outcome grid, and map pins always keep their own colors so they stay
-      readable no matter what you choose.
-    </p>
-
     <!-- ============ Color scheme ============ -->
     <section v-for="group in groupedThemes" :key="group.id" class="scheme-group">
       <h3 class="group-heading">
@@ -161,10 +155,6 @@ async function pickColor(hex: string | null) {
 
     <!-- ============ Background flair ============ -->
     <h2 class="section-heading">Background flair</h2>
-    <p class="muted intro">
-      Streaks, squiggles, and grids behind the page — drawn from your scheme's own colors and
-      kept faint enough to never fight the text. Weighs nothing, downloads nothing.
-    </p>
     <div class="pattern-grid">
       <button
         v-for="p in PATTERNS"
@@ -207,10 +197,6 @@ async function pickColor(hex: string | null) {
 
     <!-- ============ Text & readability ============ -->
     <h2 class="section-heading">Text &amp; readability</h2>
-    <p class="muted intro">
-      Built for a phone screen in full sun — or wind it down for night shifts. Every change
-      applies to the whole app, instantly.
-    </p>
 
     <div class="pref-block">
       <span class="pref-title">Text size</span>
@@ -242,7 +228,6 @@ async function pickColor(hex: string | null) {
           {{ f.label }}
         </button>
       </div>
-      <p class="muted pref-note">System faces only — nothing to download, so nothing gets slower.</p>
     </div>
 
     <button
@@ -320,10 +305,6 @@ async function pickColor(hex: string | null) {
 
     <!-- ============ Avatar ============ -->
     <h2 class="section-heading">Your avatar</h2>
-    <p class="muted intro">
-      Pick an animal — it shows next to your messages in chat and on member lists, so
-      squadmates can spot you at a glance.
-    </p>
     <div class="avatar-grid" :class="{ busy: savingAvatar }">
       <button
         v-for="slug in ANIMAL_AVATARS"
@@ -349,10 +330,6 @@ async function pickColor(hex: string | null) {
 
     <!-- ============ Member color ============ -->
     <h2 class="section-heading">Your color</h2>
-    <p class="muted intro">
-      Your accent on the Squad page — it tints your member card and the marker that follows
-      your knocks on the squad map.
-    </p>
     <div class="color-grid" :class="{ busy: savingColor }">
       <button
         v-for="hex in MEMBER_COLORS"
@@ -388,11 +365,6 @@ async function pickColor(hex: string | null) {
 </template>
 
 <style scoped>
-.intro {
-  margin-bottom: 1rem;
-  max-width: 640px;
-}
-
 /* --- Scheme groups --- */
 
 .scheme-group + .scheme-group {
@@ -583,11 +555,6 @@ async function pickColor(hex: string | null) {
   font-weight: 700;
   font-size: 1rem;
   margin-bottom: 0.45rem;
-}
-
-.pref-note {
-  margin: 0.45rem 0 0;
-  font-size: 0.82rem;
 }
 
 .seg {

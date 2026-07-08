@@ -56,11 +56,6 @@ function memberNames(squad: SquadListItem): string {
 <template>
   <AppShell title="Squads">
     <div class="stack">
-      <p class="muted intro">
-        Squads are today's door-knocking crews — everyone in one shares a squad chat and shows
-        up together on the leaderboard. They reset at midnight, so start a fresh one each day.
-      </p>
-
       <button class="btn btn-primary new-squad-btn" @click="openComposer">+ New squad</button>
 
       <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>
@@ -98,10 +93,6 @@ function memberNames(squad: SquadListItem): string {
 
     <!-- New squad sheet -->
     <BottomSheet v-model:open="composing" title="New squad" aria-label="New squad">
-      <p class="muted hint">
-        Name today's crew and optionally add people now — anyone can also join on their own.
-        A squad chat is created automatically.
-      </p>
       <div class="field">
         <label for="squad-name">Squad name</label>
         <input id="squad-name" v-model="squadName" placeholder="e.g. Richwood crew" />
@@ -124,11 +115,6 @@ function memberNames(squad: SquadListItem): string {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-}
-
-.intro {
-  margin: 0;
-  font-size: 0.92rem;
 }
 
 .new-squad-btn {
@@ -176,11 +162,6 @@ function memberNames(squad: SquadListItem): string {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
-}
-
-.hint {
-  margin: 0;
-  font-size: 0.88rem;
 }
 
 /* Creating today's crew is a primary field action — full-width, can't-miss. */
