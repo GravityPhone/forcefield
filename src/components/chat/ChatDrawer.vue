@@ -82,24 +82,21 @@ function onHandleMove(e: PointerEvent) {
 
 // --- Easter egg: 25 rapid taps on the handle launch Clipboard Canvass.
 // Tap 1 behaves normally (opens the drawer); once a rapid streak is going
-// (taps < 600ms apart) the drawer is held closed and the handle kept
-// visible so the remaining taps have something to land on. ---
+// (taps < 600ms apart) the drawer is held closed so the remaining taps
+// keep landing on the (always-visible) handle. ---
 
 const TAP_STREAK_WINDOW = 600
 const TAP_STREAK_GOAL = 25
 let tapStreak = 0
 let lastTapAt = 0
-const streakAlive = ref(false)
 let streakTimer: ReturnType<typeof setTimeout> | undefined
 
 function registerHandleTap(): number {
   const now = Date.now()
   tapStreak = now - lastTapAt < TAP_STREAK_WINDOW ? tapStreak + 1 : 1
   lastTapAt = now
-  streakAlive.value = true
   clearTimeout(streakTimer)
   streakTimer = setTimeout(() => {
-    streakAlive.value = false
     tapStreak = 0
   }, TAP_STREAK_WINDOW)
   return tapStreak
@@ -111,7 +108,6 @@ function onHandleUp() {
     const streak = registerHandleTap()
     if (streak >= TAP_STREAK_GOAL) {
       clearTimeout(streakTimer)
-      streakAlive.value = false
       tapStreak = 0
       chat.closeDrawer()
       canvassGameOpen.value = true
@@ -138,6 +134,11 @@ function onHandleCancel() {
   dragMode = 'none'
   draggingOpen.value = false
   dragPx.value = 0
+}
+
+function onBackTap() {
+  hapticTap('light')
+  chat.closeDrawer()
 }
 
 /** Mid-drag the panel tracks the finger; otherwise CSS classes handle it. */
@@ -465,12 +466,26 @@ async function addPeople() {
 
 <template>
   <template v-if="auth.profile">
-    <!-- Edge handle — the drawer's always-there front door -->
+    <!-- Red escape hatch — rides just above the handle while the drawer is
+         open, for anyone who can't spot the ✕ in the drawer header. -->
+    <Transition name="back-pop">
+      <button
+        v-if="chat.drawerOpen"
+        class="drawer-back"
+        :style="{ top: `max(calc(env(safe-area-inset-top, 0px) + 0.4rem), calc(${handleTopPct}dvh - 3.9rem))` }"
+        aria-label="Close chat"
+        @click="onBackTap"
+      >
+        Back
+      </button>
+    </Transition>
+
+    <!-- Edge handle — the drawer's always-there front door (stays visible
+         with the drawer open too; tapping it then closes) -->
     <button
-      v-show="!chat.drawerOpen || draggingOpen || streakAlive"
       class="drawer-handle"
       :style="{ top: `${handleTopPct}dvh` }"
-      aria-label="Open chat"
+      :aria-label="chat.drawerOpen ? 'Close chat' : 'Open chat'"
       @pointerdown="onHandleDown"
       @pointermove="onHandleMove"
       @pointerup="onHandleUp"
@@ -651,6 +666,41 @@ async function addPeople() {
   cursor: pointer;
   touch-action: none; /* we run the drag ourselves */
   -webkit-tap-highlight-color: transparent;
+}
+
+.drawer-back {
+  position: fixed;
+  right: 0;
+  z-index: 47; /* rides with the handle, above the panel */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.6rem;
+  height: 3.4rem;
+  padding: 0;
+  border: none;
+  border-radius: 14px 0 0 14px;
+  /* Fixed red on purpose, same theme-independence as the orange handle. */
+  background: #e11900;
+  color: #fff;
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  box-shadow: -2px 2px 10px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.back-pop-enter-active,
+.back-pop-leave-active {
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.back-pop-enter-from,
+.back-pop-leave-to {
+  transform: translateX(100%);
+  opacity: 0;
 }
 
 .handle-grip svg {
