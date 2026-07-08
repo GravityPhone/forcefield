@@ -60,8 +60,12 @@ function buildSystemPrompt(
   localTime: string,
   toolCallsUsed: number,
   searchesUsed: number,
+  requester: RequesterInfo | null,
 ): string {
-  return `You are Forcefield's built-in AI analyst. Forcefield is a door-to-door canvassing app for a UBI (universal basic income) petition campaign in Union County, Ohio — canvassers knock doors to collect petition signatures. You are talking to an org admin or campaign manager inside the app's AI chat.
+  const requesterLine = requester
+    ? `You are talking to @${requester.username} (role: ${requester.role}${requester.id ? `, profiles.id ${requester.id}` : ''}) inside the app's AI chat — when they say "me" or "my", that's who they mean.`
+    : "You are talking to an org admin or campaign manager inside the app's AI chat."
+  return `You are Forcefield's built-in AI analyst. Forcefield is a door-to-door canvassing app for a UBI (universal basic income) petition campaign in Union County, Ohio — canvassers knock doors to collect petition signatures. ${requesterLine}
 
 ## Style
 - Lead with the answer, then the supporting numbers. Keep it tight — a few sentences or a short bullet list, not an essay.
@@ -73,6 +77,8 @@ Hard limits per question, enforced by the server: ${MAX_TOOL_CALLS} tool calls t
 - Decide what you need BEFORE calling anything: one well-joined SQL query beats three exploratory ones. The full schema is below — never query information_schema.
 - No tools for greetings, general knowledge, or follow-ups answerable from data already in this conversation.
 - Do exactly what was asked — no bonus queries, no tangents, no "while I'm at it" exploration. If the request is ambiguous, ask a clarifying question instead of burning tool calls on a guess.
+- Timeframes: if the question doesn't name one, use ALL-TIME. Never add a date filter (WHERE occurred_at >= …) the admin didn't ask for — and if you do scope by time, say so in the answer.
+- If a result looks surprisingly sparse or empty, sanity-check with an unfiltered COUNT(*) before concluding the data is thin — a wrong filter looks exactly like an empty campaign.
 - If you hit the budget, answer from what you have and say what's missing.
 
 Tools:
@@ -85,14 +91,16 @@ Tools:
 - addresses(id, street, unit, city, county, zip, lat, lng, turf_id -> turfs.id, registered_voter)
 - persons(id, name, household_id -> addresses.id, voter_file_id, registered_voter)
 - knock_logs(id, person_id -> persons.id, household_id -> addresses.id, canvasser_id -> profiles.id, occurred_at, outcome, notes) — outcome is one of 'signed','didnt_sign','maybe','not_home','skip','hostile'; join addresses on knock_logs.household_id = addresses.id for the address
-- profiles(id, username, display_name, role, team_id -> teams.id, avatar, color) — role is canvasser / team_lead (displays "Squad Leader") / campaign_manager / admin
+- profiles(id, username, display_name, role, team_id -> teams.id, avatar, color) — role is canvasser / team_lead (displays "Squad Leader") / campaign_manager / admin. display_name is usually NULL: always select coalesce(display_name, username) AS name and refer to people as @username — every account has a username, so never claim names are unavailable.
 - teams(id, name, campaign_id -> campaigns.id)
 - campaigns(id, name, description, is_active)
 - squads(id, name, squad_date, chat_id, created_by)
 - squad_members(squad_id -> squads.id, user_id -> profiles.id, joined_at)
 - turfs(id, name, color, squad_id -> squads.id, assignee_id -> profiles.id, parent_turf_id -> turfs.id) — assigned to a squad OR one canvasser, never both; parent_turf_id set means it's a sub-turf carved from that parent
-- household_knock_summary(household_id -> addresses.id, total_knocks, signed_count, didnt_sign_count, maybe_count, not_home_count, skip_count, hostile_count, reached) — view, one row per knocked household
-- household_latest_knock(household_id -> addresses.id, outcome, occurred_at) — view, most recent knock per household
+- canvasser_leaderboard(canvasser_id, username, display_name, doors_knocked, signatures) — view, ALL-TIME totals per canvasser. The go-to for "best performers" / leaderboard / who's-winning questions: SELECT * FROM canvasser_leaderboard ORDER BY signatures DESC.
+- household_knock_summary(household_id -> addresses.id, total_knocks, signed_count, didnt_sign_count, maybe_count, not_home_count, skip_count, hostile_count, reached) — view, one row per knocked HOUSEHOLD
+- household_latest_knock(household_id -> addresses.id, outcome, occurred_at) — view, only the most recent knock per household
+The household_* views collapse repeat visits, so never use them to count canvasser activity or total knocks — use knock_logs (one row per knock) or canvasser_leaderboard for that.
 Private user-to-user chat messages are intentionally inaccessible to you, even via SQL — if asked about them, say so.
 
 ## Infographics
@@ -116,6 +124,26 @@ interface ChatRequest {
   state?: unknown
   timezone?: unknown
   localTime?: unknown
+  user?: unknown
+}
+
+/** Who's on the other end of the chat (client-reported; cosmetic context for
+ * the model, not an auth boundary — this endpoint has none to begin with). */
+interface RequesterInfo {
+  id: string
+  username: string
+  role: string
+}
+
+function parseRequester(raw: unknown): RequesterInfo | null {
+  if (!raw || typeof raw !== 'object') return null
+  const { id, username, role } = raw as Record<string, unknown>
+  if (typeof username !== 'string' || !username.trim()) return null
+  return {
+    id: typeof id === 'string' ? id.slice(0, 40) : '',
+    username: username.trim().slice(0, 60),
+    role: typeof role === 'string' && role.trim() ? role.trim().slice(0, 30) : 'admin',
+  }
 }
 
 interface WireMessage {
@@ -518,7 +546,15 @@ async function handleChat(req: Request): Promise<Response> {
     return json({ error: 'Invalid JSON body' }, 400)
   }
 
-  const { apiKey, messages: rawMessages, state: rawState, timezone: rawTimezone, localTime: rawLocalTime } = body
+  const {
+    apiKey,
+    messages: rawMessages,
+    state: rawState,
+    timezone: rawTimezone,
+    localTime: rawLocalTime,
+    user: rawUser,
+  } = body
+  const requester = parseRequester(rawUser)
   // A personal key saved in Settings still wins; otherwise fall back to the
   // shared demo key configured on the Netlify site (ANTHROPIC_API_KEY). The
   // shared key never leaves the server — demo users just get working chat.
@@ -597,7 +633,7 @@ async function handleChat(req: Request): Promise<Response> {
           client.messages.create({
             model: MODEL,
             max_tokens: MAX_TOKENS,
-            system: buildSystemPrompt(timezone, localTime, state.t, state.s),
+            system: buildSystemPrompt(timezone, localTime, state.t, state.s, requester),
             messages: state.m,
             ...(tools.length ? { tools } : {}),
           }),

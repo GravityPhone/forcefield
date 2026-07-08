@@ -111,6 +111,11 @@ async function send() {
     timeStyle: 'long',
   })
 
+  // Who's asking — so the assistant knows who "me" is and greets by username.
+  const requester = auth.profile
+    ? { id: auth.profile.id, username: auth.profile.username, role: auth.profile.role }
+    : undefined
+
   // A turn with several tool calls (or a web search) won't fit in one Netlify
   // function invocation, so the server may answer { continue, state } — POST
   // the state straight back and a fresh invocation resumes the loop. The hop
@@ -121,6 +126,7 @@ async function send() {
     messages: wireMessages,
     timezone,
     localTime,
+    user: requester,
   }
 
   try {
@@ -143,7 +149,13 @@ async function send() {
       if (data.continue && typeof data.state === 'string') {
         const acts = Array.isArray(data.activity) ? (data.activity as string[]) : []
         liveStatus.value = acts.length ? acts[acts.length - 1] : 'Working…'
-        payload = { apiKey: apiKey.value ?? undefined, state: data.state, timezone, localTime }
+        payload = {
+          apiKey: apiKey.value ?? undefined,
+          state: data.state,
+          timezone,
+          localTime,
+          user: requester,
+        }
         continue
       }
       const activity = Array.isArray(data.activity) ? (data.activity as string[]) : []
@@ -224,12 +236,6 @@ async function send() {
           Send
         </button>
       </form>
-      <p class="muted disclaimer">
-        Responses come from Claude Haiku via your API key (set in
-        <router-link to="/admin/settings">Settings</router-link>) — web search is billed to the
-        same key, no extra key needed. The assistant can read live canvassing data (never private
-        user chats), use Google Maps, and is capped at 5 tool calls + 3 searches per question.
-      </p>
     </div>
   </AppShell>
 </template>
@@ -238,7 +244,7 @@ async function send() {
 .chat {
   display: flex;
   flex-direction: column;
-  height: min(65dvh, 640px);
+  height: min(72dvh, 720px);
   padding: 0.75rem;
 }
 
@@ -407,10 +413,5 @@ async function send() {
 .chat-input input:focus {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
-}
-
-.disclaimer {
-  margin: 0.5rem 0.5rem 0.25rem;
-  font-size: 0.8rem;
 }
 </style>
