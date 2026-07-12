@@ -27,7 +27,9 @@ const auth = useAuthStore()
 const router = useRouter()
 
 const members = ref<RosterMember[]>([])
-const loading = ref(false)
+// Starts true so first paint shows "Loading…" instead of a false empty state
+// while the initial fetch (and, for admins, the teams list) is in flight.
+const loading = ref(true)
 
 // Everyone browses their OWN team. Admins have no team (and a manager might
 // not be placed yet) — they pick a team to browse, or see everyone.
@@ -61,10 +63,16 @@ function memberName(m: RosterMember): string {
   return m.display_name || m.username
 }
 
+// Guards against an earlier slow response landing after a newer one when the
+// admin flips the team picker mid-fetch.
+let loadSeq = 0
+
 async function loadMembers() {
+  const seq = ++loadSeq
   const scope = needsPicker ? pickedTeamId.value : auth.profile?.team_id
   if (!scope) {
     members.value = []
+    loading.value = false
     return
   }
   loading.value = true
@@ -74,6 +82,7 @@ async function loadMembers() {
     .order('username')
   if (scope !== 'all') query = query.eq('team_id', scope)
   const { data } = await query
+  if (seq !== loadSeq) return // a newer load superseded this one
   loading.value = false
   type Row = Omit<RosterMember, 'phone'> & { member_phones: unknown }
   members.value = ((data ?? []) as unknown as Row[]).map(({ member_phones, ...m }) => ({
@@ -86,9 +95,13 @@ onMounted(async () => {
   if (needsPicker) {
     const { data } = await supabase.from('teams').select('id, name').order('name')
     teams.value = data ?? []
+    // Setting the picker triggers the watcher's load; only call directly
+    // when there's nothing to pick (clears the initial loading state).
     if (teams.value.length) pickedTeamId.value = teams.value[0].id
+    else await loadMembers()
+  } else {
+    await loadMembers()
   }
-  await loadMembers()
 })
 
 watch(pickedTeamId, () => void loadMembers())
@@ -121,7 +134,8 @@ function openMember(id: string) {
           role="button"
           tabindex="0"
           @click="openMember(m.id)"
-          @keydown.enter.prevent="openMember(m.id)"
+          @keydown.enter.self.prevent="openMember(m.id)"
+          @keydown.space.self.prevent="openMember(m.id)"
         >
           <span class="roster-avatar" :style="!avatarUrl(m.avatar) ? { background: memberColor(m) } : {}">
             <img v-if="avatarUrl(m.avatar)" :src="avatarUrl(m.avatar)" alt="" />
@@ -138,7 +152,7 @@ function openMember(id: string) {
             </span>
           </span>
           <a
-            v-if="m.phone"
+            v-if="m.phone && m.id !== auth.profile?.id"
             class="btn btn-sm call-btn"
             :href="telHref(m.phone)"
             :aria-label="`Call ${memberName(m)}`"

@@ -28,6 +28,12 @@ const db = new KnockDb()
 
 const DIRECT_TIMEOUT_MS = 4000
 
+// client_ids undone while their submit was still in flight. Without this, a
+// tap-again-to-undo during the (up to 4s) upsert window resurrects the knock:
+// the failure path would re-queue it after deleteKnock cleared the queue, and
+// the success path may land the upsert after the undo's server delete.
+const undone = new Set<string>()
+
 function upsertKnock(knock: NewKnock, timeoutMs?: number) {
   let query = supabase.from('knock_logs').upsert(knock, { onConflict: 'client_id' })
   if (timeoutMs) query = query.abortSignal(AbortSignal.timeout(timeoutMs))
@@ -37,11 +43,15 @@ function upsertKnock(knock: NewKnock, timeoutMs?: number) {
 /** Log a knock. Resolves once the row is either saved to Supabase or safely
  * queued locally — never throws to the UI. */
 export async function submitKnock(knock: NewKnock): Promise<void> {
+  undone.delete(knock.client_id) // resubmitting the id makes it live again
   try {
     const { error } = await upsertKnock(knock, DIRECT_TIMEOUT_MS)
     if (error) throw error
+    // An undo raced past while this upsert was in flight — its server delete
+    // may have run before our write landed, so delete again.
+    if (undone.has(knock.client_id)) await deleteKnock(knock.client_id)
   } catch {
-    await db.pendingKnocks.put(knock)
+    if (!undone.has(knock.client_id)) await db.pendingKnocks.put(knock)
   }
 }
 
@@ -49,6 +59,7 @@ export async function submitKnock(knock: NewKnock): Promise<void> {
  * deletes it server-side. Never throws; if offline, the local copy is gone
  * and the synced row (if any) is cleaned up on the next successful attempt. */
 export async function deleteKnock(clientId: string): Promise<void> {
+  undone.add(clientId)
   await db.pendingKnocks.delete(clientId).catch(() => {})
   try {
     await supabase

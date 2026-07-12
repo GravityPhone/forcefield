@@ -16,7 +16,7 @@ import type { KnockOutcome } from '@/types'
  * roster bubbles, the household banner). Fixed literals like the fills
  * themselves — picked per hex by contrast, not by theme. */
 export const OUTCOMES: { value: KnockOutcome; label: string; hex: string; ink: string; requiresPerson: boolean }[] = [
-  { value: 'signed', label: 'Signed', hex: '#2e9e5b', ink: '#ffffff', requiresPerson: true },
+  { value: 'signed', label: 'Signed', hex: '#2e9e5b', ink: '#181c26', requiresPerson: true },
   { value: 'didnt_sign', label: "Didn't Sign", hex: '#d64545', ink: '#ffffff', requiresPerson: true },
   { value: 'maybe', label: 'Maybe', hex: '#e0a02e', ink: '#181c26', requiresPerson: true },
   { value: 'not_home', label: 'Not Home', hex: '#8a90a5', ink: '#181c26', requiresPerson: false },

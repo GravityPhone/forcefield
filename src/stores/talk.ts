@@ -204,6 +204,11 @@ export const useTalkStore = defineStore('talk', {
       this.pendingOutcome = outcome
       this.activeClientId = clientId
       await submitKnock(knock)
+      // A same-outcome tap during that await was an undo, a different-outcome
+      // tap a swap — either way this submission is stale and must not prepend
+      // a ghost entry over the newer state (the roster bubbles and address
+      // banner render straight from history[0]).
+      if (this.activeClientId !== clientId || this.pendingOutcome !== outcome) return
       // Optimistic: reflect the (possibly corrected) knock in this
       // household's history, replacing any prior entry for the same log.
       if (knock.household_id) {

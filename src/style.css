@@ -101,7 +101,10 @@ html.pref-compact .page {
 }
 
 html.pref-compact .card {
-  padding: 0.9rem;
+  /* The var lets components that bleed to the card edge (negative margins,
+   * e.g. Talk's tinted address banner) track the squeezed padding. */
+  --card-pad: 0.9rem;
+  padding: var(--card-pad);
 }
 
 html.pref-compact .btn {

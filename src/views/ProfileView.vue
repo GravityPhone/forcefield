@@ -50,8 +50,9 @@ async function save() {
   if (saving.value || !auth.profile) return
   error.value = ''
   const p = phone.value.trim()
-  if (p && !PHONE_RE.test(p)) {
-    error.value = 'That phone number doesn’t look right — digits, spaces, and ( ) . - only.'
+  const digits = p.replace(/\D/g, '').length
+  if (p && (!PHONE_RE.test(p) || digits < 7 || digits > 15)) {
+    error.value = 'That phone number doesn’t look right — at least 7 digits, plus spaces and ( ) . - if you like.'
     return
   }
   saving.value = true
@@ -84,13 +85,24 @@ async function save() {
     }
   }
 
-  if (profileError || phoneError) {
-    error.value = 'Could not save — check your connection and try again.'
-  } else {
+  // Sync the store per write, not on all-or-nothing — a bio that actually
+  // persisted must be reflected even when the phone write failed, or a later
+  // save from a stale remount would silently revert it.
+  if (!profileError) {
     auth.profile.bio = patch.bio
     auth.profile.why_canvassing = patch.why_canvassing
     auth.profile.fun_fact = patch.fun_fact
-    savedPhone.value = p
+  }
+  if (!phoneError) savedPhone.value = p
+
+  if (profileError || phoneError) {
+    error.value =
+      profileError && phoneError
+        ? 'Could not save — check your connection and try again.'
+        : profileError
+          ? 'Saved your phone number, but the intro didn’t go through — try again.'
+          : 'Saved your intro, but the phone number didn’t go through — try again.'
+  } else {
     savedFlash.value = true
     setTimeout(() => (savedFlash.value = false), 2000)
   }
@@ -237,6 +249,12 @@ async function save() {
   margin: 0.35rem 0 0;
   font-size: 0.85rem;
   line-height: 1.4;
+}
+
+.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.9rem;
 }
 
 .save-row {

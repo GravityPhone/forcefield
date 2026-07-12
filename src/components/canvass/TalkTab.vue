@@ -165,7 +165,10 @@ const PARTLY_SIGNED_OPTIONS = [
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  padding: 1rem;
+  /* --card-pad (overridden by compact mode in style.css) keeps the tinted
+   * banner's negative margins in lockstep with the real padding. */
+  --card-pad: 1rem;
+  padding: var(--card-pad);
 }
 
 .address-head {
@@ -179,8 +182,8 @@ const PARTLY_SIGNED_OPTIONS = [
  * strip edge-to-edge in that outcome's fixed color — bleed through the
  * card's 1rem padding so it reads as a banner, not a highlight. */
 .address-head.tinted {
-  margin: -1rem -1rem 0;
-  padding: 0.85rem 1rem;
+  margin: calc(-1 * var(--card-pad)) calc(-1 * var(--card-pad)) 0;
+  padding: 0.85rem var(--card-pad);
   border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0;
 }
 

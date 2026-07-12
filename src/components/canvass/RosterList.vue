@@ -116,12 +116,16 @@ function bubbleStyle(personId: string): Record<string, string> | undefined {
 }
 
 .person.colored .muted {
+  /* Full-opacity ink — the smaller size already de-emphasizes; fading it
+   * would push borderline fills below readable contrast. */
   color: var(--bubble-ink);
-  opacity: 0.85;
 }
 
 .person.colored .badge {
-  background: color-mix(in srgb, var(--bubble-ink) 22%, transparent);
+  /* Outline instead of a tint pill: text stays ink-on-fill (max contrast)
+   * and the border alone marks it as a badge. */
+  background: transparent;
+  border: 1.5px solid currentColor;
   color: var(--bubble-ink);
 }
 

@@ -1134,7 +1134,7 @@ watch(
           role="button"
           tabindex="0"
           @click="selectMember(m.id)"
-          @keydown.enter.prevent="selectMember(m.id)"
+          @keydown.enter.self.prevent="selectMember(m.id)"
         >
           <div class="member-top">
             <span class="member-avatar" :style="!avatarUrl(m.avatar) ? { background: memberColor(m) } : {}">
@@ -1156,9 +1156,9 @@ watch(
             </li>
           </ul>
           <p v-else class="muted no-knocks">No doors knocked yet.</p>
-          <div v-if="m.phone || canAssign" class="member-actions">
+          <div v-if="(m.phone && m.id !== auth.profile?.id) || canAssign" class="member-actions">
             <a
-              v-if="m.phone"
+              v-if="m.phone && m.id !== auth.profile?.id"
               class="btn btn-sm call-btn"
               :href="telHref(m.phone)"
               :aria-label="`Call ${memberName(m)}`"

@@ -55,7 +55,7 @@ async function load() {
     // newest first, with the door embedded for display.
     supabase
       .from('knock_logs')
-      .select('id, outcome, occurred_at, person:persons(name), addresses!inner(street, unit, city)')
+      .select('id, outcome, occurred_at, person:persons(name), addresses(street, unit, city)')
       .eq('canvasser_id', id)
       .order('occurred_at', { ascending: false })
       .limit(100),
@@ -269,6 +269,7 @@ function doorLine(v: VisitRow): string {
   margin: 0;
   white-space: pre-line;
   line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .about-item {
@@ -287,6 +288,7 @@ function doorLine(v: VisitRow): string {
 .about-text {
   margin: 0;
   line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .visits {
