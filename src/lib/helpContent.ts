@@ -129,6 +129,24 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     ],
   },
 
+  '/roster': {
+    title: 'Team roster',
+    sections: [
+      {
+        body:
+          'Everyone on your team, leadership first. Tap a person to see their intro and ' +
+          'the doors they’ve knocked lately.',
+      },
+      {
+        heading: 'Calling teammates',
+        body:
+          'A Call button appears next to anyone who saved a phone number on their About me ' +
+          'page — one tap opens your dialer. No number saved means no button, and numbers ' +
+          'are only ever visible inside your own team.',
+      },
+    ],
+  },
+
   '/profile': {
     title: 'About me',
     sections: [

@@ -70,14 +70,17 @@ const barItems = computed<NavItem[]>(() => {
 
 const moreItems = computed<NavItem[]>(() => {
   if (!auth.profile) return []
+  const roster: NavItem = { to: '/roster', label: 'Roster', icon: 'squads' }
   const aboutMe: NavItem = { to: '/profile', label: 'About me', icon: 'person' }
   const appearance: NavItem = { to: '/appearance', label: 'Appearance', icon: 'palette' }
   if (auth.profile.role === 'admin') {
-    return [aboutMe, appearance]
+    // Admins have no team — their Roster opens with a team picker.
+    return [roster, aboutMe, appearance]
   }
   if (auth.profile.role === 'campaign_manager') {
     return [
       { to: '/admin/users', label: 'Users', icon: 'squads' },
+      roster,
       { to: '/admin/chat', label: 'AI Chat', icon: 'sparkle' },
       { to: '/turf', label: 'Turf', icon: 'map' },
       { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
@@ -87,7 +90,7 @@ const moreItems = computed<NavItem[]>(() => {
     ]
   }
   // Squad leaders split turf right on the Squad page now — no Turf link.
-  return [aboutMe, appearance]
+  return [roster, aboutMe, appearance]
 })
 
 const moreOpen = ref(false)
@@ -186,6 +189,7 @@ onUnmounted(() => {
         <template v-if="auth.profile.role === 'admin'">
           <router-link to="/admin/users">Users</router-link>
           <router-link to="/admin/campaigns">Campaigns</router-link>
+          <router-link to="/roster">Roster</router-link>
         </template>
         <template v-else-if="auth.profile.role === 'campaign_manager'">
           <router-link to="/admin">Dashboard</router-link>
@@ -203,6 +207,7 @@ onUnmounted(() => {
         <template v-if="auth.profile.role !== 'admin'">
           <router-link v-if="auth.profile.role === 'campaign_manager'" to="/squads">Squads</router-link>
           <router-link v-else to="/squad">Squad</router-link>
+          <router-link to="/roster">Roster</router-link>
           <router-link to="/bulletin">Bulletin</router-link>
           <router-link to="/leaderboard">Leaderboard</router-link>
         </template>

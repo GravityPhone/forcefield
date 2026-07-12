@@ -73,6 +73,12 @@ const router = createRouter({
     // cosmetic /appearance page.
     { path: '/profile', name: 'profile', component: () => import('@/views/ProfileView.vue'), meta: { roles: [] } },
 
+    // Team roster — everyone browses their OWN team (org roster ≠ team
+    // roster); admins have no team, so they pick one to browse instead.
+    // Tapping a member opens their page: intro, and recent knocks.
+    { path: '/roster', name: 'roster', component: () => import('@/views/RosterView.vue'), meta: { roles: [] } },
+    { path: '/member/:id', name: 'member', component: () => import('@/views/MemberView.vue'), meta: { roles: [] } },
+
     // Old squad-leader home — leads canvass like everyone else now, and turf
     // splitting lives on the Squad page. Kept only for stale bookmarks.
     { path: '/team', redirect: '/canvass' },
