@@ -129,6 +129,24 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     ],
   },
 
+  '/profile': {
+    title: 'About me',
+    sections: [
+      {
+        body:
+          'A short intro your teammates can read — it shows when someone opens your entry ' +
+          'in the team roster. Every field is optional; fill in whatever feels right.',
+      },
+      {
+        heading: 'Phone number',
+        body:
+          'Save a number and teammates get a one-tap Call button next to your name on the ' +
+          'roster and squad pages. Only people on YOUR team can ever see it — that’s enforced ' +
+          'by the database, not just hidden. Leave it blank and no one can call you.',
+      },
+    ],
+  },
+
   '/appearance': {
     title: 'Appearance',
     sections: [

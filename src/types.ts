@@ -81,6 +81,10 @@ export interface Profile {
   role: AppRole
   team_id: string | null
   theme: ThemeSettings
+  /** Self-written intro, shown on the roster/member pages ("About me"). */
+  bio: string | null
+  why_canvassing: string | null
+  fun_fact: string | null
   created_at: string
   updated_at: string
 }

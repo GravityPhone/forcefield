@@ -68,6 +68,11 @@ const router = createRouter({
     // Per-account cosmetic color scheme — every role can set their own.
     { path: '/appearance', name: 'appearance', component: () => import('@/views/AppearanceView.vue'), meta: { roles: [] } },
 
+    // "About me" — self-written bio bits plus the optional teammates-can-call
+    // phone number. Identity content, deliberately separate from the purely
+    // cosmetic /appearance page.
+    { path: '/profile', name: 'profile', component: () => import('@/views/ProfileView.vue'), meta: { roles: [] } },
+
     // Old squad-leader home — leads canvass like everyone else now, and turf
     // splitting lives on the Squad page. Kept only for stale bookmarks.
     { path: '/team', redirect: '/canvass' },

@@ -70,9 +70,10 @@ const barItems = computed<NavItem[]>(() => {
 
 const moreItems = computed<NavItem[]>(() => {
   if (!auth.profile) return []
+  const aboutMe: NavItem = { to: '/profile', label: 'About me', icon: 'person' }
   const appearance: NavItem = { to: '/appearance', label: 'Appearance', icon: 'palette' }
   if (auth.profile.role === 'admin') {
-    return [appearance]
+    return [aboutMe, appearance]
   }
   if (auth.profile.role === 'campaign_manager') {
     return [
@@ -80,12 +81,13 @@ const moreItems = computed<NavItem[]>(() => {
       { to: '/admin/chat', label: 'AI Chat', icon: 'sparkle' },
       { to: '/turf', label: 'Turf', icon: 'map' },
       { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
+      aboutMe,
       appearance,
       { to: '/admin/settings', label: 'Settings', icon: 'sliders' },
     ]
   }
   // Squad leaders split turf right on the Squad page now — no Turf link.
-  return [appearance]
+  return [aboutMe, appearance]
 })
 
 const moreOpen = ref(false)
@@ -110,6 +112,7 @@ const ICONS = {
   pin: '<path d="M12 21s-7-5.5-7-11a7 7 0 0 1 14 0c0 5.5-7 11-7 11z"/><circle cx="12" cy="10" r="2.5"/>',
   chat: '<path d="M21 12a8 8 0 0 1-8 8H4l2.3-2.9A8 8 0 1 1 21 12z"/>',
   squads: '<circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 5.5a3.5 3.5 0 0 1 0 6.6M17.5 14.5a6.5 6.5 0 0 1 4 5.5"/>',
+  person: '<circle cx="12" cy="8" r="3.5"/><path d="M5.5 20a6.5 6.5 0 0 1 13 0"/>',
   trophy: '<path d="M8 4h8v5a4 4 0 0 1-8 0z"/><path d="M8 5H5a3 3 0 0 0 3 4M16 5h3a3 3 0 0 1-3 4"/><path d="M12 13v3M8 20h8M10 20v-2h4v2"/>',
   bulletin: '<rect x="4" y="4" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5M12 18v2"/>',
   palette: '<path d="M12 3a9 9 0 1 0 0 18c1.5 0 2-1 1.5-2s0-2 1.5-2h2a3 3 0 0 0 3-3 9 9 0 0 0-8-11z"/><circle cx="8" cy="10" r="1.2"/><circle cx="12" cy="7.5" r="1.2"/><circle cx="16" cy="10" r="1.2"/>',
@@ -203,6 +206,7 @@ onUnmounted(() => {
           <router-link to="/bulletin">Bulletin</router-link>
           <router-link to="/leaderboard">Leaderboard</router-link>
         </template>
+        <router-link to="/profile">About me</router-link>
         <router-link to="/appearance">Appearance</router-link>
       </nav>
       <span v-if="canScrollNavLeft" class="nav-scroll-hint nav-scroll-hint-left" aria-hidden="true">‹</span>
