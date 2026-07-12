@@ -10,14 +10,18 @@ import type { KnockOutcome } from '@/types'
  * an actual person on the roster — you can't credit or reject a signature
  * for "the household" in the abstract. Not Home / Skip / Hostile describe
  * the door interaction itself, not any one resident, so those only need a
- * household loaded, same as before. */
-export const OUTCOMES: { value: KnockOutcome; label: string; hex: string; requiresPerson: boolean }[] = [
-  { value: 'signed', label: 'Signed', hex: '#2e9e5b', requiresPerson: true },
-  { value: 'didnt_sign', label: "Didn't Sign", hex: '#d64545', requiresPerson: true },
-  { value: 'maybe', label: 'Maybe', hex: '#e0a02e', requiresPerson: true },
-  { value: 'not_home', label: 'Not Home', hex: '#8a90a5', requiresPerson: false },
-  { value: 'skip', label: 'Skip', hex: '#b9bdcc', requiresPerson: false },
-  { value: 'hostile', label: 'Hostile', hex: '#7a2e2e', requiresPerson: false },
+ * household loaded, same as before.
+ *
+ * `ink`: legible text color OVER a surface filled with `hex` (Talk-mode
+ * roster bubbles, the household banner). Fixed literals like the fills
+ * themselves — picked per hex by contrast, not by theme. */
+export const OUTCOMES: { value: KnockOutcome; label: string; hex: string; ink: string; requiresPerson: boolean }[] = [
+  { value: 'signed', label: 'Signed', hex: '#2e9e5b', ink: '#ffffff', requiresPerson: true },
+  { value: 'didnt_sign', label: "Didn't Sign", hex: '#d64545', ink: '#ffffff', requiresPerson: true },
+  { value: 'maybe', label: 'Maybe', hex: '#e0a02e', ink: '#181c26', requiresPerson: true },
+  { value: 'not_home', label: 'Not Home', hex: '#8a90a5', ink: '#181c26', requiresPerson: false },
+  { value: 'skip', label: 'Skip', hex: '#b9bdcc', ink: '#181c26', requiresPerson: false },
+  { value: 'hostile', label: 'Hostile', hex: '#7a2e2e', ink: '#ffffff', requiresPerson: false },
 ]
 
 export const OUTCOME_LABELS: Record<KnockOutcome, string> = Object.fromEntries(
@@ -27,6 +31,15 @@ export const OUTCOME_LABELS: Record<KnockOutcome, string> = Object.fromEntries(
 export const OUTCOME_HEX: Record<KnockOutcome, string> = Object.fromEntries(
   OUTCOMES.map((o) => [o.value, o.hex]),
 ) as Record<KnockOutcome, string>
+
+/** Text color that stays readable on top of the matching OUTCOME_HEX fill. */
+export const OUTCOME_INK: Record<KnockOutcome, string> = Object.fromEntries(
+  OUTCOMES.map((o) => [o.value, o.ink]),
+) as Record<KnockOutcome, string>
+
+export const OUTCOME_REQUIRES_PERSON: Record<KnockOutcome, boolean> = Object.fromEntries(
+  OUTCOMES.map((o) => [o.value, o.requiresPerson]),
+) as Record<KnockOutcome, boolean>
 
 /** Pin color for addresses with no knock logged yet. */
 export const PIN_DEFAULT_HEX = '#2f6fed'

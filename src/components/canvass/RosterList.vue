@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useTalkStore } from '@/stores/talk'
-import { OUTCOME_LABELS } from '@/lib/outcomes'
+import { OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS } from '@/lib/outcomes'
 import type { KnockLog } from '@/types'
 
 const talk = useTalkStore()
 
-// Latest prior contact per person, shown inline on each roster row.
+// Latest prior contact per person, shown inline on each roster row — and,
+// via bubbleStyle, as the row's whole fill color. history is newest-first
+// and optimistically updated the moment an outcome is logged, so bubbles
+// recolor instantly (and un-color on undo).
 const lastContactByPerson = computed(() => {
   const map = new Map<string, KnockLog>()
   for (const log of talk.history) {
@@ -24,6 +27,17 @@ function contactSummary(personId: string): string | null {
   })
   return `${OUTCOME_LABELS[log.outcome]} · ${date}`
 }
+
+/** The person's latest outcome floods their whole bubble — outcome hex for
+ * the fill (fixed literals, never theme tokens), matching ink for the text. */
+function bubbleStyle(personId: string): Record<string, string> | undefined {
+  const log = lastContactByPerson.value.get(personId)
+  if (!log) return undefined
+  return {
+    '--bubble-bg': OUTCOME_HEX[log.outcome],
+    '--bubble-ink': OUTCOME_INK[log.outcome],
+  }
+}
 </script>
 
 <template>
@@ -36,7 +50,8 @@ function contactSummary(personId: string): string | null {
       v-for="p in talk.roster"
       :key="p.id"
       class="person"
-      :class="{ selected: talk.selectedPerson?.id === p.id }"
+      :class="{ selected: talk.selectedPerson?.id === p.id, colored: !!bubbleStyle(p.id) }"
+      :style="bubbleStyle(p.id)"
       @click="talk.selectPerson(p)"
     >
       <span class="person-name">{{ p.name }}</span>
@@ -87,6 +102,34 @@ function contactSummary(personId: string): string | null {
   border-color: var(--accent);
   outline: 2px solid var(--accent);
   outline-offset: -1px;
+}
+
+/* A logged outcome floods the whole bubble with that outcome's fixed color
+ * so the door's state reads at arm's length. Ink carries the matching
+ * readable text color; muted bits just drop a little opacity instead of
+ * using the theme's muted token (which may vanish on the fill). */
+.person.colored,
+.person.colored:hover {
+  background: var(--bubble-bg);
+  border-color: var(--bubble-bg);
+  color: var(--bubble-ink);
+}
+
+.person.colored .muted {
+  color: var(--bubble-ink);
+  opacity: 0.85;
+}
+
+.person.colored .badge {
+  background: color-mix(in srgb, var(--bubble-ink) 22%, transparent);
+  color: var(--bubble-ink);
+}
+
+/* Selection ring needs to survive on top of any fill — draw it inset in
+ * the bubble's own ink rather than the theme accent. */
+.person.colored.selected {
+  outline: 2px solid var(--bubble-ink);
+  outline-offset: -4px;
 }
 
 .person-name {

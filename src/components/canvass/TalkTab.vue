@@ -2,11 +2,24 @@
 import CanvassSearch from './CanvassSearch.vue'
 import RosterList from './RosterList.vue'
 import OutcomeButtons from './OutcomeButtons.vue'
+import { computed } from 'vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
-import { OUTCOME_HEX, OUTCOME_LABELS } from '@/lib/outcomes'
+import { OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, OUTCOME_REQUIRES_PERSON } from '@/lib/outcomes'
 import { useTalkStore, type KnockHistoryEntry } from '@/stores/talk'
 
 const talk = useTalkStore()
+
+// Household-level outcomes (Not Home / Skip / Hostile) belong to the door,
+// not a person, so they flood the address banner up top — but only while
+// they're the door's LATEST word. Once someone answers and gets a personal
+// outcome, their roster bubble carries the signal and the banner clears.
+// history[0] is newest-first and optimistically updated, so this recolors
+// the moment an outcome is logged (and reverts on undo).
+const householdOutcome = computed(() => {
+  const latest = talk.history[0]
+  if (!latest || OUTCOME_REQUIRES_PERSON[latest.outcome]) return null
+  return latest.outcome
+})
 
 // --- Door history display helpers ---
 
@@ -51,14 +64,25 @@ const PARTLY_SIGNED_OPTIONS = [
          screen never navigates away mid-conversation. -->
     <CanvassSearch />
 
-    <div v-if="talk.selectedAddress" class="card address-card">
-      <div class="address-head">
+    <div
+      v-if="talk.selectedAddress"
+      class="card address-card"
+      :style="householdOutcome ? { borderColor: OUTCOME_HEX[householdOutcome] } : undefined"
+    >
+      <div
+        class="address-head"
+        :class="{ tinted: householdOutcome }"
+        :style="householdOutcome ? { background: OUTCOME_HEX[householdOutcome], color: OUTCOME_INK[householdOutcome] } : undefined"
+      >
         <div>
           <div class="address-line">
             {{ talk.selectedAddress.street
             }}{{ talk.selectedAddress.unit ? ' ' + talk.selectedAddress.unit : '' }}
           </div>
           <div class="muted address-city">{{ talk.selectedAddress.city }}</div>
+          <span v-if="householdOutcome" class="address-outcome">
+            {{ OUTCOME_LABELS[householdOutcome] }}
+          </span>
         </div>
         <button class="btn btn-sm" @click="talk.clearAddress()">Clear</button>
       </div>
@@ -149,6 +173,38 @@ const PARTLY_SIGNED_OPTIONS = [
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
+}
+
+/* A household-level outcome (Not Home / Skip / Hostile) floods the address
+ * strip edge-to-edge in that outcome's fixed color — bleed through the
+ * card's 1rem padding so it reads as a banner, not a highlight. */
+.address-head.tinted {
+  margin: -1rem -1rem 0;
+  padding: 0.85rem 1rem;
+  border-radius: calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0 0;
+}
+
+.address-head.tinted .address-city {
+  color: inherit;
+  opacity: 0.85;
+}
+
+.address-head.tinted .btn {
+  border-color: color-mix(in srgb, currentColor 55%, transparent);
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  color: inherit;
+}
+
+.address-outcome {
+  display: inline-block;
+  margin-top: 0.35rem;
+  padding: 0.1rem 0.55rem;
+  border: 1.5px solid currentColor;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .address-line {
