@@ -314,6 +314,9 @@ export interface ChatProfile {
   role?: AppRole
   /** Present where team scoping matters (team-room member lists, pickers). */
   team_id?: string | null
+  /** Present where tap-to-call matters (squad cards, chat member lists).
+   * Only ever non-null for your own teammates — member_phones RLS. */
+  phone?: string | null
 }
 
 export interface Bulletin {

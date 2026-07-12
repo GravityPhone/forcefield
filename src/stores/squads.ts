@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import { localToday } from '@/lib/day'
+import { embeddedPhone } from '@/lib/phone'
 import { useAuthStore } from './auth'
 import type { ChatProfile, Squad } from '@/types'
 
@@ -43,17 +44,23 @@ export const useSquadsStore = defineStore('squads', {
       const { data, error } = await supabase
         .from('squads')
         .select(
-          '*, squad_members(user_id, profiles!squad_members_user_id_fkey(id, username, display_name, avatar, color, role))',
+          '*, squad_members(user_id, profiles!squad_members_user_id_fkey(id, username, display_name, avatar, color, role, member_phones(phone)))',
         )
         .eq('squad_date', localToday())
         .order('created_at')
       this.loading = false
       if (error || !data) return
 
-      type Row = Squad & { squad_members: { user_id: string; profiles: ChatProfile | null }[] }
+      type Row = Squad & {
+        squad_members: { user_id: string; profiles: (ChatProfile & { member_phones?: unknown }) | null }[]
+      }
       this.squads = (data as Row[]).map((row) => {
         const members = row.squad_members
-          .map((m) => m.profiles)
+          .map((m): ChatProfile | null => {
+            if (!m.profiles) return null
+            const { member_phones, ...p } = m.profiles
+            return { ...p, phone: embeddedPhone(member_phones) }
+          })
           .filter((p): p is ChatProfile => p !== null)
         return {
           id: row.id,

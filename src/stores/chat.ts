@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
+import { embeddedPhone } from '@/lib/phone'
 import { useAuthStore } from './auth'
 import type { Chat, ChatFile, ChatKind, ChatMessage, ChatProfile, MessageReaction } from '@/types'
 
@@ -137,7 +138,7 @@ export const useChatStore = defineStore('chat', {
       const { data, error } = await supabase
         .from('chats')
         .select(
-          '*, chat_members(user_id, profiles!chat_members_user_id_fkey(id, username, display_name, avatar))',
+          '*, chat_members(user_id, profiles!chat_members_user_id_fkey(id, username, display_name, avatar, member_phones(phone)))',
         )
         .order('created_at')
       this.loadingChats = false
@@ -149,10 +150,16 @@ export const useChatStore = defineStore('chat', {
       }
       this.chatsError = ''
 
-      type Row = Chat & { chat_members: { user_id: string; profiles: ChatProfile | null }[] }
+      type Row = Chat & {
+        chat_members: { user_id: string; profiles: (ChatProfile & { member_phones?: unknown }) | null }[]
+      }
       this.chats = (data as Row[]).map((row) => {
         const members = row.chat_members
-          .map((m) => m.profiles)
+          .map((m): ChatProfile | null => {
+            if (!m.profiles) return null
+            const { member_phones, ...p } = m.profiles
+            return { ...p, phone: embeddedPhone(member_phones) }
+          })
           .filter((p): p is ChatProfile => p !== null)
         for (const p of members) this.profiles[p.id] = p
         return {
@@ -532,13 +539,19 @@ export const useChatStore = defineStore('chat', {
     },
 
     /** Every org member, with role + team so team-scoped rooms and pickers
-     * can filter down — the org has multiple teams, this is NOT a team list. */
+     * can filter down — the org has multiple teams, this is NOT a team list.
+     * Phones come along for the member-list Call buttons; RLS keeps them
+     * null outside your own team. */
     async loadOrgMembers() {
       const { data } = await supabase
         .from('profiles')
-        .select('id, username, display_name, avatar, role, team_id')
+        .select('id, username, display_name, avatar, role, team_id, member_phones(phone)')
         .order('username')
-      this.orgMembers = (data ?? []) as ChatProfile[]
+      type Row = ChatProfile & { member_phones?: unknown }
+      this.orgMembers = ((data ?? []) as Row[]).map(({ member_phones, ...p }) => ({
+        ...p,
+        phone: embeddedPhone(member_phones),
+      }))
     },
 
     /** Search app users for the member pickers (excludes yourself). */

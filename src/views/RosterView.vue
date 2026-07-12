@@ -7,6 +7,7 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
+import { embeddedPhone, telHref } from '@/lib/phone'
 import { ROLE_LABELS, type AppRole } from '@/types'
 
 interface RosterMember {
@@ -18,6 +19,8 @@ interface RosterMember {
   role: AppRole
   team_id: string | null
   team: { name: string } | null
+  /** Null unless they saved a number AND they're on your team (RLS). */
+  phone: string | null
 }
 
 const auth = useAuthStore()
@@ -67,12 +70,16 @@ async function loadMembers() {
   loading.value = true
   let query = supabase
     .from('profiles')
-    .select('id, username, display_name, avatar, color, role, team_id, team:teams(name)')
+    .select('id, username, display_name, avatar, color, role, team_id, team:teams(name), member_phones(phone)')
     .order('username')
   if (scope !== 'all') query = query.eq('team_id', scope)
   const { data } = await query
   loading.value = false
-  members.value = (data ?? []) as unknown as RosterMember[]
+  type Row = Omit<RosterMember, 'phone'> & { member_phones: unknown }
+  members.value = ((data ?? []) as unknown as Row[]).map(({ member_phones, ...m }) => ({
+    ...m,
+    phone: embeddedPhone(member_phones),
+  }))
 }
 
 onMounted(async () => {
@@ -130,6 +137,15 @@ function openMember(id: string) {
               }}<template v-if="pickedTeamId === 'all' && m.team"> · {{ m.team.name }}</template>
             </span>
           </span>
+          <a
+            v-if="m.phone"
+            class="btn btn-sm call-btn"
+            :href="telHref(m.phone)"
+            :aria-label="`Call ${memberName(m)}`"
+            @click.stop
+          >
+            Call
+          </a>
           <span class="roster-chevron muted" aria-hidden="true">›</span>
         </div>
       </div>
@@ -228,10 +244,24 @@ function openMember(id: string) {
   font-size: 0.83rem;
 }
 
-.roster-chevron {
+.call-btn {
   margin-left: auto;
+  flex-shrink: 0;
+  border: 1.5px solid var(--member-color);
+  color: var(--member-color);
+  background: transparent;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.roster-chevron {
   font-size: 1.3rem;
   flex-shrink: 0;
+}
+
+/* Chevron hugs the right edge when there's no call button. */
+.roster-row:not(:has(.call-btn)) .roster-chevron {
+  margin-left: auto;
 }
 
 .empty {

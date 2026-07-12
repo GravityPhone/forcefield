@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth'
 import { avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
 import { OUTCOME_HEX, OUTCOME_LABELS } from '@/lib/outcomes'
+import { embeddedPhone, telHref } from '@/lib/phone'
 import { ROLE_LABELS, type AppRole, type KnockOutcome } from '@/types'
 
 interface MemberProfile {
@@ -21,6 +22,8 @@ interface MemberProfile {
   why_canvassing: string | null
   fun_fact: string | null
   team: { name: string } | null
+  /** Null unless they saved a number AND they're on your team (RLS). */
+  phone: string | null
 }
 
 interface VisitRow {
@@ -45,7 +48,7 @@ async function load() {
   const [profileRes, visitsRes] = await Promise.all([
     supabase
       .from('profiles')
-      .select('id, username, display_name, avatar, color, role, team_id, bio, why_canvassing, fun_fact, team:teams(name)')
+      .select('id, username, display_name, avatar, color, role, team_id, bio, why_canvassing, fun_fact, team:teams(name), member_phones(phone)')
       .eq('id', id)
       .maybeSingle(),
     // Same org-readable knock_logs the leaderboards use — just this member's,
@@ -57,7 +60,11 @@ async function load() {
       .order('occurred_at', { ascending: false })
       .limit(100),
   ])
-  member.value = (profileRes.data ?? null) as unknown as MemberProfile | null
+  type Row = Omit<MemberProfile, 'phone'> & { member_phones: unknown }
+  const row = profileRes.data as unknown as Row | null
+  member.value = row
+    ? (({ member_phones, ...m }) => ({ ...m, phone: embeddedPhone(member_phones) }))(row)
+    : null
   visits.value = (visitsRes.data ?? []) as unknown as VisitRow[]
   loading.value = false
 }
@@ -118,6 +125,14 @@ function doorLine(v: VisitRow): string {
           >
             Edit
           </router-link>
+          <a
+            v-else-if="member.phone"
+            class="btn btn-sm btn-primary head-call"
+            :href="telHref(member.phone)"
+            :aria-label="`Call ${memberName(member)}`"
+          >
+            Call
+          </a>
         </div>
 
         <!-- About — only the fields they actually filled in. -->
@@ -233,9 +248,14 @@ function doorLine(v: VisitRow): string {
   font-size: 0.88rem;
 }
 
-.head-edit {
+.head-edit,
+.head-call {
   margin-left: auto;
   flex-shrink: 0;
+}
+
+.head-call {
+  text-decoration: none;
 }
 
 .about {

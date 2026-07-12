@@ -16,6 +16,7 @@ import { rangeCovers, walkRanges } from '@/lib/doorPath'
 import { geocodeMissing } from '@/lib/geocode'
 import { avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
+import { telHref } from '@/lib/phone'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
@@ -1155,13 +1156,24 @@ watch(
             </li>
           </ul>
           <p v-else class="muted no-knocks">No doors knocked yet.</p>
-          <button
-            v-if="canAssign"
-            class="btn btn-sm assign-btn"
-            @click.stop="startAssign(m.id)"
-          >
-            {{ assigningMemberId === m.id ? 'Picking doors…' : 'Assign doors' }}
-          </button>
+          <div v-if="m.phone || canAssign" class="member-actions">
+            <a
+              v-if="m.phone"
+              class="btn btn-sm call-btn"
+              :href="telHref(m.phone)"
+              :aria-label="`Call ${memberName(m)}`"
+              @click.stop
+            >
+              Call
+            </a>
+            <button
+              v-if="canAssign"
+              class="btn btn-sm assign-btn"
+              @click.stop="startAssign(m.id)"
+            >
+              {{ assigningMemberId === m.id ? 'Picking doors…' : 'Assign doors' }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1426,12 +1438,22 @@ watch(
   width: 100%;
 }
 
-.assign-btn {
-  align-self: flex-start;
+.member-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.assign-btn,
+.call-btn {
   border: 1.5px solid var(--member-color);
   color: var(--member-color);
   background: transparent;
   font-weight: 700;
+}
+
+.call-btn {
+  text-decoration: none;
 }
 
 .member-card.assigning .assign-btn {

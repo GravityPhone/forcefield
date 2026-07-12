@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useChatStore, type ChatListItem } from '@/stores/chat'
 import { avatarUrl } from '@/lib/avatars'
+import { telHref } from '@/lib/phone'
 import type { ChatProfile } from '@/types'
 
 const props = defineProps<{ members: ChatProfile[]; activeChat: ChatListItem | null }>()
@@ -55,6 +56,14 @@ function canAdd(member: ChatProfile): boolean {
         </button>
         <div v-if="openMenuFor === m.id" class="member-menu">
           <button class="menu-action" @click="message(m)">Message</button>
+          <a
+            v-if="m.phone"
+            class="menu-action"
+            :href="telHref(m.phone)"
+            @click="openMenuFor = null"
+          >
+            Call
+          </a>
           <button v-if="canAdd(m)" class="menu-action" @click="addToSquad(m)">
             Add to {{ activeChat?.kind === 'squad' ? 'squad' : 'chat' }}
           </button>
@@ -153,6 +162,8 @@ function canAdd(member: ChatProfile): boolean {
 }
 
 .menu-action {
+  display: flex;
+  align-items: center;
   min-height: 36px;
   padding: 0.35rem 0.6rem;
   border: none;
@@ -164,6 +175,7 @@ function canAdd(member: ChatProfile): boolean {
   font-weight: 600;
   color: var(--accent);
   cursor: pointer;
+  text-decoration: none;
 }
 
 .menu-action:hover {
