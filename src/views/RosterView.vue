@@ -226,6 +226,7 @@ function openMember(id: string) {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  flex: 1;
 }
 
 .roster-name {
@@ -245,7 +246,6 @@ function openMember(id: string) {
 }
 
 .call-btn {
-  margin-left: auto;
   flex-shrink: 0;
   border: 1.5px solid var(--member-color);
   color: var(--member-color);
@@ -257,11 +257,6 @@ function openMember(id: string) {
 .roster-chevron {
   font-size: 1.3rem;
   flex-shrink: 0;
-}
-
-/* Chevron hugs the right edge when there's no call button. */
-.roster-row:not(:has(.call-btn)) .roster-chevron {
-  margin-left: auto;
 }
 
 .empty {
