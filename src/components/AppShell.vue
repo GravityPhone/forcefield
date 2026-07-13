@@ -46,7 +46,7 @@ const barItems = computed<NavItem[]>(() => {
   // Admins run the org, not a campaign — no Bulletin/Boards/Squads for them.
   if (auth.profile.role === 'admin') {
     return [
-      { to: '/admin/users', label: 'Users', icon: 'squads' },
+      { to: '/admin/roles', label: 'Roles', icon: 'shield' },
       { to: '/admin/campaigns', label: 'Campaigns', icon: 'dashboard' },
     ]
   }
@@ -71,6 +71,8 @@ const barItems = computed<NavItem[]>(() => {
 const moreItems = computed<NavItem[]>(() => {
   if (!auth.profile) return []
   const roster: NavItem = { to: '/roster', label: 'Roster', icon: 'squads' }
+  // Own knock history — everyone who knocks doors gets it (admins don't).
+  const myKnocks: NavItem = { to: '/history', label: 'My knocks', icon: 'clock' }
   const aboutMe: NavItem = { to: '/profile', label: 'About me', icon: 'person' }
   const appearance: NavItem = { to: '/appearance', label: 'Appearance', icon: 'palette' }
   if (auth.profile.role === 'admin') {
@@ -79,8 +81,9 @@ const moreItems = computed<NavItem[]>(() => {
   }
   if (auth.profile.role === 'campaign_manager') {
     return [
-      { to: '/admin/users', label: 'Users', icon: 'squads' },
+      { to: '/admin/roles', label: 'Roles', icon: 'shield' },
       roster,
+      myKnocks,
       { to: '/admin/chat', label: 'AI Chat', icon: 'sparkle' },
       { to: '/turf', label: 'Turf', icon: 'map' },
       { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
@@ -90,7 +93,7 @@ const moreItems = computed<NavItem[]>(() => {
     ]
   }
   // Squad leaders split turf right on the Squad page now — no Turf link.
-  return [roster, aboutMe, appearance]
+  return [myKnocks, roster, aboutMe, appearance]
 })
 
 const moreOpen = ref(false)
@@ -121,6 +124,8 @@ const ICONS = {
   palette: '<path d="M12 3a9 9 0 1 0 0 18c1.5 0 2-1 1.5-2s0-2 1.5-2h2a3 3 0 0 0 3-3 9 9 0 0 0-8-11z"/><circle cx="8" cy="10" r="1.2"/><circle cx="12" cy="7.5" r="1.2"/><circle cx="16" cy="10" r="1.2"/>',
   sparkle: '<path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/>',
   map: '<path d="M9 4l6 2 6-2v14l-6 2-6-2-6 2V6z"/><path d="M9 4v14M15 6v14"/>',
+  shield: '<path d="M12 3l7 2.6v5.6c0 4.3-2.9 7.9-7 9.8-4.1-1.9-7-5.5-7-9.8V5.6z"/><path d="M9.2 12l2 2 3.6-4"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l2.9 1.9"/>',
   sliders: '<path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>',
   more: '<circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>',
   logout: '<path d="M14 4h-8a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h8M10 12h11M18 8.5L21.5 12 18 15.5"/>',
@@ -187,7 +192,7 @@ onUnmounted(() => {
     <div v-if="auth.profile" class="admin-nav-wrap">
       <nav ref="navEl" class="admin-nav" @scroll="updateNavScrollHints">
         <template v-if="auth.profile.role === 'admin'">
-          <router-link to="/admin/users">Users</router-link>
+          <router-link to="/admin/roles">Roles</router-link>
           <router-link to="/admin/campaigns">Campaigns</router-link>
           <router-link to="/roster">Roster</router-link>
         </template>
@@ -195,7 +200,7 @@ onUnmounted(() => {
           <router-link to="/admin">Dashboard</router-link>
           <!-- Managers go out canvassing themselves, not just run the org. -->
           <router-link to="/canvass">Canvass</router-link>
-          <router-link to="/admin/users">Users</router-link>
+          <router-link to="/admin/roles">Roles</router-link>
           <router-link to="/turf">Turf</router-link>
           <router-link to="/admin/chat">AI Chat</router-link>
           <router-link to="/admin/settings">Settings</router-link>
@@ -208,6 +213,7 @@ onUnmounted(() => {
           <router-link v-if="auth.profile.role === 'campaign_manager'" to="/squads">Squads</router-link>
           <router-link v-else to="/squad">Squad</router-link>
           <router-link to="/roster">Roster</router-link>
+          <router-link to="/history">My knocks</router-link>
           <router-link to="/bulletin">Bulletin</router-link>
           <router-link to="/leaderboard">Leaderboard</router-link>
         </template>

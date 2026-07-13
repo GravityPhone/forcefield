@@ -147,6 +147,29 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     ],
   },
 
+  '/history': {
+    title: 'My knocks',
+    sections: [
+      {
+        body:
+          'Every door you’ve knocked, newest first — your own trail, for when you’re ' +
+          'wondering "did I already hit that street?" Search by street or name, or filter ' +
+          'to one outcome.',
+      },
+      {
+        heading: 'Jump back to a door',
+        body:
+          'Tap any visit to open that door in Talk mode — handy for following up on a ' +
+          'Maybe or a Not Home.',
+      },
+      {
+        heading: 'Teammates',
+        body:
+          'Curious where someone else has been? Their recent knocks are on their Roster page.',
+      },
+    ],
+  },
+
   '/profile': {
     title: 'About me',
     sections: [
@@ -242,11 +265,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     ],
   },
 
-  '/admin/users': {
-    title: 'Users',
+  '/admin/roles': {
+    title: 'Roles',
     sections: [
       {
-        heading: 'Roles',
+        heading: 'The roles',
         body:
           'Admin runs the org; Campaign Managers run the day-to-day (turf, squads, AI chat, ' +
           'settings); Squad Leaders and Canvassers knock doors. New sign-ups start as Canvasser.',
@@ -257,6 +280,12 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
           'Assign each person to a team here, and drop them into one of today’s squads. ' +
           'Squads form on the Squads page and reset at midnight. Admins belong to no campaign, ' +
           'team, or squad — they oversee, they don’t participate.',
+      },
+      {
+        heading: 'Just looking for someone?',
+        body:
+          'This page is for changing roles and placement. To browse people — intros, recent ' +
+          'knocks, phone numbers — use the Roster instead.',
       },
     ],
   },

@@ -82,12 +82,12 @@ async function saveSettings() {
         <router-link class="btn btn-primary btn-sm" to="/admin/campaigns">Manage</router-link>
       </div>
 
-      <!-- Campaign managers manage the whole non-admin roster; true admins
-           additionally manage admin accounts (the Users screen adapts). -->
+      <!-- Campaign managers manage all non-admin roles; true admins
+           additionally manage admin accounts (the Roles screen adapts). -->
       <div class="card">
-        <h3>Users &amp; Roles</h3>
+        <h3>Roles</h3>
         <p class="muted">Elevate roles, assign teams, place people in today's squads.</p>
-        <router-link class="btn btn-primary btn-sm" to="/admin/users">Manage</router-link>
+        <router-link class="btn btn-primary btn-sm" to="/admin/roles">Manage</router-link>
       </div>
 
       <div class="card">

@@ -213,7 +213,7 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
 </script>
 
 <template>
-  <AppShell title="Users &amp; Roles">
+  <AppShell title="Roles">
     <div class="stack">
       <input
         v-model="query"

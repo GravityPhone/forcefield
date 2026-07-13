@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // The app's one modal idiom: a phone-first sheet that slides up from the
-// bottom edge (matching the original hand-rolled /admin/users editor).
+// bottom edge (matching the original hand-rolled /admin/roles editor).
 // Reka UI supplies the behavior — focus trap, Esc/backdrop dismissal, aria
 // wiring, scroll lock — and every visual comes from the theme variables.
 import {

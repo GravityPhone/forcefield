@@ -79,6 +79,10 @@ const router = createRouter({
     { path: '/roster', name: 'roster', component: () => import('@/views/RosterView.vue'), meta: { roles: [] } },
     { path: '/member/:id', name: 'member', component: () => import('@/views/MemberView.vue'), meta: { roles: [] } },
 
+    // Your own knock history — "where did I already look?" The roster shows
+    // everyone else; this is the self view, searchable and grouped by day.
+    { path: '/history', name: 'history', component: () => import('@/views/MyKnocksView.vue'), meta: { roles: [] } },
+
     // Old squad-leader home — leads canvass like everyone else now, and turf
     // splitting lives on the Squad page. Kept only for stale bookmarks.
     { path: '/team', redirect: '/canvass' },
@@ -91,13 +95,17 @@ const router = createRouter({
     { path: '/turf', name: 'turf', component: () => import('@/views/TurfView.vue'), meta: { roles: [] } },
 
     // Management area. Campaign managers run the day-to-day (dashboard, AI
-    // chat, settings) and manage the non-admin roster on /admin/users; true
-    // admins additionally manage admins and org-wide oversight.
+    // chat, settings) and manage non-admin roles/placement on /admin/roles;
+    // true admins additionally manage admins and org-wide oversight.
     { path: '/admin', name: 'admin', component: () => import('@/views/AdminHomeView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
     { path: '/admin/chat', name: 'admin-chat', component: () => import('@/views/AdminChatView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
     { path: '/admin/settings', name: 'admin-settings', component: () => import('@/views/AdminSettingsView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
     { path: '/admin/campaigns', name: 'admin-campaigns', component: () => import('@/views/AdminCampaignsView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
-    { path: '/admin/users', name: 'admin-users', component: () => import('@/views/AdminUsersView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
+    // Role management — was "/admin/users" until the roster took over the
+    // browse-people job (2026-07-12); this page is purely role/team/squad
+    // placement now. Old path kept as a redirect for stale bookmarks.
+    { path: '/admin/roles', name: 'admin-roles', component: () => import('@/views/AdminRolesView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
+    { path: '/admin/users', redirect: '/admin/roles' },
 
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
