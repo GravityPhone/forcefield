@@ -29,7 +29,10 @@ export function roleHome(role: AppRole): string {
 function friendlyAuthError(message: string): string {
   const m = message.toLowerCase()
   if (m.includes('invalid login credentials')) return 'Wrong username or password.'
-  if (m.includes('already registered')) return 'That username is taken.'
+  // Deliberately not "that username is taken" — a distinct message turns signup
+  // into a username-existence oracle. Keep it neutral.
+  if (m.includes('already registered'))
+    return "Couldn't create that account. Try a different username, or log in if it's yours."
   if (m.includes('rate limit'))
     return 'Supabase is still requiring email confirmation, which blocks username-only signups. Turn off "Confirm email" in Supabase Auth settings.'
   if (m.includes('email not confirmed'))

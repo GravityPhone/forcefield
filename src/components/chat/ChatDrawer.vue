@@ -571,6 +571,7 @@ async function addPeople() {
             :messages.prop="vacMessages"
             :messages-loaded="!chat.loadingMessages"
             :usernameOptions.prop="{ minUsers: 0, currentUser: false }"
+            :text-formatting.prop="{ disabled: true }"
             :messageActions.prop="messageActions"
             :menuActions.prop="menuActions"
             :show-add-room="false"

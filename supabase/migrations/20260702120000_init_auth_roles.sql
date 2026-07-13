@@ -152,9 +152,10 @@ create policy "admins delete teams"
   using (public.is_admin());
 
 -- ============================================================
--- Seed: demo team + initial admin account
---   username: admin       password: forcefield-admin
--- (Change the password before any real rollout.)
+-- Seed: demo team + initial admin account (username: admin)
+-- The password is seeded RANDOM/unknown on purpose — set it after deploy in
+-- the Supabase dashboard (Auth → Users) or via the admin API, and keep the
+-- value in the gitignored KEYS-AND-ACCESS.md. Never commit a real password.
 -- ============================================================
 
 insert into public.teams (name) values ('Demo Team');
@@ -180,7 +181,7 @@ begin
     'authenticated',
     'authenticated',
     'admin@example.com',
-    extensions.crypt('forcefield-admin', extensions.gen_salt('bf')),
+    extensions.crypt(gen_random_uuid()::text, extensions.gen_salt('bf')),
     now(),
     '{"provider": "email", "providers": ["email"]}',
     '{"username": "admin"}',

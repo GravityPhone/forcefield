@@ -10,3 +10,19 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+# Security headers applied to every response.
+# CSP note: script-src/style-src stay permissive ('unsafe-inline'/'unsafe-eval')
+# because Google Maps JS and the Vite bundle need it; XSS is defended at the
+# source instead (escaped markdown, disabled chat text-formatting, hex-validated
+# charts). The real value here is frame-ancestors (clickjacking), a locked-down
+# object/base-uri, and bounding where scripts may connect/exfiltrate to.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+    Permissions-Policy = "geolocation=(self), camera=(), microphone=(), payment=(), usb=()"
+    Content-Security-Policy = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://maps.googleapis.com https://maps.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.ggpht.com https://*.giphy.com https://*.tenor.com https://*.supabase.co; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://maps.googleapis.com https://*.googleapis.com https://api.giphy.com https://g.tenor.com; worker-src 'self' blob:; frame-src 'self' https://*.google.com; manifest-src 'self'"

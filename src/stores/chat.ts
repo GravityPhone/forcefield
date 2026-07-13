@@ -236,6 +236,7 @@ export const useChatStore = defineStore('chat', {
       if (!error && data) {
         this.messages = (data as ChatMessage[]).reverse()
         await this.ensureSenderProfiles(this.messages)
+        await this.signMediaFiles(this.messages)
         void this.loadReactions(chatId)
       }
       void this.markRead(chatId)
@@ -284,6 +285,7 @@ export const useChatStore = defineStore('chat', {
             if (msg.chat_id === this.activeChatId && !this.messages.some((m) => m.id === msg.id)) {
               this.messages.push(msg)
               void this.ensureSenderProfiles([msg])
+              void this.signMediaFiles([msg])
             }
             // Only an actually-visible room counts as read.
             if (msg.chat_id === this.activeChatId && this.drawerOpen) {
@@ -399,8 +401,10 @@ export const useChatStore = defineStore('chat', {
 
     // --- Sending ---
 
-    /** Upload composer attachments to the public chat-media bucket and return
-     * descriptors in the shape vue-advanced-chat renders. */
+    /** Upload composer attachments to the private chat-media bucket. Stores the
+     * object PATH as the file url; signMediaFiles() mints a signed URL at view
+     * time. (Path is <chatId>/<messageId>-i.ext so storage RLS can scope
+     * access to members of that chat.) */
     async uploadFiles(chatId: string, messageId: string, files: OutgoingFile[]): Promise<ChatFile[]> {
       const uploaded: ChatFile[] = []
       for (const [i, f] of files.entries()) {
@@ -411,10 +415,28 @@ export const useChatStore = defineStore('chat', {
           .from('chat-media')
           .upload(path, f.blob, { contentType: f.blob.type || undefined })
         if (error) continue
-        const { data } = supabase.storage.from('chat-media').getPublicUrl(path)
-        uploaded.push({ name: f.name, size: f.size, type: ext, url: data.publicUrl })
+        uploaded.push({ name: f.name, size: f.size, type: ext, url: path })
       }
       return uploaded
+    },
+
+    /** chat-media is private: stored attachment urls are object paths. Swap each
+     * in place for a short-lived signed URL the widget can render. External URLs
+     * (GIFs already hosted on a CDN) are left untouched. */
+    async signMediaFiles(messages: ChatMessage[]) {
+      const pending: { file: ChatFile; path: string }[] = []
+      for (const m of messages) {
+        for (const f of m.files ?? []) {
+          if (f.url && !/^https?:\/\//i.test(f.url)) pending.push({ file: f, path: f.url })
+        }
+      }
+      if (!pending.length) return
+      await Promise.all(
+        pending.map(async ({ file, path }) => {
+          const { data } = await supabase.storage.from('chat-media').createSignedUrl(path, 3600)
+          if (data?.signedUrl) file.url = data.signedUrl
+        }),
+      )
     },
 
     async sendMessage(body: string, files: OutgoingFile[] = []) {
@@ -448,7 +470,10 @@ export const useChatStore = defineStore('chat', {
       if (error) {
         this.messages = this.messages.filter((m) => m.id !== message.id)
         this.sendError = 'Message failed to send — check your connection.'
+        return
       }
+      // Row is stored with object paths; sign the optimistic copy for display.
+      if (uploaded.length) void this.signMediaFiles([message])
     },
 
     /** Send a GIF picked from the GIF sheet — already hosted (Tenor CDN), so
@@ -556,7 +581,10 @@ export const useChatStore = defineStore('chat', {
 
     /** Search app users for the member pickers (excludes yourself). */
     async searchUsers(query: string): Promise<ChatProfile[]> {
-      const q = query.trim()
+      // Strip characters that carry meaning in PostgREST's .or() filter grammar
+      // (commas/parens restructure the tree; %*\ are pattern/escape chars) so
+      // the term can't inject extra predicates.
+      const q = query.trim().replace(/[,()%*\\]/g, ' ').trim()
       if (q.length < 1) return []
       const { data } = await supabase
         .from('profiles')

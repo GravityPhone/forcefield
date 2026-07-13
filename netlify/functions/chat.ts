@@ -41,6 +41,12 @@ const WEB_SEARCH_MIN_MS = 6000
 /** Timed-out Anthropic calls retried (via continuation) before giving up. */
 const MAX_API_RETRIES = 2
 const STATE_MAX_CHARS = 2_000_000
+/** The AI assistant is a managers-only tool. */
+const ALLOWED_ROLES = new Set(['admin', 'campaign_manager'])
+/** Caps on a fresh (non-continuation) messages payload — a size backstop the
+ * continuation path already has (parseState). */
+const MAX_MESSAGE_CHARS = 8000
+const MAX_MESSAGES = 60
 
 const SUPABASE_URL = 'https://whrliwbdxjdcksbvwkrc.supabase.co'
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY ?? ''
@@ -145,23 +151,38 @@ interface ChatRequest {
   user?: unknown
 }
 
-/** Who's on the other end of the chat (client-reported; cosmetic context for
- * the model, not an auth boundary — this endpoint has none to begin with). */
+/** Who's on the other end of the chat — resolved from the verified Supabase
+ * session (see authorizeRequest), never from the request body. */
 interface RequesterInfo {
   id: string
   username: string
   role: string
 }
 
-function parseRequester(raw: unknown): RequesterInfo | null {
-  if (!raw || typeof raw !== 'object') return null
-  const { id, username, role } = raw as Record<string, unknown>
-  if (typeof username !== 'string' || !username.trim()) return null
-  return {
-    id: typeof id === 'string' ? id.slice(0, 40) : '',
-    username: username.trim().slice(0, 60),
-    role: typeof role === 'string' && role.trim() ? role.trim().slice(0, 30) : 'admin',
+type AuthResult = { profile: RequesterInfo } | { error: string; status: number }
+
+/** Gate the endpoint: require a valid Supabase access token whose account is a
+ * manager. Without this the tool loop (read-only SQL over the whole database,
+ * Maps + web search on the server's keys) would be reachable by anyone who
+ * knows the URL. Identity/role come from the verified JWT, not the payload. */
+async function authorizeRequest(req: Request): Promise<AuthResult> {
+  const header = req.headers.get('authorization') ?? ''
+  const token = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : ''
+  if (!token) return { error: 'Sign in to use the assistant.', status: 401 }
+
+  const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token)
+  if (userErr || !userData?.user) return { error: 'Session expired — sign in again.', status: 401 }
+
+  const { data: profile, error: profErr } = await supabaseAdmin
+    .from('profiles')
+    .select('id, username, role')
+    .eq('id', userData.user.id)
+    .single()
+  if (profErr || !profile) return { error: 'No profile found for this account.', status: 403 }
+  if (!ALLOWED_ROLES.has(profile.role)) {
+    return { error: 'The AI assistant is available to campaign managers and admins only.', status: 403 }
   }
+  return { profile: profile as RequesterInfo }
 }
 
 interface WireMessage {
@@ -221,13 +242,15 @@ function isValidMessages(value: unknown): value is WireMessage[] {
   return (
     Array.isArray(value) &&
     value.length > 0 &&
+    value.length <= MAX_MESSAGES &&
     value.every(
       (m) =>
         m &&
         typeof m === 'object' &&
         (m.role === 'user' || m.role === 'assistant') &&
         typeof m.content === 'string' &&
-        m.content.length > 0,
+        m.content.length > 0 &&
+        m.content.length <= MAX_MESSAGE_CHARS,
     ) &&
     value[0].role === 'user'
   )
@@ -772,6 +795,11 @@ export default async (req: Request): Promise<Response> => {
 async function handleChat(req: Request): Promise<Response> {
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
 
+  // Auth gate: only a signed-in manager may drive the tool loop.
+  const authz = await authorizeRequest(req)
+  if ('error' in authz) return json({ error: authz.error }, authz.status)
+  const requester: RequesterInfo = authz.profile
+
   let body: ChatRequest
   try {
     body = await req.json()
@@ -785,9 +813,7 @@ async function handleChat(req: Request): Promise<Response> {
     state: rawState,
     timezone: rawTimezone,
     localTime: rawLocalTime,
-    user: rawUser,
   } = body
-  const requester = parseRequester(rawUser)
   // A personal key saved in Settings still wins; otherwise fall back to the
   // shared demo key configured on the Netlify site (ANTHROPIC_API_KEY). The
   // shared key never leaves the server — demo users just get working chat.
@@ -953,11 +979,14 @@ async function handleChat(req: Request): Promise<Response> {
       return json({ error: 'Rate limited by Anthropic — try again in a moment.' }, 429)
     }
     if (err instanceof Anthropic.BadRequestError) {
-      return json({ error: `Anthropic rejected the request: ${err.message}` }, 400)
+      console.error('Anthropic BadRequest:', err.message)
+      return json({ error: 'The assistant could not process that request. Try rephrasing.' }, 400)
     }
     if (err instanceof Anthropic.APIError) {
-      return json({ error: `Anthropic error: ${err.message}` }, 502)
+      console.error('Anthropic APIError:', err.message)
+      return json({ error: 'The assistant is temporarily unavailable — try again in a moment.' }, 502)
     }
+    console.error('Chat function error:', err)
     return json({ error: 'Unexpected server error.' }, 500)
   }
 }

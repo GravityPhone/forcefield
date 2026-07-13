@@ -19,8 +19,8 @@ async function submit() {
     error.value = 'Username must be 3–20 characters: letters, numbers, _ or -.'
     return
   }
-  if (password.value.length < 6) {
-    error.value = 'Password must be at least 6 characters.'
+  if (password.value.length < 10) {
+    error.value = 'Password must be at least 10 characters.'
     return
   }
   const result = await auth.signUp(name, password.value)

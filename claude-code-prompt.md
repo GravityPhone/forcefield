@@ -67,7 +67,7 @@ These are the public-safe keys — fine to use directly, not secrets:
 ```
 Supabase URL: https://whrliwbdxjdcksbvwkrc.supabase.co
 Supabase anon/publishable key: sb_publishable_JcZe2JFmhQGFK_Mddet4EA_IWZw4727
-Google Maps API key (demo key, not billing-connected): AIzaSyADqvazUypiLr81MNwwiE6MJXUQ9nr6Kis
+Google Maps API key: see the gitignored KEYS-AND-ACCESS.md (kept out of version control)
 ```
 
 The Supabase service role key and secret key are NOT included here — those bypass all access controls and need to be rotated and handled separately. I'll provide those directly if/when they're needed, not in this brief.

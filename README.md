@@ -2,7 +2,7 @@
 
 Door-to-door canvassing app — fast single-screen knock logging, live team map, user chat, and an admin AI assistant with live data access. Vue 3 + Supabase + Google Maps, deployed on Netlify.
 
-**Live:** https://f0rcef1eld.netlify.app (seed admin: `admin` / `forcefield-admin`)
+**Live:** https://f0rcef1eld.netlify.app (admin credentials are in the gitignored `KEYS-AND-ACCESS.md`, never in the repo)
 
 Full requirements: [canvassing-app-spec.md](canvassing-app-spec.md) (see "Current Status" at the top for what's actually built vs. planned)
 
@@ -29,10 +29,11 @@ To test the AI chat's Netlify Function locally (`/api/chat` — not served by pl
    mail, so confirmation must be off for the demo phase (with it on, every signup also tries to
    send a confirmation email and quickly trips Supabase's built-in email rate limit).
 
-The schema seeds the initial admin account:
-
-- **username:** `admin`
-- **password:** `forcefield-admin`
+The schema seeds an initial admin account (username `admin`). Its password is
+**not** published here — set/rotate it in the Supabase dashboard (Authentication
+→ Users) or via the admin API, and keep the current value in the gitignored
+`KEYS-AND-ACCESS.md`. Do not ship the seed migration's placeholder password to a
+real deployment.
 
 New public sign-ups default to the Canvasser role; the admin elevates accounts from there.
 

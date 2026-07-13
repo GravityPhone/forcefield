@@ -27,7 +27,7 @@
 
 This doc below is the original requirements/planning spec — left intact as a reference, but it now reads ahead of what's actually built in places. This section is the accurate summary.
 
-**Live:** https://f0rcef1eld.netlify.app — seed admin `admin` / `forcefield-admin`.
+**Live:** https://f0rcef1eld.netlify.app — admin credentials live in the gitignored `KEYS-AND-ACCESS.md`, not in the repo.
 
 **Built and working:**
 - **Stage 1** — auth, roles (canvasser/team_lead/admin), teams, RLS throughout, seeded admin account.

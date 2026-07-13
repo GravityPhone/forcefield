@@ -22,7 +22,10 @@ async function submit() {
     error.value = result.error
     return
   }
-  const redirect = route.query.redirect as string | undefined
+  // Only honor an in-app path (single leading slash, no scheme, no protocol-
+  // relative "//host") so ?redirect= can't bounce to an external site.
+  const raw = route.query.redirect
+  const redirect = typeof raw === 'string' && /^\/(?!\/)/.test(raw) ? raw : null
   router.push(redirect ?? roleHome(auth.profile!.role))
 }
 </script>

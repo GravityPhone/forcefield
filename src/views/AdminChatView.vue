@@ -111,10 +111,21 @@ async function send() {
     timeStyle: 'long',
   })
 
-  // Who's asking — so the assistant knows who "me" is and greets by username.
-  const requester = auth.profile
-    ? { id: auth.profile.id, username: auth.profile.username, role: auth.profile.role }
-    : undefined
+  // The function authenticates the caller from their Supabase session token
+  // (it no longer trusts any client-sent identity or role), so attach it to
+  // every hop. "me"/username context is derived server-side from this token.
+  const { data: sessionData } = await supabase.auth.getSession()
+  const accessToken = sessionData.session?.access_token
+  if (!accessToken) {
+    messages.value.push({
+      id: nextId++,
+      role: 'assistant',
+      text: 'Your session expired — please sign in again.',
+      error: true,
+    })
+    loading.value = false
+    return
+  }
 
   // A turn with several tool calls (or a web search) won't fit in one Netlify
   // function invocation, so the server may answer { continue, state } — POST
@@ -126,14 +137,16 @@ async function send() {
     messages: wireMessages,
     timezone,
     localTime,
-    user: requester,
   }
 
   try {
     for (let hop = 0; hop < 10; hop++) {
       const res = await fetch(`${apiBase}/api/chat`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${accessToken}`,
+        },
         body: JSON.stringify(payload),
       })
       const data = await res.json().catch(() => ({}))
@@ -154,7 +167,6 @@ async function send() {
           state: data.state,
           timezone,
           localTime,
-          user: requester,
         }
         continue
       }
