@@ -33,6 +33,8 @@ function friendlyAuthError(message: string): string {
   // into a username-existence oracle. Keep it neutral.
   if (m.includes('already registered'))
     return "Couldn't create that account. Try a different username, or log in if it's yours."
+  if (m.includes('provider is not enabled'))
+    return 'Google sign-in is not enabled yet — ask your admin, or use a username and password.'
   if (m.includes('rate limit'))
     return 'Supabase is still requiring email confirmation, which blocks username-only signups. Turn off "Confirm email" in Supabase Auth settings.'
   if (m.includes('email not confirmed'))
@@ -130,6 +132,17 @@ export const useAuthStore = defineStore('auth', {
       } finally {
         this.loading = false
       }
+    },
+
+    /** Optional Google sign-in: kicks off the OAuth redirect. On success the
+     * browser leaves the page entirely; we only return here on failure. */
+    async signInWithGoogle(): Promise<{ error?: string }> {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: window.location.origin },
+      })
+      if (error) return { error: friendlyAuthError(error.message) }
+      return {}
     },
 
     async logOut() {

@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore, roleHome } from '@/stores/auth'
+import GoogleSignInButton from '@/components/GoogleSignInButton.vue'
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -48,6 +49,7 @@ async function submit() {
           {{ auth.loading ? 'Logging in…' : 'Log In' }}
         </button>
       </form>
+      <GoogleSignInButton @error="error = $event" />
       <p class="muted swap-link">
         No account yet? <router-link to="/signup">Sign up</router-link>
       </p>

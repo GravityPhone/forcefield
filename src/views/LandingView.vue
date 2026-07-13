@@ -9,7 +9,7 @@ import AppLogo from '@/components/AppLogo.vue'
         <div class="hero-mark"><AppLogo size="1em" /></div>
         <h1>Forcefield</h1>
         <p class="muted tagline">
-          Knock doors. Log outcomes fast. See where to go next.
+          A canvassing app for the real world.
         </p>
       </div>
       <div class="actions">
