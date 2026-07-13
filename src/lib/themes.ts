@@ -30,7 +30,7 @@ export interface ThemeTokens {
 }
 
 /** Groups the /appearance picker sorts schemes into. */
-export type ThemeGroup = 'day' | 'night' | 'retro'
+export type ThemeGroup = 'day' | 'hiviz' | 'night' | 'retro'
 
 export interface ThemeDefinition {
   id: ThemeId
@@ -96,9 +96,9 @@ export const THEMES: ThemeDefinition[] = [
   },
   {
     id: 'highContrast',
-    label: 'High Contrast',
+    label: 'High Contrast Dark',
     dark: true,
-    group: 'night',
+    group: 'hiviz',
     tokens: {
       bg: '#000000',
       surface: '#000000',
@@ -114,6 +114,60 @@ export const THEMES: ThemeDefinition[] = [
       shadow: 'none',
       radius: '4px',
       scrollbarColor: '#ffff00',
+      scrollbarWidth: '24px',
+      scrollbarRadius: '0px',
+      scrollbarShadow: 'none',
+    },
+  },
+  {
+    id: 'highContrastLight',
+    label: 'High Contrast Light',
+    dark: false,
+    group: 'hiviz',
+    tokens: {
+      // Pure black-on-white: the single most glare-proof combination there
+      // is — a lit white screen stays readable in direct sun far longer
+      // than any dark background.
+      bg: '#ffffff',
+      surface: '#ffffff',
+      surface2: '#ededed',
+      text: '#000000',
+      textMuted: '#1f1f1f',
+      border: '#000000',
+      accent: '#0033cc',
+      accentContrast: '#ffffff',
+      danger: '#c40000',
+      success: '#006e2e',
+      warning: '#8a5a00',
+      shadow: 'none',
+      radius: '4px',
+      scrollbarColor: '#000000',
+      scrollbarWidth: '24px',
+      scrollbarRadius: '0px',
+      scrollbarShadow: 'none',
+    },
+  },
+  {
+    id: 'safetyVest',
+    label: 'Safety Vest',
+    dark: false,
+    group: 'hiviz',
+    tokens: {
+      // Fluorescent yellow-green + black straps, straight off a road crew.
+      bg: '#e8f902',
+      surface: '#f4ff54',
+      surface2: '#d3e300',
+      text: '#000000',
+      textMuted: '#2c3000',
+      border: '#000000',
+      accent: '#101010',
+      accentContrast: '#e8f902',
+      danger: '#a30000',
+      success: '#00521f',
+      warning: '#6e4a00',
+      shadow: 'none',
+      radius: '4px',
+      scrollbarColor: '#101010',
       scrollbarWidth: '24px',
       scrollbarRadius: '0px',
       scrollbarShadow: 'none',

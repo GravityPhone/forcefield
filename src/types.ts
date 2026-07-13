@@ -11,6 +11,8 @@ export type ThemeId =
   | 'light'
   | 'dark'
   | 'highContrast'
+  | 'highContrastLight'
+  | 'safetyVest'
   | 'eighties'
   | 'nineties'
   | 'seventies'

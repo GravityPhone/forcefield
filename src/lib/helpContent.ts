@@ -195,7 +195,9 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body:
           'Everything here is purely cosmetic and only changes how the app looks on YOUR ' +
           'account. The knock-outcome buttons and map pins always keep their own fixed colors ' +
-          'so they stay readable no matter what you choose.',
+          'so they stay readable no matter what you choose. The High visibility schemes are ' +
+          'built for hard conditions — glare, direct sunlight, tired eyes — with maximum ' +
+          'contrast everywhere.',
       },
       {
         heading: 'Background flair',

@@ -27,6 +27,11 @@ async function pick(id: ThemeId) {
 
 const THEME_GROUPS: { id: ThemeGroup; label: string; blurb: string }[] = [
   { id: 'day', label: 'Daylight', blurb: 'Bright, for knocking in full sun.' },
+  {
+    id: 'hiviz',
+    label: 'High visibility',
+    blurb: 'Maximum contrast — beats glare, direct sunlight, and tired eyes.',
+  },
   { id: 'night', label: 'Dark & night', blurb: 'Easy on the eyes after sundown.' },
   { id: 'retro', label: 'Retro', blurb: 'Five decades of style, lovingly restored.' },
 ]
