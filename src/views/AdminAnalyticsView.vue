@@ -212,7 +212,7 @@ const TABS = [
   { id: 'areas', label: 'Areas' },
   { id: 'probability', label: 'Probability' },
   { id: 'canvassers', label: 'Canvassers' },
-  { id: 'model', label: 'Model Lab' },
+  { id: 'model', label: 'Predictor' },
 ] as const
 const tab = ref<(typeof TABS)[number]['id']>('overview')
 
@@ -458,8 +458,8 @@ const canvasserRows = computed(() =>
 // ---------------------------------------------------------------- model lab
 
 const TARGETS = [
-  { value: 'answer', label: 'Door answers (all knocks)' },
-  { value: 'sign', label: 'Signs the petition (given a conversation)' },
+  { value: 'answer', label: 'Will the door answer?' },
+  { value: 'sign', label: 'Will they sign, once someone answers?' },
 ]
 const target = ref<'answer' | 'sign'>('answer')
 
@@ -469,26 +469,39 @@ interface FeatureDef {
   hint: string
   value: (k: Knock) => number
 }
-const topCities = computed(() => {
+/** Areas with knocks in the current view, busiest first — derived from the
+ * data, so a different campaign automatically gets its own list. The busiest
+ * area is the baseline the others are measured against; areas beyond the top
+ * 9 fold into that baseline (keeps the design matrix narrow). */
+const areaChoices = computed(() => {
   const counts = new Map<string, number>()
-  for (const k of knocks.value) counts.set(k.city, (counts.get(k.city) ?? 0) + 1)
+  for (const k of filtered.value) counts.set(k.city, (counts.get(k.city) ?? 0) + 1)
   return [...counts.entries()]
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
+    .slice(0, 9)
     .map(([c]) => c)
 })
+/** What the single "Area" factor expands into at crunch time: one 0/1 column
+ * per non-baseline area. */
+const areaFeatureDefs = computed<FeatureDef[]>(() =>
+  areaChoices.value.slice(1).map((city) => ({
+    key: `city:${city}`,
+    label: `Area: ${city}`,
+    hint: `versus ${areaChoices.value[0]}`,
+    value: (k: Knock) => (k.city === city ? 1 : 0),
+  })),
+)
 const featureDefs = computed<FeatureDef[]>(() => [
   { key: 'attempt', label: 'Attempt number', hint: 'how many times this door has been tried', value: (k) => Math.min(k.attempt, 5) },
   { key: 'weekend', label: 'Weekend', hint: 'Saturday or Sunday', value: (k) => (k.weekday === 0 || k.weekday === 6 ? 1 : 0) },
   { key: 'evening', label: 'Evening (5pm+)', hint: 'knock at or after 5pm', value: (k) => (k.hour >= 17 ? 1 : 0) },
   { key: 'priorNotHomes', label: 'Prior not-homes', hint: 'earlier no-answer visits at this door', value: (k) => Math.min(k.priorNotHomes, 4) },
   { key: 'experience', label: 'Canvasser experience', hint: 'per 100 doors already knocked by them', value: (k) => k.experience / 100 },
-  ...topCities.value.map((city) => ({
-    key: `city:${city}`,
-    label: `Area: ${city}`,
-    hint: 'versus everywhere else',
-    value: (k: Knock) => (k.city === city ? 1 : 0),
-  })),
+  // One "Area" factor, not a checkbox per city — the city columns are added
+  // behind the scenes so the list never needs editing between campaigns.
+  ...(areaChoices.value.length > 1
+    ? [{ key: 'area', label: 'Area', hint: 'some places just answer or sign more', value: () => 0 }]
+    : []),
 ])
 const chosen = ref<Set<string>>(new Set(['attempt', 'weekend', 'evening']))
 function toggleFeature(key: string) {
@@ -499,11 +512,15 @@ function toggleFeature(key: string) {
 }
 
 const model = shallowRef<LogisticModel | null>(null)
-const modelMeta = ref<{ target: string; features: FeatureDef[] } | null>(null)
+const modelMeta = ref<{ target: string; features: FeatureDef[]; areaCities: string[] } | null>(null)
 const training = ref(false)
 
 function train() {
-  const feats = featureDefs.value.filter((f) => chosen.value.has(f.key))
+  // "Area" is a single tick for the manager but expands into one column per
+  // area for the regression — same power, none of the checkbox clutter.
+  const feats = featureDefs.value.filter((f) => chosen.value.has(f.key) && f.key !== 'area')
+  const withArea = chosen.value.has('area') && areaChoices.value.length > 1
+  if (withArea) feats.push(...areaFeatureDefs.value)
   if (!feats.length) return
   training.value = true
   model.value = null
@@ -513,12 +530,25 @@ function train() {
     const X = rows.map((k) => feats.map((f) => f.value(k)))
     const y = rows.map((k) => (target.value === 'sign' ? (k.signed ? 1 : 0) : k.answered ? 1 : 0))
     model.value = logisticRegression(X, y, feats.map((f) => f.label))
-    modelMeta.value = { target: target.value, features: feats }
+    modelMeta.value = { target: target.value, features: feats, areaCities: withArea ? [...areaChoices.value] : [] }
     // seed the what-if controls with sensible defaults
     whatIf.value = Object.fromEntries(feats.map((f) => [f.key, f.key === 'attempt' ? 1 : 0]))
+    whatIfArea.value = withArea ? areaChoices.value[0] : ''
     training.value = false
   }, 30)
 }
+
+/** Plain-English quality word derived from AUC — the number itself stays
+ * available in the fine-print line under the tiles. */
+const modelGrade = computed(() => {
+  if (!model.value) return ''
+  const a = model.value.auc
+  if (a < 0.55) return 'Coin flip'
+  if (a < 0.62) return 'Weak'
+  if (a < 0.7) return 'Fair'
+  if (a < 0.8) return 'Good'
+  return 'Excellent'
+})
 
 const coefItems = computed<BarItem[]>(() => {
   if (!model.value) return []
@@ -531,15 +561,15 @@ const coefItems = computed<BarItem[]>(() => {
       label: c.name,
       value: Math.abs(c.w),
       color: c.w >= 0 ? pos : neg,
-      detail: `${c.w >= 0 ? 'increases' : 'decreases'} the odds ×${Math.exp(Math.abs(c.w)).toFixed(2)} per unit (log-odds ${c.w.toFixed(3)})`,
+      detail: `${c.w >= 0 ? 'raises' : 'lowers'} the odds ×${Math.exp(Math.abs(c.w)).toFixed(2)}`,
     }))
 })
 const coefRows = computed(() =>
   model.value
     ? model.value.features.map((name, i) => [
-        name,
-        model.value!.weights[i].toFixed(4),
+        i === 0 ? 'Starting point' : name,
         i === 0 ? '—' : `×${Math.exp(model.value!.weights[i]).toFixed(3)}`,
+        model.value!.weights[i].toFixed(4),
       ])
     : [],
 )
@@ -562,6 +592,21 @@ const calibrationData = computed(() => {
 
 // what-if predictor
 const whatIf = ref<Record<string, number>>({})
+const whatIfArea = ref('')
+/** The area group renders as ONE dropdown, not a row per city — picking an
+ * area flips the matching 0/1 column on and the rest off. */
+function setWhatIfArea(city: string) {
+  whatIfArea.value = city
+  const next = { ...whatIf.value }
+  for (const f of modelMeta.value?.features ?? []) {
+    if (f.key.startsWith('city:')) next[f.key] = f.key === `city:${city}` ? 1 : 0
+  }
+  whatIf.value = next
+}
+const whatIfRows = computed(() => modelMeta.value?.features.filter((f) => !f.key.startsWith('city:')) ?? [])
+const whatIfAreaOptions = computed(() =>
+  (modelMeta.value?.areaCities ?? []).map((c) => ({ value: c, label: c })),
+)
 const whatIfProb = computed(() => {
   if (!model.value || !modelMeta.value) return null
   const row = modelMeta.value.features.map((f) => whatIf.value[f.key] ?? 0)
@@ -765,17 +810,18 @@ const whatIfLabel = (f: FeatureDef, v: number) =>
         </div>
       </section>
 
-      <!-- ============================== Model Lab -->
+      <!-- ============================== Predictor -->
       <section v-else class="stack">
         <div class="card">
-          <h3>Build a model</h3>
+          <h3>What makes the difference?</h3>
           <p class="muted">
-            Fits a logistic regression in your browser on the {{ fmtCount(filtered.length) }} knocks in
-            view. Pick what to predict and which factors to let it use, then train — coefficients show
-            how much each factor moves the odds.
+            Digs through the {{ fmtCount(filtered.length) }} knocks in view and works out which
+            factors genuinely change what happens at the door — evidence for planning routes and
+            shift times, not hunches. Pick a question, tick the factors to consider, then crunch
+            the numbers.
           </p>
           <div class="field">
-            <label id="target-label">Predict</label>
+            <label id="target-label">Question</label>
             <AppSelect
               :model-value="target"
               :options="TARGETS"
@@ -790,38 +836,41 @@ const whatIfLabel = (f: FeatureDef, v: number) =>
             </label>
           </div>
           <button class="btn btn-primary" :disabled="training || chosen.size === 0" @click="train">
-            {{ training ? 'Training…' : 'Train model' }}
+            {{ training ? 'Crunching…' : 'Crunch the numbers' }}
           </button>
         </div>
 
         <template v-if="model">
           <div class="tiles">
             <div class="tile">
-              <span class="tile-label muted">AUC</span>
-              <span class="tile-value">{{ model.auc.toFixed(3) }}</span>
-              <span class="tile-hint muted">0.5 = coin flip, 1 = perfect ranking</span>
+              <span class="tile-label muted">Prediction power</span>
+              <span class="tile-value">{{ modelGrade }}</span>
+              <span class="tile-hint muted"
+                >given two doors, picks the likelier one {{ fmtPct(model.auc, 0) }} of the time</span
+              >
             </div>
             <div class="tile">
-              <span class="tile-label muted">Accuracy</span>
+              <span class="tile-label muted">Calls it right</span>
               <span class="tile-value">{{ fmtPct(model.accuracy, 1) }}</span>
+              <span class="tile-hint muted">across every knock in view</span>
             </div>
             <div class="tile">
-              <span class="tile-label muted">Pseudo R²</span>
-              <span class="tile-value">{{ model.pseudoR2.toFixed(3) }}</span>
-              <span class="tile-hint muted">McFadden</span>
-            </div>
-            <div class="tile">
-              <span class="tile-label muted">Training rows</span>
+              <span class="tile-label muted">Knocks used</span>
               <span class="tile-value">{{ fmtCount(model.n) }}</span>
-              <span class="tile-hint muted">{{ fmtCount(model.positives) }} positive</span>
+              <span class="tile-hint muted">{{ fmtCount(model.positives) }} were a yes</span>
             </div>
           </div>
+          <p class="muted nerd-note">
+            For the stats-curious: AUC {{ model.auc.toFixed(3) }} · McFadden pseudo-R²
+            {{ model.pseudoR2.toFixed(3) }} · fit {{ model.converged ? 'converged' : 'stopped' }}
+            after {{ model.iterations }} passes.
+          </p>
 
           <div class="two-col">
             <ChartCard
-              title="What moves the odds"
-              subtitle="Coefficient size (log-odds); blue increases the outcome, red decreases it"
-              :columns="['Feature', 'Log-odds', 'Odds ratio']"
+              title="What actually matters"
+              subtitle="Longer bar = stronger pull on the answer. Blue raises the chances, red lowers them."
+              :columns="['Factor', 'Effect on the odds', 'Log-odds']"
               :rows="coefRows"
             >
               <BarChart :items="coefItems" :color="cat[0]" />
@@ -829,16 +878,16 @@ const whatIfLabel = (f: FeatureDef, v: number) =>
 
             <ChartCard
               v-if="calibrationData"
-              title="Calibration"
-              subtitle="Within each prediction bucket, did reality match? Points on the gray line = honest model"
-              :columns="['Predicted', 'Observed', 'Knocks']"
+              title="Reality check"
+              subtitle="Doors grouped by the predicted chance vs how often it really happened — when the two lines hug each other, the percentages can be taken at face value"
+              :columns="['Model said', 'Actually happened', 'Knocks']"
               :rows="calibrationData.rows"
             >
               <TimeSeriesChart
                 :labels="calibrationData.labels"
                 :series="[
-                  { name: 'Observed rate', color: cat[0], values: calibrationData.observed },
-                  { name: 'Perfect calibration', color: MUTED_SERIES, values: calibrationData.predicted },
+                  { name: 'Actually happened', color: cat[0], values: calibrationData.observed },
+                  { name: 'Model said', color: MUTED_SERIES, values: calibrationData.predicted },
                 ]"
                 :height="220"
                 percent
@@ -848,10 +897,19 @@ const whatIfLabel = (f: FeatureDef, v: number) =>
 
           <div v-if="modelMeta" class="card">
             <h3>What-if predictor</h3>
-            <p class="muted">Slide the factors — the model predicts the probability live.</p>
+            <p class="muted">Describe a door and see its predicted chance, live.</p>
             <div class="whatif">
               <div class="whatif-controls">
-                <div v-for="f in modelMeta.features" :key="f.key" class="whatif-row">
+                <div v-if="whatIfAreaOptions.length" class="whatif-row">
+                  <label>Area</label>
+                  <AppSelect
+                    :model-value="whatIfArea"
+                    :options="whatIfAreaOptions"
+                    aria-label="What-if area"
+                    @update:model-value="setWhatIfArea(String($event))"
+                  />
+                </div>
+                <div v-for="f in whatIfRows" :key="f.key" class="whatif-row">
                   <label>{{ f.label }}</label>
                   <template v-if="whatIfControl(f).type === 'slider'">
                     <input
@@ -874,7 +932,9 @@ const whatIfLabel = (f: FeatureDef, v: number) =>
                 </div>
               </div>
               <div class="whatif-result">
-                <span class="muted">{{ modelMeta.target === 'sign' ? 'P(signs)' : 'P(answers)' }}</span>
+                <span class="muted">{{
+                  modelMeta.target === 'sign' ? 'Chance they sign' : 'Chance the door answers'
+                }}</span>
                 <span class="hero">{{ whatIfProb != null ? fmtPct(whatIfProb, 1) : '—' }}</span>
                 <div class="meter">
                   <div class="meter-fill" :style="{ width: `${(whatIfProb ?? 0) * 100}%` }" />
@@ -956,6 +1016,12 @@ const whatIfLabel = (f: FeatureDef, v: number) =>
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+}
+
+/* The exact statistics, one quiet line — plain words up top, numbers here. */
+.nerd-note {
+  margin: -0.4rem 0 0;
+  font-size: 0.78rem;
 }
 .tile-label {
   font-size: 0.75rem;

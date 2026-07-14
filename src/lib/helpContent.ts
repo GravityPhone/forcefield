@@ -278,13 +278,13 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
           'rates change with repeat visits, time of day, and the door-to-signature funnel.',
       },
       {
-        heading: 'Model Lab',
+        heading: 'Predictor',
         body:
-          'Builds a logistic regression right in your browser: pick what to predict and which ' +
-          'factors to include, then Train. Coefficients show how much each factor moves the odds, ' +
-          'the calibration chart shows whether predictions match reality, and the what-if panel ' +
-          'predicts probabilities for door scenarios you compose. Every chart has a Table toggle ' +
-          'with the exact numbers.',
+          'Pick a question — will the door answer, will they sign — tick the factors to ' +
+          'consider, and it crunches the knocks in view to show which factors genuinely move ' +
+          'the odds. The reality-check chart shows whether its percentages match what actually ' +
+          'happened, and the what-if panel predicts the chance for any door you describe. ' +
+          'Every chart has a Table toggle with the exact numbers.',
       },
     ],
   },
