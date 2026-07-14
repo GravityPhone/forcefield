@@ -1,9 +1,11 @@
 <script setup lang="ts">
 // Campaign Analytics — the campaign managers' numbers room. Loads the whole
-// knock history once (paged, client-side), then every chart, probability
-// table, and the Model Lab run instantly in the browser: Netlify only ever
-// serves static files, so ALL statistics (Wilson CIs, OLS, logistic
-// regression) are computed client-side in src/lib/stats.ts.
+// knock history once (paged, client-side), then every chart and probability
+// table runs instantly in the browser: Netlify only ever serves static
+// files, so ALL statistics (Wilson CIs, OLS) are computed client-side in
+// src/lib/stats.ts. (A logistic-regression "Predictor" tab existed until
+// 2026-07-14 — removed as more than managers needed; stats.ts keeps the
+// machinery if it ever comes back.)
 import { computed, onMounted, ref, shallowRef } from 'vue'
 import AppShell from '@/components/AppShell.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
@@ -17,19 +19,11 @@ import type { BarItem } from '@/components/charts/BarChart.vue'
 import { supabase } from '@/lib/supabase'
 import { OUTCOMES, OUTCOME_LABELS } from '@/lib/outcomes'
 import { useChartPalette, ordinalRamp, fmtPct, fmtCount } from '@/lib/chartTheme'
-import {
-  wilson,
-  linearRegression,
-  logisticRegression,
-  calibration,
-  rollingMean,
-  type LogisticModel,
-} from '@/lib/stats'
+import { wilson, linearRegression, rollingMean } from '@/lib/stats'
 import type { KnockOutcome } from '@/types'
 
 const palette = useChartPalette()
 const cat = computed(() => palette.categorical.value)
-const MUTED_SERIES = '#898781' // readable reference gray on light and dark
 
 // ---------------------------------------------------------------- loading
 
@@ -180,7 +174,7 @@ function enrich(rows: KnockRow[], cityOf: Map<string, string>): Knock[] {
 
 // ---------------------------------------------------------------- filters
 
-const rangeDays = ref<number | null>(null) // null = everything
+const rangeDays = ref<number | null>(30) // days back; null = whole campaign
 const cityFilter = ref('')
 
 const maxTs = computed(() => (knocks.value.length ? knocks.value[knocks.value.length - 1].ts : 0))
@@ -212,7 +206,6 @@ const TABS = [
   { id: 'areas', label: 'Areas' },
   { id: 'probability', label: 'Probability' },
   { id: 'canvassers', label: 'Canvassers' },
-  { id: 'model', label: 'Predictor' },
 ] as const
 const tab = ref<(typeof TABS)[number]['id']>('overview')
 
@@ -436,12 +429,22 @@ const scatterPoints = computed(() =>
 )
 const scatterFit = computed(() => linearRegression(scatterPoints.value.map((p) => ({ x: p.x, y: p.y }))))
 
-const topCanvassers = computed<BarItem[]>(() =>
-  canvasserStats.value.slice(0, 12).map((c) => ({
-    label: c.name,
-    value: c.sigs,
-    detail: `${fmtCount(c.knocks)} knocks · close rate ${fmtPct(c.closeRate, 1)}`,
-  })),
+/** The signature chart can show the whole roster, not just a leaderboard
+ * cut — bars simply grow with the list. Top 12 stays as an option for
+ * campaigns with more canvassers than screen. */
+const earnersScope = ref<'12' | 'all'>('all')
+const earnersOptions = computed(() => [
+  { value: 'all', label: `Everyone (${canvasserStats.value.length})` },
+  { value: '12', label: 'Top 12' },
+])
+const signatureEarners = computed<BarItem[]>(() =>
+  (earnersScope.value === 'all' ? canvasserStats.value : canvasserStats.value.slice(0, 12)).map(
+    (c) => ({
+      label: c.name,
+      value: c.sigs,
+      detail: `${fmtCount(c.knocks)} knocks · close rate ${fmtPct(c.closeRate, 1)}`,
+    }),
+  ),
 )
 
 const canvasserRows = computed(() =>
@@ -455,171 +458,6 @@ const canvasserRows = computed(() =>
   ]),
 )
 
-// ---------------------------------------------------------------- model lab
-
-const TARGETS = [
-  { value: 'answer', label: 'Will the door answer?' },
-  { value: 'sign', label: 'Will they sign, once someone answers?' },
-]
-const target = ref<'answer' | 'sign'>('answer')
-
-interface FeatureDef {
-  key: string
-  label: string
-  hint: string
-  value: (k: Knock) => number
-}
-/** Areas with knocks in the current view, busiest first — derived from the
- * data, so a different campaign automatically gets its own list. The busiest
- * area is the baseline the others are measured against; areas beyond the top
- * 9 fold into that baseline (keeps the design matrix narrow). */
-const areaChoices = computed(() => {
-  const counts = new Map<string, number>()
-  for (const k of filtered.value) counts.set(k.city, (counts.get(k.city) ?? 0) + 1)
-  return [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 9)
-    .map(([c]) => c)
-})
-/** What the single "Area" factor expands into at crunch time: one 0/1 column
- * per non-baseline area. */
-const areaFeatureDefs = computed<FeatureDef[]>(() =>
-  areaChoices.value.slice(1).map((city) => ({
-    key: `city:${city}`,
-    label: `Area: ${city}`,
-    hint: `versus ${areaChoices.value[0]}`,
-    value: (k: Knock) => (k.city === city ? 1 : 0),
-  })),
-)
-const featureDefs = computed<FeatureDef[]>(() => [
-  { key: 'attempt', label: 'Attempt number', hint: 'how many times this door has been tried', value: (k) => Math.min(k.attempt, 5) },
-  { key: 'weekend', label: 'Weekend', hint: 'Saturday or Sunday', value: (k) => (k.weekday === 0 || k.weekday === 6 ? 1 : 0) },
-  { key: 'evening', label: 'Evening (5pm+)', hint: 'knock at or after 5pm', value: (k) => (k.hour >= 17 ? 1 : 0) },
-  { key: 'priorNotHomes', label: 'Prior not-homes', hint: 'earlier no-answer visits at this door', value: (k) => Math.min(k.priorNotHomes, 4) },
-  { key: 'experience', label: 'Canvasser experience', hint: 'per 100 doors already knocked by them', value: (k) => k.experience / 100 },
-  // One "Area" factor, not a checkbox per city — the city columns are added
-  // behind the scenes so the list never needs editing between campaigns.
-  ...(areaChoices.value.length > 1
-    ? [{ key: 'area', label: 'Area', hint: 'some places just answer or sign more', value: () => 0 }]
-    : []),
-])
-const chosen = ref<Set<string>>(new Set(['attempt', 'weekend', 'evening']))
-function toggleFeature(key: string) {
-  const next = new Set(chosen.value)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  chosen.value = next
-}
-
-const model = shallowRef<LogisticModel | null>(null)
-const modelMeta = ref<{ target: string; features: FeatureDef[]; areaCities: string[] } | null>(null)
-const training = ref(false)
-
-function train() {
-  // "Area" is a single tick for the manager but expands into one column per
-  // area for the regression — same power, none of the checkbox clutter.
-  const feats = featureDefs.value.filter((f) => chosen.value.has(f.key) && f.key !== 'area')
-  const withArea = chosen.value.has('area') && areaChoices.value.length > 1
-  if (withArea) feats.push(...areaFeatureDefs.value)
-  if (!feats.length) return
-  training.value = true
-  model.value = null
-  // let the button repaint before the (fast) synchronous fit
-  setTimeout(() => {
-    const rows = target.value === 'sign' ? filtered.value.filter((k) => k.conversation) : filtered.value
-    const X = rows.map((k) => feats.map((f) => f.value(k)))
-    const y = rows.map((k) => (target.value === 'sign' ? (k.signed ? 1 : 0) : k.answered ? 1 : 0))
-    model.value = logisticRegression(X, y, feats.map((f) => f.label))
-    modelMeta.value = { target: target.value, features: feats, areaCities: withArea ? [...areaChoices.value] : [] }
-    // seed the what-if controls with sensible defaults
-    whatIf.value = Object.fromEntries(feats.map((f) => [f.key, f.key === 'attempt' ? 1 : 0]))
-    whatIfArea.value = withArea ? areaChoices.value[0] : ''
-    training.value = false
-  }, 30)
-}
-
-/** Plain-English quality word derived from AUC — the number itself stays
- * available in the fine-print line under the tiles. */
-const modelGrade = computed(() => {
-  if (!model.value) return ''
-  const a = model.value.auc
-  if (a < 0.55) return 'Coin flip'
-  if (a < 0.62) return 'Weak'
-  if (a < 0.7) return 'Fair'
-  if (a < 0.8) return 'Good'
-  return 'Excellent'
-})
-
-const coefItems = computed<BarItem[]>(() => {
-  if (!model.value) return []
-  const { pos, neg } = palette.diverging.value
-  return model.value.features
-    .map((name, i) => ({ name, w: model.value!.weights[i] }))
-    .slice(1) // intercept belongs in the table, not the chart
-    .sort((a, b) => Math.abs(b.w) - Math.abs(a.w))
-    .map((c) => ({
-      label: c.name,
-      value: Math.abs(c.w),
-      color: c.w >= 0 ? pos : neg,
-      detail: `${c.w >= 0 ? 'raises' : 'lowers'} the odds ×${Math.exp(Math.abs(c.w)).toFixed(2)}`,
-    }))
-})
-const coefRows = computed(() =>
-  model.value
-    ? model.value.features.map((name, i) => [
-        i === 0 ? 'Starting point' : name,
-        i === 0 ? '—' : `×${Math.exp(model.value!.weights[i]).toFixed(3)}`,
-        model.value!.weights[i].toFixed(4),
-      ])
-    : [],
-)
-
-const calibrationData = computed(() => {
-  if (!model.value || !modelMeta.value) return null
-  const feats = modelMeta.value.features
-  const rows =
-    modelMeta.value.target === 'sign' ? filtered.value.filter((k) => k.conversation) : filtered.value
-  const probs = rows.map((k) => model.value!.predict(feats.map((f) => f.value(k))))
-  const ys = rows.map((k) => (modelMeta.value!.target === 'sign' ? (k.signed ? 1 : 0) : k.answered ? 1 : 0))
-  const bins = calibration(probs, ys, 10)
-  return {
-    labels: bins.map((b) => fmtPct(b.predicted)),
-    observed: bins.map((b) => b.observed),
-    predicted: bins.map((b) => b.predicted),
-    rows: bins.map((b) => [fmtPct(b.predicted, 1), fmtPct(b.observed, 1), b.n]),
-  }
-})
-
-// what-if predictor
-const whatIf = ref<Record<string, number>>({})
-const whatIfArea = ref('')
-/** The area group renders as ONE dropdown, not a row per city — picking an
- * area flips the matching 0/1 column on and the rest off. */
-function setWhatIfArea(city: string) {
-  whatIfArea.value = city
-  const next = { ...whatIf.value }
-  for (const f of modelMeta.value?.features ?? []) {
-    if (f.key.startsWith('city:')) next[f.key] = f.key === `city:${city}` ? 1 : 0
-  }
-  whatIf.value = next
-}
-const whatIfRows = computed(() => modelMeta.value?.features.filter((f) => !f.key.startsWith('city:')) ?? [])
-const whatIfAreaOptions = computed(() =>
-  (modelMeta.value?.areaCities ?? []).map((c) => ({ value: c, label: c })),
-)
-const whatIfProb = computed(() => {
-  if (!model.value || !modelMeta.value) return null
-  const row = modelMeta.value.features.map((f) => whatIf.value[f.key] ?? 0)
-  return model.value.predict(row)
-})
-function whatIfControl(f: FeatureDef): { type: 'slider'; min: number; max: number; step: number } | { type: 'toggle' } {
-  if (f.key === 'attempt') return { type: 'slider', min: 1, max: 5, step: 1 }
-  if (f.key === 'priorNotHomes') return { type: 'slider', min: 0, max: 4, step: 1 }
-  if (f.key === 'experience') return { type: 'slider', min: 0, max: 15, step: 1 }
-  return { type: 'toggle' }
-}
-const whatIfLabel = (f: FeatureDef, v: number) =>
-  f.key === 'experience' ? `${v * 100} doors` : String(v)
 </script>
 
 <template>
@@ -782,7 +620,7 @@ const whatIfLabel = (f: FeatureDef, v: number) =>
       </section>
 
       <!-- ============================== Canvassers -->
-      <section v-else-if="tab === 'canvassers'" class="stack">
+      <section v-else class="stack">
         <div class="two-col">
           <ChartCard
             title="Volume vs. close rate"
@@ -801,149 +639,24 @@ const whatIfLabel = (f: FeatureDef, v: number) =>
           </ChartCard>
 
           <ChartCard
-            title="Top signature earners"
+            title="Signature earners"
+            subtitle="Signatures per canvasser in the current view"
             :columns="['Canvasser', 'Signatures']"
-            :rows="topCanvassers.map((i) => [i.label, i.value])"
+            :rows="signatureEarners.map((i) => [i.label, i.value])"
           >
-            <BarChart :items="topCanvassers" :color="cat[0]" />
+            <div class="earners-scope">
+              <AppSelect
+                :model-value="earnersScope"
+                :options="earnersOptions"
+                aria-label="How many canvassers to show"
+                @update:model-value="earnersScope = $event as '12' | 'all'"
+              />
+            </div>
+            <BarChart :items="signatureEarners" :color="cat[0]" />
           </ChartCard>
         </div>
       </section>
 
-      <!-- ============================== Predictor -->
-      <section v-else class="stack">
-        <div class="card">
-          <h3>What makes the difference?</h3>
-          <p class="muted">
-            Digs through the {{ fmtCount(filtered.length) }} knocks in view and works out which
-            factors genuinely change what happens at the door — evidence for planning routes and
-            shift times, not hunches. Pick a question, tick the factors to consider, then crunch
-            the numbers.
-          </p>
-          <div class="field">
-            <label id="target-label">Question</label>
-            <AppSelect
-              :model-value="target"
-              :options="TARGETS"
-              aria-labelledby="target-label"
-              @update:model-value="target = $event as 'answer' | 'sign'"
-            />
-          </div>
-          <div class="features">
-            <label v-for="f in featureDefs" :key="f.key" class="feature" :title="f.hint">
-              <input type="checkbox" :checked="chosen.has(f.key)" @change="toggleFeature(f.key)" />
-              {{ f.label }}
-            </label>
-          </div>
-          <button class="btn btn-primary" :disabled="training || chosen.size === 0" @click="train">
-            {{ training ? 'Crunching…' : 'Crunch the numbers' }}
-          </button>
-        </div>
-
-        <template v-if="model">
-          <div class="tiles">
-            <div class="tile">
-              <span class="tile-label muted">Prediction power</span>
-              <span class="tile-value">{{ modelGrade }}</span>
-              <span class="tile-hint muted"
-                >given two doors, picks the likelier one {{ fmtPct(model.auc, 0) }} of the time</span
-              >
-            </div>
-            <div class="tile">
-              <span class="tile-label muted">Calls it right</span>
-              <span class="tile-value">{{ fmtPct(model.accuracy, 1) }}</span>
-              <span class="tile-hint muted">across every knock in view</span>
-            </div>
-            <div class="tile">
-              <span class="tile-label muted">Knocks used</span>
-              <span class="tile-value">{{ fmtCount(model.n) }}</span>
-              <span class="tile-hint muted">{{ fmtCount(model.positives) }} were a yes</span>
-            </div>
-          </div>
-          <p class="muted nerd-note">
-            For the stats-curious: AUC {{ model.auc.toFixed(3) }} · McFadden pseudo-R²
-            {{ model.pseudoR2.toFixed(3) }} · fit {{ model.converged ? 'converged' : 'stopped' }}
-            after {{ model.iterations }} passes.
-          </p>
-
-          <div class="two-col">
-            <ChartCard
-              title="What actually matters"
-              subtitle="Longer bar = stronger pull on the answer. Blue raises the chances, red lowers them."
-              :columns="['Factor', 'Effect on the odds', 'Log-odds']"
-              :rows="coefRows"
-            >
-              <BarChart :items="coefItems" :color="cat[0]" />
-            </ChartCard>
-
-            <ChartCard
-              v-if="calibrationData"
-              title="Reality check"
-              subtitle="Doors grouped by the predicted chance vs how often it really happened — when the two lines hug each other, the percentages can be taken at face value"
-              :columns="['Model said', 'Actually happened', 'Knocks']"
-              :rows="calibrationData.rows"
-            >
-              <TimeSeriesChart
-                :labels="calibrationData.labels"
-                :series="[
-                  { name: 'Actually happened', color: cat[0], values: calibrationData.observed },
-                  { name: 'Model said', color: MUTED_SERIES, values: calibrationData.predicted },
-                ]"
-                :height="220"
-                percent
-              />
-            </ChartCard>
-          </div>
-
-          <div v-if="modelMeta" class="card">
-            <h3>What-if predictor</h3>
-            <p class="muted">Describe a door and see its predicted chance, live.</p>
-            <div class="whatif">
-              <div class="whatif-controls">
-                <div v-if="whatIfAreaOptions.length" class="whatif-row">
-                  <label>Area</label>
-                  <AppSelect
-                    :model-value="whatIfArea"
-                    :options="whatIfAreaOptions"
-                    aria-label="What-if area"
-                    @update:model-value="setWhatIfArea(String($event))"
-                  />
-                </div>
-                <div v-for="f in whatIfRows" :key="f.key" class="whatif-row">
-                  <label>{{ f.label }}</label>
-                  <template v-if="whatIfControl(f).type === 'slider'">
-                    <input
-                      type="range"
-                      :min="(whatIfControl(f) as any).min"
-                      :max="(whatIfControl(f) as any).max"
-                      :step="(whatIfControl(f) as any).step"
-                      :value="whatIf[f.key] ?? 0"
-                      @input="whatIf = { ...whatIf, [f.key]: Number(($event.target as HTMLInputElement).value) }"
-                    />
-                    <span class="muted val">{{ whatIfLabel(f, whatIf[f.key] ?? 0) }}</span>
-                  </template>
-                  <template v-else>
-                    <input
-                      type="checkbox"
-                      :checked="(whatIf[f.key] ?? 0) === 1"
-                      @change="whatIf = { ...whatIf, [f.key]: ($event.target as HTMLInputElement).checked ? 1 : 0 }"
-                    />
-                  </template>
-                </div>
-              </div>
-              <div class="whatif-result">
-                <span class="muted">{{
-                  modelMeta.target === 'sign' ? 'Chance they sign' : 'Chance the door answers'
-                }}</span>
-                <span class="hero">{{ whatIfProb != null ? fmtPct(whatIfProb, 1) : '—' }}</span>
-                <div class="meter">
-                  <div class="meter-fill" :style="{ width: `${(whatIfProb ?? 0) * 100}%` }" />
-                </div>
-              </div>
-            </div>
-          </div>
-        </template>
-      </section>
     </template>
   </AppShell>
 </template>
@@ -1017,12 +730,6 @@ const whatIfLabel = (f: FeatureDef, v: number) =>
   border-radius: var(--radius);
   background: var(--surface);
 }
-
-/* The exact statistics, one quiet line — plain words up top, numbers here. */
-.nerd-note {
-  margin: -0.4rem 0 0;
-  font-size: 0.78rem;
-}
 .tile-label {
   font-size: 0.75rem;
 }
@@ -1035,80 +742,10 @@ const whatIfLabel = (f: FeatureDef, v: number) =>
   font-size: 0.7rem;
 }
 
-.features {
+/* Everyone / Top 12 picker inside the signature-earners card. */
+.earners-scope {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem 1rem;
-  margin: 0.6rem 0 0.9rem;
-}
-.feature {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.88rem;
-}
-.feature input {
-  width: auto;
-}
-
-.whatif {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 1.2rem;
-  align-items: center;
-}
-.whatif-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-}
-.whatif-row {
-  display: grid;
-  grid-template-columns: minmax(130px, 200px) 1fr auto;
-  align-items: center;
-  gap: 0.6rem;
-  font-size: 0.86rem;
-}
-.whatif-row input[type='range'] {
-  width: 100%;
-}
-.whatif-row input[type='checkbox'] {
-  width: auto;
-  justify-self: start;
-}
-.val {
-  font-variant-numeric: tabular-nums;
-  min-width: 5.5em;
-}
-.whatif-result {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.3rem;
-  min-width: 150px;
-}
-.hero {
-  font-size: 2.6rem;
-  font-weight: 650;
-  line-height: 1.1;
-}
-.meter {
-  width: 100%;
-  height: 8px;
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-  overflow: hidden;
-}
-.meter-fill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 4px;
-  transition: width 0.15s ease;
-}
-
-@media (max-width: 700px) {
-  .whatif {
-    grid-template-columns: 1fr;
-  }
+  justify-content: flex-end;
+  margin-bottom: 0.5rem;
 }
 </style>

@@ -273,18 +273,12 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         body:
           'The campaign’s numbers room. The filter row up top (date range + area) scopes every ' +
-          'chart below it. Overview shows daily activity and outcome mixes; Areas compares ' +
+          'chart below it — it opens on the last 30 days, switch to "Whole campaign" for ' +
+          'everything. Overview shows daily activity and outcome mixes; Areas compares ' +
           'sign/answer rates by city with confidence whiskers; Probability shows how answer ' +
-          'rates change with repeat visits, time of day, and the door-to-signature funnel.',
-      },
-      {
-        heading: 'Predictor',
-        body:
-          'Pick a question — will the door answer, will they sign — tick the factors to ' +
-          'consider, and it crunches the knocks in view to show which factors genuinely move ' +
-          'the odds. The reality-check chart shows whether its percentages match what actually ' +
-          'happened, and the what-if panel predicts the chance for any door you describe. ' +
-          'Every chart has a Table toggle with the exact numbers.',
+          'rates change with repeat visits, time of day, and the door-to-signature funnel; ' +
+          'Canvassers compares individual volume, close rates, and signatures. Every chart ' +
+          'has a Table toggle with the exact numbers.',
       },
     ],
   },
