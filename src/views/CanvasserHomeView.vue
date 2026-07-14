@@ -30,7 +30,7 @@ const talk = useTalkStore()
         :class="{ active: talk.activeTab === 'hunt' }"
         @click="talk.activeTab = 'hunt'"
       >
-        Hunt
+        Scout
       </button>
     </div>
 

@@ -284,13 +284,16 @@ onUnmounted(() => {
           </span>
           <span>{{ item.label }}</span>
         </button>
-        <button class="more-row more-logout" @click="handleLogout">
-          <span class="more-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="ICONS.logout"></svg>
-          </span>
-          <span>Log out</span>
-        </button>
       </nav>
+      <!-- Outside the list and sticky: campaign managers have enough links
+           to push the sheet past the fold, and Log out must never be one of
+           the things you have to know to scroll for. -->
+      <button class="more-row more-logout" @click="handleLogout">
+        <span class="more-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" v-html="ICONS.logout"></svg>
+        </span>
+        <span>Log out</span>
+      </button>
     </BottomSheet>
 
     <!-- Per-screen help sheet ("?" in the header) -->
@@ -655,7 +658,14 @@ onUnmounted(() => {
 }
 
 .more-logout {
+  /* Sticks to the sheet's bottom edge while the nav list scrolls behind it —
+   * always visible no matter how many links a role has. */
+  position: sticky;
+  bottom: env(safe-area-inset-bottom, 0px);
   color: var(--danger);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.12);
 }
 
 .more-logout .more-icon {

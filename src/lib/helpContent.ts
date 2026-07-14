@@ -22,7 +22,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Two modes',
         body:
-          'Hunt is the map — see nearby doors, find your turf, and tap a pin to open that ' +
+          'Scout is the map — see nearby doors, find your turf, and tap a pin to open that ' +
           'address. Talk is the door screen — the household roster, past visits, notes, and ' +
           'the outcome buttons for logging the knock.',
       },

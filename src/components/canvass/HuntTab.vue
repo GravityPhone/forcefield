@@ -4,7 +4,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js'
 import { Geolocation } from '@capacitor/geolocation'
 import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
-import { CityLimitsLayer, TurfAreasLayer, densityDotElement, readMapPref, writeMapPref } from '@/lib/mapLayers'
+import { CityLimitsLayer, densityDotElement, readMapPref, writeMapPref } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
 import { geocodeAndCache, geocodeMissing, streetsAtPoints } from '@/lib/geocode'
 import { fetchAllRows, supabase } from '@/lib/supabase'
@@ -87,16 +87,10 @@ function setPinMode(mode: PinMode) {
   refreshAllPinStyles()
 }
 
-// Map layer toggles (turf area shading, city limits), shared prefs with the
-// turf cutter so the map looks the same on both pages.
-const showAreas = ref(readMapPref('map-show-areas', true))
+// Map layer toggle (city limits), pref shared with the turf cutter so the
+// map looks the same on both pages. (Turf area shading was removed from this
+// map 2026-07-14 — the cutter still has its own Shade toggle.)
 const showCity = ref(readMapPref('map-show-city', false))
-
-function toggleAreas() {
-  showAreas.value = !showAreas.value
-  writeMapPref('map-show-areas', showAreas.value)
-  areasLayer?.setVisible(showAreas.value)
-}
 
 function toggleCity() {
   showCity.value = !showCity.value
@@ -110,10 +104,8 @@ const summaryByHousehold = ref<Map<string, HouseholdKnockSummary>>(new Map())
  * already here today" signal on pins and result rows, so crews working the
  * same turf don't double-knock. Kept live via the realtime feed below. */
 const knockedToday = ref<Set<string>>(new Set())
-/** Every turf, for the shaded-area overlay (each in its own color, so crews
- * can see where the others are working). Yours — assigned directly or via a
- * squad you're in today — get emphasized shading, a colored ring on member
- * pins, and a jump-to chip. */
+/** Every turf — yours (assigned directly or via a squad you're in today)
+ * get a colored ring on member pins and a jump-to chip. */
 interface TurfLite {
   id: string
   name: string
@@ -139,7 +131,6 @@ let map: google.maps.Map | null = null
 const addressById = new Map<string, AddressWithRoster>()
 let densityMarkers: google.maps.marker.AdvancedMarkerElement[] = []
 let densityZoom = -1
-let areasLayer: TurfAreasLayer | null = null
 let cityLayer: CityLimitsLayer | null = null
 let markersByAddress = new Map<string, google.maps.marker.AdvancedMarkerElement>()
 let initStarted = false
@@ -245,29 +236,6 @@ async function fetchTurfs() {
 }
 
 const myTurfColorById = computed(() => new Map(myTurfs.value.map((t) => [t.id, t.color])))
-
-/** Redraw the shaded turf areas from whatever doors the map knows about. */
-function rebuildTurfAreas() {
-  if (!areasLayer) return
-  const doorsByTurf = new Map<string, DoorPoint[]>()
-  for (const [addressId, turfId] of turfByAddress.value) {
-    const door = doorInfoByAddress.get(addressId)
-    if (!door) continue
-    const list = doorsByTurf.get(turfId)
-    if (list) list.push(door)
-    else doorsByTurf.set(turfId, [door])
-  }
-  void areasLayer.setTurfs(
-    allTurfs.value
-      .filter((t) => doorsByTurf.has(t.id))
-      .map((t) => ({
-        id: t.id,
-        color: t.color,
-        doors: doorsByTurf.get(t.id)!,
-        emphasis: myTurfIds.value.has(t.id),
-      })),
-  )
-}
 
 async function fetchKnockedToday(): Promise<Set<string>> {
   const rows = await fetchAllRows<{ household_id: string }>((from, to) =>
@@ -562,8 +530,6 @@ async function initialize() {
   // per zoom tick, and never for doors outside the padded viewport.
   map.addListener('idle', renderVisibleDoors)
 
-  areasLayer = new TurfAreasLayer(map)
-  areasLayer.setVisible(showAreas.value)
   cityLayer = new CityLimitsLayer(map)
   if (showCity.value) void cityLayer.setVisible(true)
 
@@ -583,7 +549,6 @@ async function initialize() {
   // way out and looks like the map "doesn't know where to start".)
   if (!myTurfBounds.isEmpty()) map.fitBounds(myTurfBounds, 64)
   else if (!lastCenter && !bounds.isEmpty()) map.fitBounds(bounds, 48)
-  rebuildTurfAreas()
   pinsLoading.value = false
 }
 
@@ -607,7 +572,6 @@ async function refreshStatuses() {
     return
   }
   refreshAllPinStyles()
-  rebuildTurfAreas()
 }
 
 /** Pan/zoom to a turf's doors (the chips above the map). Works off door
@@ -717,7 +681,6 @@ async function geolocateVisible() {
       () => huntUnmounted,
     )
     if (!huntUnmounted) {
-      rebuildTurfAreas()
       flashGeoNote(`Placed ${done} of ${missing.length} pins.`)
     }
   } finally {
@@ -1088,7 +1051,6 @@ onUnmounted(() => {
   clearDensityDots()
   addressById.clear()
   doorInfoByAddress.clear()
-  areasLayer?.dispose()
   cityLayer?.dispose()
   if (myPosMarker) {
     myPosMarker.map = null
@@ -1182,19 +1144,9 @@ onUnmounted(() => {
           123
         </button>
       </div>
-      <!-- Map layers: turf area shading and city/village limits. Below the
-           pin-style toggle, same chrome. -->
+      <!-- Map layers: city/village limits. Below the pin-style toggle, same
+           chrome. -->
       <div class="layer-toggle" role="group" aria-label="Map layers">
-        <button
-          type="button"
-          class="layer-btn"
-          :class="{ active: showAreas }"
-          :aria-pressed="showAreas"
-          title="Shade each turf's area in its color"
-          @click="toggleAreas"
-        >
-          Shade
-        </button>
         <button
           type="button"
           class="layer-btn"
