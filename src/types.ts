@@ -179,6 +179,13 @@ export interface KnockLog {
   outcome: KnockOutcome
   notes: string | null
   created_at: string
+  /** Stamped by the DB at insert (20260714120000): which squad the canvasser
+   * was crewing with that day, and the top-level turf the door sat in. Names
+   * are snapshots — they outlive squad wipes and turf re-cuts. */
+  squad_id: string | null
+  squad_name: string | null
+  turf_id: string | null
+  turf_name: string | null
 }
 
 /** Insert shape for knock_logs — client_id is generated on the device so the

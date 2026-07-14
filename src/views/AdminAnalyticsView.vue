@@ -32,6 +32,11 @@ interface KnockRow {
   occurred_at: string
   household_id: string | null
   canvasser_id: string
+  // Stamped at knock time by the DB (see 20260714120000): the squad the
+  // canvasser was crewing with that day and the (top-level) turf the door
+  // sat in. Snapshotted names, so history survives squads/turf being re-cut.
+  squad_name: string | null
+  turf_name: string | null
 }
 
 interface Knock {
@@ -43,6 +48,8 @@ interface Knock {
   household: string
   canvasser: string
   city: string
+  squad: string
+  turf: string
   attempt: number
   priorNotHomes: number
   experience: number // canvasser's knocks before this one
@@ -51,11 +58,18 @@ interface Knock {
   signed: boolean
 }
 
+const NO_SQUAD = 'No squad'
+const NO_TURF = 'No turf'
+
 const loading = ref(true)
 const loadNote = ref('Counting knocks…')
 const loadError = ref('')
 const knocks = shallowRef<Knock[]>([])
 const cityAddressTotals = shallowRef<Map<string, number>>(new Map())
+/** Doors currently sitting in each turf (by turf name) — the denominator for
+ * turf coverage. Current cut only; historical knocks keep their stamped name
+ * even if that turf no longer exists (they just get no coverage bar). */
+const turfAddressTotals = shallowRef<Map<string, number>>(new Map())
 const canvasserNames = shallowRef<Map<string, string>>(new Map())
 
 const PAGE = 1000
@@ -92,17 +106,29 @@ onMounted(async () => {
       supabase.from('addresses').select('id', { count: 'exact', head: true }),
     ])
 
-    const [rows, addrs, profs] = await Promise.all([
+    const [rows, addrs, profs, turfs] = await Promise.all([
       fetchAllPages<KnockRow>(
         'knock_logs',
-        'outcome, occurred_at, household_id, canvasser_id',
+        'outcome, occurred_at, household_id, canvasser_id, squad_name, turf_name',
         knockCount ?? 0,
         (n) => (loadNote.value = `Loading knocks… ${fmtCount(n)} / ${fmtCount(knockCount ?? 0)}`),
       ),
-      fetchAllPages<{ id: string; city: string }>('addresses', 'id, city', addrCount ?? 0, () => {}),
+      fetchAllPages<{ id: string; city: string; turf_id: string | null }>(
+        'addresses',
+        'id, city, turf_id',
+        addrCount ?? 0,
+        () => {},
+      ),
       supabase
         .from('profiles')
         .select('id, username, display_name')
+        .then(({ data, error }) => {
+          if (error) throw new Error(error.message)
+          return data ?? []
+        }),
+      supabase
+        .from('turfs')
+        .select('id, name, parent_turf_id')
         .then(({ data, error }) => {
           if (error) throw new Error(error.message)
           return data ?? []
@@ -113,6 +139,21 @@ onMounted(async () => {
     const totals = new Map<string, number>()
     for (const a of addrs) totals.set(a.city, (totals.get(a.city) ?? 0) + 1)
     cityAddressTotals.value = totals
+    // Doors per turf, resolved to the TOP-LEVEL turf name — same resolution
+    // the knock stamps use, so numerator and denominator agree.
+    const turfById = new Map(turfs.map((t) => [t.id, t]))
+    const topTurfName = (id: string | null): string | null => {
+      const t = id ? turfById.get(id) : undefined
+      if (!t) return null
+      const parent = t.parent_turf_id ? turfById.get(t.parent_turf_id) : undefined
+      return (parent ?? t).name
+    }
+    const turfTotals = new Map<string, number>()
+    for (const a of addrs) {
+      const name = topTurfName(a.turf_id)
+      if (name) turfTotals.set(name, (turfTotals.get(name) ?? 0) + 1)
+    }
+    turfAddressTotals.value = turfTotals
     canvasserNames.value = new Map(profs.map((p) => [p.id, p.display_name || p.username]))
 
     loadNote.value = 'Crunching…'
@@ -141,6 +182,8 @@ function enrich(rows: KnockRow[], cityOf: Map<string, string>): Knock[] {
         household: r.household_id!,
         canvasser: r.canvasser_id,
         city: cityOf.get(r.household_id!) ?? 'Unknown',
+        squad: r.squad_name ?? NO_SQUAD,
+        turf: r.turf_name ?? NO_TURF,
         attempt: 0,
         priorNotHomes: 0,
         experience: 0,
@@ -176,21 +219,30 @@ function enrich(rows: KnockRow[], cityOf: Map<string, string>): Knock[] {
 
 const rangeDays = ref<number | null>(30) // days back; null = whole campaign
 const cityFilter = ref('')
+const turfFilter = ref('')
 
 const maxTs = computed(() => (knocks.value.length ? knocks.value[knocks.value.length - 1].ts : 0))
 const filtered = computed(() => {
   const cutoff = rangeDays.value == null ? -Infinity : maxTs.value - rangeDays.value * 86_400_000
-  return knocks.value.filter((k) => k.ts >= cutoff && (!cityFilter.value || k.city === cityFilter.value))
+  return knocks.value.filter(
+    (k) =>
+      k.ts >= cutoff &&
+      (!cityFilter.value || k.city === cityFilter.value) &&
+      (!turfFilter.value || k.turf === turfFilter.value),
+  )
 })
 
-const cityOptions = computed(() => {
+function filterOptions(key: (k: Knock) => string, allLabel: string) {
   const counts = new Map<string, number>()
-  for (const k of knocks.value) counts.set(k.city, (counts.get(k.city) ?? 0) + 1)
+  for (const k of knocks.value) counts.set(key(k), (counts.get(key(k)) ?? 0) + 1)
   const opts = [...counts.entries()]
     .sort((a, b) => b[1] - a[1])
     .map(([c]) => ({ value: c, label: c }))
-  return [{ value: '', label: 'All areas' }, ...opts]
-})
+  return [{ value: '', label: allLabel }, ...opts]
+}
+
+const cityOptions = computed(() => filterOptions((k) => k.city, 'All areas'))
+const turfOptions = computed(() => filterOptions((k) => k.turf, 'All turf'))
 
 const RANGE_PRESETS = [
   { value: '', label: 'Whole campaign' },
@@ -204,6 +256,8 @@ const RANGE_PRESETS = [
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'areas', label: 'Areas' },
+  { id: 'turfs', label: 'Turfs' },
+  { id: 'squads', label: 'Squads' },
   { id: 'probability', label: 'Probability' },
   { id: 'canvassers', label: 'Canvassers' },
 ] as const
@@ -294,26 +348,31 @@ const outcomeMix = computed<BarItem[]>(() => {
 
 // ---------------------------------------------------------------- areas
 
-function rateByCity(num: (k: Knock) => boolean, den: (k: Knock) => boolean, minDen = 25): BarItem[] {
+function rateBy(
+  key: (k: Knock) => string,
+  num: (k: Knock) => boolean,
+  den: (k: Knock) => boolean,
+  minDen = 25,
+): BarItem[] {
   const per = new Map<string, { n: number; s: number }>()
   for (const k of filtered.value) {
     if (!den(k)) continue
-    const e = per.get(k.city) ?? { n: 0, s: 0 }
+    const e = per.get(key(k)) ?? { n: 0, s: 0 }
     e.n++
     if (num(k)) e.s++
-    per.set(k.city, e)
+    per.set(key(k), e)
   }
   return [...per.entries()]
     .filter(([, e]) => e.n >= minDen)
-    .map(([city, e]) => {
+    .map(([label, e]) => {
       const w = wilson(e.s, e.n)
-      return { label: city, value: w.p, lo: w.lo, hi: w.hi, detail: `${e.s} of ${e.n} · 95% CI ${fmtPct(w.lo)}–${fmtPct(w.hi)}` }
+      return { label, value: w.p, lo: w.lo, hi: w.hi, detail: `${e.s} of ${e.n} · 95% CI ${fmtPct(w.lo)}–${fmtPct(w.hi)}` }
     })
     .sort((a, b) => b.value - a.value)
 }
 
-const signRateByCity = computed(() => rateByCity((k) => k.signed, (k) => k.conversation))
-const answerRateByCity = computed(() => rateByCity((k) => k.answered, () => true, 50))
+const signRateByCity = computed(() => rateBy((k) => k.city, (k) => k.signed, (k) => k.conversation))
+const answerRateByCity = computed(() => rateBy((k) => k.city, (k) => k.answered, () => true, 50))
 const coverageByCity = computed<BarItem[]>(() => {
   const knocked = new Map<string, Set<string>>()
   for (const k of filtered.value) {
@@ -334,6 +393,103 @@ const coverageByCity = computed<BarItem[]>(() => {
 })
 
 const rateRows = (items: BarItem[]) => items.map((i) => [i.label, fmtPct(i.value, 1), i.detail ?? ''])
+
+// ---------------------------------------------------------------- turfs & squads
+// Both group off the names STAMPED on each knock at insert time (see the
+// KnockRow comment) — squads dissolve nightly and turf gets re-cut, so the
+// stamps are the only honest grouping across days. Recurring crews keep the
+// same name day to day ("Omar's crew"), which is exactly what makes a squad
+// trackable across its whole run.
+
+interface GroupStats {
+  label: string
+  knocks: number
+  doors: Set<string>
+  conv: number
+  sigs: number
+  answered: number
+  days: Set<string>
+  closeRate: number
+}
+
+function statsBy(key: (k: Knock) => string): GroupStats[] {
+  const per = new Map<string, Omit<GroupStats, 'label' | 'closeRate'>>()
+  for (const k of filtered.value) {
+    let e = per.get(key(k))
+    if (!e) {
+      e = { knocks: 0, doors: new Set(), conv: 0, sigs: 0, answered: 0, days: new Set() }
+      per.set(key(k), e)
+    }
+    e.knocks++
+    e.doors.add(k.household)
+    e.days.add(k.day)
+    if (k.answered) e.answered++
+    if (k.conversation) e.conv++
+    if (k.signed) e.sigs++
+  }
+  return [...per.entries()]
+    .map(([label, e]) => ({ label, ...e, closeRate: e.conv ? e.sigs / e.conv : 0 }))
+    .sort((a, b) => b.sigs - a.sigs)
+}
+
+const turfStats = computed(() => statsBy((k) => k.turf))
+const squadStats = computed(() => statsBy((k) => k.squad))
+
+/** Knocks with no stamp would dwarf the real bars (most sim history predates
+ * any turf being cut) — charts skip that bucket, the tables keep it. */
+const chartableTurfs = computed(() => turfStats.value.filter((t) => t.label !== NO_TURF))
+const chartableSquads = computed(() => squadStats.value.filter((s) => s.label !== NO_SQUAD))
+const unstampedTurfKnocks = computed(
+  () => turfStats.value.find((t) => t.label === NO_TURF)?.knocks ?? 0,
+)
+
+const signaturesByTurf = computed<BarItem[]>(() =>
+  chartableTurfs.value.map((t) => ({
+    label: t.label,
+    value: t.sigs,
+    detail: `${fmtCount(t.knocks)} knocks · close rate ${fmtPct(t.closeRate, 1)}`,
+  })),
+)
+const signRateByTurf = computed(() =>
+  rateBy((k) => k.turf, (k) => k.signed, (k) => k.conversation && k.turf !== NO_TURF, 10),
+)
+const coverageByTurf = computed<BarItem[]>(() =>
+  chartableTurfs.value
+    .filter((t) => (turfAddressTotals.value.get(t.label) ?? 0) > 0)
+    .map((t) => {
+      const total = turfAddressTotals.value.get(t.label)!
+      return {
+        label: t.label,
+        value: Math.min(1, t.doors.size / total),
+        detail: `${fmtCount(t.doors.size)} of ${fmtCount(total)} doors`,
+      }
+    })
+    .sort((a, b) => b.value - a.value),
+)
+
+const groupRows = (stats: GroupStats[]) =>
+  stats.map((e) => [
+    e.label,
+    e.days.size,
+    e.knocks,
+    e.doors.size,
+    e.conv,
+    e.sigs,
+    fmtPct(e.closeRate, 1),
+    fmtPct(e.knocks ? e.answered / e.knocks : 0, 1),
+  ])
+const GROUP_COLUMNS = ['', 'Days out', 'Knocks', 'Doors', 'Conversations', 'Signatures', 'Close rate', 'Answer rate']
+
+const signaturesBySquad = computed<BarItem[]>(() =>
+  chartableSquads.value.map((s) => ({
+    label: s.label,
+    value: s.sigs,
+    detail: `${s.days.size} day${s.days.size === 1 ? '' : 's'} out · ${fmtCount(s.knocks)} knocks`,
+  })),
+)
+const signRateBySquad = computed(() =>
+  rateBy((k) => k.squad, (k) => k.signed, (k) => k.conversation && k.squad !== NO_SQUAD, 10),
+)
 
 // ---------------------------------------------------------------- probability
 
@@ -484,6 +640,12 @@ const canvasserRows = computed(() =>
           aria-label="Area"
           @update:model-value="cityFilter = String($event)"
         />
+        <AppSelect
+          :model-value="turfFilter"
+          :options="turfOptions"
+          aria-label="Turf"
+          @update:model-value="turfFilter = String($event)"
+        />
         <span class="muted scope-note">{{ fmtCount(filtered.length) }} knocks in view</span>
       </div>
 
@@ -570,6 +732,80 @@ const canvasserRows = computed(() =>
         >
           <BarChart :items="coverageByCity" :color="cat[0]" percent :max="1" />
         </ChartCard>
+      </section>
+
+      <!-- ============================== Turfs -->
+      <section v-else-if="tab === 'turfs'" class="stack">
+        <div class="two-col">
+          <ChartCard
+            title="Signatures by turf"
+            subtitle="Each knock counts toward the turf its door was in at the time"
+            :columns="['Turf', 'Signatures', 'Detail']"
+            :rows="signaturesByTurf.map((i) => [i.label, i.value, i.detail ?? ''])"
+          >
+            <BarChart :items="signaturesByTurf" :color="cat[0]" />
+          </ChartCard>
+
+          <ChartCard
+            title="Sign rate by turf"
+            subtitle="Signatures per conversation, with 95% confidence whiskers"
+            :columns="['Turf', 'Sign rate', 'Detail']"
+            :rows="rateRows(signRateByTurf)"
+          >
+            <BarChart :items="signRateByTurf" :color="cat[0]" percent :max="Math.min(1, Math.max(...signRateByTurf.map((i) => i.hi ?? i.value), 0.1) * 1.15)" />
+          </ChartCard>
+        </div>
+
+        <ChartCard
+          title="Turf coverage"
+          subtitle="Unique doors knocked as a share of the doors currently in each turf"
+          :columns="['Turf', 'Coverage', 'Detail']"
+          :rows="rateRows(coverageByTurf)"
+        >
+          <BarChart :items="coverageByTurf" :color="cat[0]" percent :max="1" />
+        </ChartCard>
+
+        <ChartCard
+          title="All turf, by the numbers"
+          :columns="['Turf', ...GROUP_COLUMNS.slice(1)]"
+          :rows="groupRows(turfStats)"
+          table-only
+        />
+
+        <p v-if="unstampedTurfKnocks" class="muted scope-note">
+          {{ fmtCount(unstampedTurfKnocks) }} knocks in view happened at doors that weren't in any
+          turf — they're in the table as "No turf" but left off the charts.
+        </p>
+      </section>
+
+      <!-- ============================== Squads -->
+      <section v-else-if="tab === 'squads'" class="stack">
+        <div class="two-col">
+          <ChartCard
+            title="Signatures by squad"
+            subtitle="Squads are day crews — a crew keeping its name across days accumulates here"
+            :columns="['Squad', 'Signatures', 'Detail']"
+            :rows="signaturesBySquad.map((i) => [i.label, i.value, i.detail ?? ''])"
+          >
+            <BarChart :items="signaturesBySquad" :color="cat[0]" />
+          </ChartCard>
+
+          <ChartCard
+            title="Sign rate by squad"
+            subtitle="Signatures per conversation, with 95% confidence whiskers"
+            :columns="['Squad', 'Sign rate', 'Detail']"
+            :rows="rateRows(signRateBySquad)"
+          >
+            <BarChart :items="signRateBySquad" :color="cat[0]" percent :max="Math.min(1, Math.max(...signRateBySquad.map((i) => i.hi ?? i.value), 0.1) * 1.15)" />
+          </ChartCard>
+        </div>
+
+        <ChartCard
+          title="All squads, by the numbers"
+          :columns="['Squad', ...GROUP_COLUMNS.slice(1)]"
+          :rows="groupRows(squadStats)"
+          table-only
+        />
       </section>
 
       <!-- ============================== Probability -->

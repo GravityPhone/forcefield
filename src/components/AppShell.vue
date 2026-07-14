@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useAuthStore } from '@/stores/auth'
-import { ROLE_LABELS } from '@/types'
+import { useAuthStore, roleHome } from '@/stores/auth'
+import { ROLE_LABELS, type AppRole } from '@/types'
+import { supabase } from '@/lib/supabase'
 import AppLogo from '@/components/AppLogo.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import ChatDrawer from '@/components/chat/ChatDrawer.vue'
@@ -100,6 +101,55 @@ const moreItems = computed<NavItem[]>(() => {
 const moreOpen = ref(false)
 const moreActive = computed(() => moreItems.value.some((i) => route.path === i.to))
 
+// --- Demo role switcher: the header's role badge opens a sheet where any
+// non-admin can move themselves between the three working roles. This exists
+// so someone checking out the demo unattended can see what every role gets —
+// the sheet says so out loud. The DB side (demo_set_own_role) is equally
+// narrow: non-admins only, admin unreachable in both directions. ---
+
+const DEMO_ROLES: { role: AppRole; blurb: string }[] = [
+  {
+    role: 'canvasser',
+    blurb: 'Knock doors — Scout map, Talk mode, your squad, boards and bulletin.',
+  },
+  {
+    role: 'team_lead',
+    blurb: 'Everything a canvasser has, plus assigning doors to squadmates on the Squad page.',
+  },
+  {
+    role: 'campaign_manager',
+    blurb: 'The command center — dashboard, turf cutting, analytics, roles, and the AI chat.',
+  },
+]
+
+const roleSwitchOpen = ref(false)
+const roleSwitching = ref(false)
+const roleSwitchError = ref('')
+const canDemoSwitch = computed(() => !!auth.profile && auth.profile.role !== 'admin')
+
+async function demoSwitchRole(role: AppRole) {
+  if (roleSwitching.value) return
+  if (role === auth.profile?.role) {
+    roleSwitchOpen.value = false
+    return
+  }
+  roleSwitching.value = true
+  roleSwitchError.value = ''
+  try {
+    const { error } = await supabase.rpc('demo_set_own_role', { new_role: role })
+    if (error) {
+      roleSwitchError.value = error.message
+      return
+    }
+    await auth.fetchProfile()
+    roleSwitchOpen.value = false
+    hapticTap('light')
+    void router.push(roleHome(role))
+  } finally {
+    roleSwitching.value = false
+  }
+}
+
 // --- Per-screen help: explanatory copy lives in helpContent.ts, one tap
 // away behind the header's "?" — not in paragraphs crowding the pages. ---
 const helpTopic = computed(() => helpFor(route.path))
@@ -182,7 +232,17 @@ onUnmounted(() => {
           >
             ?
           </button>
-          <span class="badge">{{ ROLE_LABELS[auth.profile.role] }}</span>
+          <button
+            v-if="canDemoSwitch"
+            class="badge badge-btn"
+            :aria-expanded="roleSwitchOpen"
+            title="Try another role (demo)"
+            @click="roleSwitchOpen = true"
+          >
+            {{ ROLE_LABELS[auth.profile.role] }}
+            <span aria-hidden="true" class="badge-caret">▾</span>
+          </button>
+          <span v-else class="badge">{{ ROLE_LABELS[auth.profile.role] }}</span>
           <span class="username">{{ auth.profile.username }}</span>
           <button class="btn btn-ghost btn-sm logout-top" @click="handleLogout">Log out</button>
         </div>
@@ -296,6 +356,32 @@ onUnmounted(() => {
       </button>
     </BottomSheet>
 
+    <!-- Demo role switcher (the role badge in the header) -->
+    <BottomSheet v-model:open="roleSwitchOpen" title="Try another role" aria-label="Demo role switcher">
+      <p class="role-demo-note">
+        This switcher is here <strong>for the demo</strong> — it lets you see what each role gets
+        without waiting on anyone. In a real campaign, roles are assigned by campaign staff.
+      </p>
+      <div class="role-options">
+        <button
+          v-for="r in DEMO_ROLES"
+          :key="r.role"
+          class="role-option"
+          :class="{ current: auth.profile?.role === r.role }"
+          :disabled="roleSwitching"
+          @click="demoSwitchRole(r.role)"
+        >
+          <span class="role-option-name">
+            {{ ROLE_LABELS[r.role] }}
+            <span v-if="auth.profile?.role === r.role" class="role-current-tag">Current</span>
+          </span>
+          <span class="role-option-blurb">{{ r.blurb }}</span>
+        </button>
+      </div>
+      <p v-if="roleSwitchError" class="role-demo-error">{{ roleSwitchError }}</p>
+      <p v-if="roleSwitching" class="role-demo-note">Switching…</p>
+    </BottomSheet>
+
     <!-- Per-screen help sheet ("?" in the header) -->
     <BottomSheet
       v-if="helpTopic"
@@ -397,6 +483,102 @@ onUnmounted(() => {
   color: var(--text-muted);
   font-size: 0.95rem;
   line-height: 1.5;
+}
+
+/* The role badge doubles as the demo role switcher — keep the badge look,
+ * add just enough affordance (caret, pointer) that it reads as tappable. */
+.badge-btn {
+  border: none;
+  /* Only the family — .badge already sets the size/weight the chip needs,
+   * this just stops the button UA font leaking in. */
+  font-family: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.badge-btn:hover {
+  filter: brightness(1.08);
+}
+
+.badge-caret {
+  font-size: 0.7em;
+  opacity: 0.8;
+}
+
+.role-demo-note {
+  margin: 0 0 0.8rem;
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.role-options {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.role-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.7rem 0.9rem;
+  border: none;
+  background: var(--surface);
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.role-option + .role-option {
+  border-top: 1px solid var(--border);
+}
+
+.role-option:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.role-option:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.role-option.current {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.role-option-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 700;
+}
+
+.role-current-tag {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+.role-option-blurb {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.role-demo-error {
+  margin: 0.8rem 0 0;
+  color: var(--danger);
+  font-size: 0.9rem;
 }
 
 .username {

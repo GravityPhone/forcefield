@@ -217,6 +217,12 @@ export const useTalkStore = defineStore('talk', {
             ...knock,
             id: clientId,
             created_at: knock.occurred_at,
+            // The DB stamps these on insert (squad of the day, door's turf) —
+            // the optimistic row doesn't know them and nothing here reads them.
+            squad_id: null,
+            squad_name: null,
+            turf_id: null,
+            turf_name: null,
             person: this.selectedPerson ? { name: this.selectedPerson.name } : null,
             canvasser: {
               username: auth.profile.username,

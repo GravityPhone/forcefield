@@ -10,6 +10,8 @@ defineProps<{
   /** Table-view twin. Omit only for pure stat tiles. */
   columns?: string[]
   rows?: (string | number)[][]
+  /** The table IS the content — no chart slot, no toggle. */
+  tableOnly?: boolean
 }>()
 
 const showTable = ref(false)
@@ -23,7 +25,7 @@ const showTable = ref(false)
         <p v-if="subtitle" class="muted sub">{{ subtitle }}</p>
       </div>
       <button
-        v-if="columns && rows"
+        v-if="columns && rows && !tableOnly"
         class="btn btn-sm table-toggle"
         type="button"
         :aria-pressed="showTable"
@@ -33,7 +35,7 @@ const showTable = ref(false)
       </button>
     </div>
 
-    <div v-if="!showTable" class="chart-body">
+    <div v-if="!showTable && !tableOnly" class="chart-body">
       <slot />
     </div>
     <div v-else class="table-wrap">

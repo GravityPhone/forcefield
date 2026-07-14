@@ -4,7 +4,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js'
 import { Geolocation } from '@capacitor/geolocation'
 import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
-import { CityLimitsLayer, densityDotElement, readMapPref, writeMapPref } from '@/lib/mapLayers'
+import { CityLimitsLayer, TurfAreasLayer, densityDotElement, readMapPref, writeMapPref } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
 import { geocodeAndCache, geocodeMissing, streetsAtPoints } from '@/lib/geocode'
 import { fetchAllRows, supabase } from '@/lib/supabase'
@@ -87,10 +87,18 @@ function setPinMode(mode: PinMode) {
   refreshAllPinStyles()
 }
 
-// Map layer toggle (city limits), pref shared with the turf cutter so the
-// map looks the same on both pages. (Turf area shading was removed from this
-// map 2026-07-14 — the cutter still has its own Shade toggle.)
+// Map layer toggles (turf area shading, city limits), prefs shared with the
+// turf cutter so the map looks the same on both pages. Turf shading is for
+// EVERYONE — a canvasser with no assignment still gets to see where all the
+// turfs are (own turf shades stronger).
+const showAreas = ref(readMapPref('map-show-areas', true))
 const showCity = ref(readMapPref('map-show-city', false))
+
+function toggleAreas() {
+  showAreas.value = !showAreas.value
+  writeMapPref('map-show-areas', showAreas.value)
+  areasLayer?.setVisible(showAreas.value)
+}
 
 function toggleCity() {
   showCity.value = !showCity.value
@@ -131,6 +139,7 @@ let map: google.maps.Map | null = null
 const addressById = new Map<string, AddressWithRoster>()
 let densityMarkers: google.maps.marker.AdvancedMarkerElement[] = []
 let densityZoom = -1
+let areasLayer: TurfAreasLayer | null = null
 let cityLayer: CityLimitsLayer | null = null
 let markersByAddress = new Map<string, google.maps.marker.AdvancedMarkerElement>()
 let initStarted = false
@@ -236,6 +245,32 @@ async function fetchTurfs() {
 }
 
 const myTurfColorById = computed(() => new Map(myTurfs.value.map((t) => [t.id, t.color])))
+
+/** Any turf doors at all — gates the "All turf" zoom chip. */
+const anyTurfDoors = computed(() => turfByAddress.value.size > 0)
+
+/** Redraw the shaded turf areas from whatever doors the map knows about. */
+function rebuildTurfAreas() {
+  if (!areasLayer) return
+  const doorsByTurf = new Map<string, DoorPoint[]>()
+  for (const [addressId, turfId] of turfByAddress.value) {
+    const door = doorInfoByAddress.get(addressId)
+    if (!door) continue
+    const list = doorsByTurf.get(turfId)
+    if (list) list.push(door)
+    else doorsByTurf.set(turfId, [door])
+  }
+  void areasLayer.setTurfs(
+    allTurfs.value
+      .filter((t) => doorsByTurf.has(t.id))
+      .map((t) => ({
+        id: t.id,
+        color: t.color,
+        doors: doorsByTurf.get(t.id)!,
+        emphasis: myTurfIds.value.has(t.id),
+      })),
+  )
+}
 
 async function fetchKnockedToday(): Promise<Set<string>> {
   const rows = await fetchAllRows<{ household_id: string }>((from, to) =>
@@ -530,6 +565,8 @@ async function initialize() {
   // per zoom tick, and never for doors outside the padded viewport.
   map.addListener('idle', renderVisibleDoors)
 
+  areasLayer = new TurfAreasLayer(map)
+  areasLayer.setVisible(showAreas.value)
   cityLayer = new CityLimitsLayer(map)
   if (showCity.value) void cityLayer.setVisible(true)
 
@@ -549,6 +586,7 @@ async function initialize() {
   // way out and looks like the map "doesn't know where to start".)
   if (!myTurfBounds.isEmpty()) map.fitBounds(myTurfBounds, 64)
   else if (!lastCenter && !bounds.isEmpty()) map.fitBounds(bounds, 48)
+  rebuildTurfAreas()
   pinsLoading.value = false
 }
 
@@ -572,6 +610,7 @@ async function refreshStatuses() {
     return
   }
   refreshAllPinStyles()
+  rebuildTurfAreas()
 }
 
 /** Pan/zoom to a turf's doors (the chips above the map). Works off door
@@ -681,6 +720,7 @@ async function geolocateVisible() {
       () => huntUnmounted,
     )
     if (!huntUnmounted) {
+      rebuildTurfAreas()
       flashGeoNote(`Placed ${done} of ${missing.length} pins.`)
     }
   } finally {
@@ -698,6 +738,18 @@ function focusAllMyTurf() {
     if (turfId && myTurfIds.value.has(turfId) && marker.position) {
       bounds.extend(marker.position)
     }
+  }
+  if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
+}
+
+/** Frame every turf anyone has — the whole campaign's cut geography in one
+ * look. Works off door data (not markers), so it doesn't matter whether the
+ * pins are built yet. */
+function focusAllTurf() {
+  if (!map) return
+  const bounds = new google.maps.LatLngBounds()
+  for (const [addressId, door] of doorInfoByAddress) {
+    if (turfByAddress.value.has(addressId)) bounds.extend({ lat: door.lat, lng: door.lng })
   }
   if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
 }
@@ -1051,6 +1103,7 @@ onUnmounted(() => {
   clearDensityDots()
   addressById.clear()
   doorInfoByAddress.clear()
+  areasLayer?.dispose()
   cityLayer?.dispose()
   if (myPosMarker) {
     myPosMarker.map = null
@@ -1085,10 +1138,10 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- Turf assigned to you (or a squad you're in today). Tapping a chip
-         jumps the map to that turf's doors, which carry a ring in the same
-         color. -->
-    <div v-if="myTurfs.length" class="turf-chips">
+    <!-- Turf assigned to you (or a squad you're in today) gets a zoom chip;
+         "All turf" frames every turf anyone has — visible to every role, so
+         a plain canvasser can still see how the campaign's ground is cut. -->
+    <div v-if="myTurfs.length || anyTurfDoors" class="turf-chips">
       <button
         v-if="myTurfs.length > 1"
         class="turf-chip"
@@ -1107,6 +1160,15 @@ onUnmounted(() => {
       >
         <span class="turf-chip-dot" aria-hidden="true"></span>
         Your turf: {{ t.name }}
+      </button>
+      <button
+        v-if="anyTurfDoors"
+        class="turf-chip"
+        :style="{ '--turf-color': 'var(--text-muted)' }"
+        @click="focusAllTurf"
+      >
+        <span class="turf-chip-dot" aria-hidden="true"></span>
+        All turf
       </button>
     </div>
 
@@ -1144,9 +1206,19 @@ onUnmounted(() => {
           123
         </button>
       </div>
-      <!-- Map layers: city/village limits. Below the pin-style toggle, same
-           chrome. -->
+      <!-- Map layers: turf area shading and city/village limits. Below the
+           pin-style toggle, same chrome. -->
       <div class="layer-toggle" role="group" aria-label="Map layers">
+        <button
+          type="button"
+          class="layer-btn"
+          :class="{ active: showAreas }"
+          :aria-pressed="showAreas"
+          title="Shade each turf's area on the map"
+          @click="toggleAreas"
+        >
+          Turf
+        </button>
         <button
           type="button"
           class="layer-btn"
@@ -1570,6 +1642,7 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+  color: var(--text);
 }
 
 .street-search:focus {
