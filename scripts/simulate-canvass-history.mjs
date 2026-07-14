@@ -35,6 +35,10 @@
 //   node scripts/simulate-canvass-history.mjs             # create everything
 //   node scripts/simulate-canvass-history.mjs --wipe      # remove it all (reads sim-manifest.json)
 //
+// Companion: scripts/simulate-turf-history.mjs retrofits turf cuts + daily
+// dispatch history onto this data (run it after this script); its turf ids
+// land in the same manifest and --wipe here removes them too.
+//
 // Reads SUPABASE_SERVICE_ROLE_KEY from the gitignored KEYS-AND-ACCESS.md.
 // Writes SIM-USERS.md (shared demo password + roster) and sim-manifest.json,
 // both gitignored.
@@ -786,6 +790,21 @@ async function runWipe() {
   for (let i = 0; i < manifest.squadIds.length; i += 100) {
     const { error } = await supa.from('squads').delete().in('id', manifest.squadIds.slice(i, i + 100))
     if (error) throw new Error(`squads: ${error.message}`)
+  }
+  // Turf history added by simulate-turf-history.mjs (if it ran). Deleting the
+  // turfs releases their doors (FK set null) and cascades turf_assignments;
+  // then clear the snapshot names left on any surviving non-sim knocks.
+  if (manifest.turfIds?.length) {
+    for (let i = 0; i < manifest.turfIds.length; i += 100) {
+      const { error } = await supa.from('turfs').delete().in('id', manifest.turfIds.slice(i, i + 100))
+      if (error) throw new Error(`turfs: ${error.message}`)
+    }
+    const { error: stampErr } = await supa
+      .from('knock_logs')
+      .update({ turf_name: null })
+      .is('turf_id', null)
+      .not('turf_name', 'is', null)
+    if (stampErr) throw new Error(`knock turf stamps: ${stampErr.message}`)
   }
   for (const id of manifest.userIds) {
     const { error } = await supa.auth.admin.deleteUser(id)

@@ -44,7 +44,7 @@ const barItems = computed<NavItem[]>(() => {
   // (ChatDrawer), reachable from every screen via the right-edge handle.
   // Admins get oversight tabs only; campaign managers run the day-to-day
   // and hold what used to be the admin nav.
-  // Admins run the org, not a campaign — no Bulletin/Boards/Squads for them.
+  // Admins run the org, not a campaign — no Bulletin/Leaders/Squads for them.
   if (auth.profile.role === 'admin') {
     return [
       { to: '/admin/roles', label: 'Roles', icon: 'shield' },
@@ -56,7 +56,7 @@ const barItems = computed<NavItem[]>(() => {
       { to: '/admin', label: 'Dashboard', icon: 'dashboard' },
       { to: '/canvass', label: 'Canvass', icon: 'pin' },
       { to: '/squads', label: 'Squads', icon: 'squads' },
-      { to: '/leaderboard', label: 'Boards', icon: 'trophy' },
+      { to: '/leaderboard', label: 'Leaders', icon: 'trophy' },
     ]
   }
   // Canvassers and squad leaders share the same tabs — knocking doors is
@@ -65,7 +65,7 @@ const barItems = computed<NavItem[]>(() => {
     { to: '/canvass', label: 'Canvass', icon: 'pin' },
     { to: '/squad', label: 'Squad', icon: 'squads' },
     { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
-    { to: '/leaderboard', label: 'Boards', icon: 'trophy' },
+    { to: '/leaderboard', label: 'Leaders', icon: 'trophy' },
   ]
 })
 
