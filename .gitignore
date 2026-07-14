@@ -12,6 +12,12 @@ files.zip
 
 # Real secrets — never commit
 KEYS-AND-ACCESS.md
+TEST-ACCOUNT-CREDENTIALS.local.md
+
+# Simulated-demo artifacts: shared password for the fake canvasser accounts +
+# the manifest of created ids (needed by simulate-canvass-history.mjs --wipe)
+SIM-USERS.md
+sim-manifest.json
 
 # Project overview for Claude Code — local-only, not shared via git
 CLAUDE.md
