@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { RealtimeChannel } from '@supabase/supabase-js'
-import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import { Geolocation } from '@capacitor/geolocation'
 import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
-import { CityLimitsLayer, TurfAreasLayer, dotClusterRenderer, readMapPref, writeMapPref } from '@/lib/mapLayers'
+import { CityLimitsLayer, TurfAreasLayer, densityDotElement, readMapPref, writeMapPref } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
 import { geocodeAndCache, geocodeMissing, streetsAtPoints } from '@/lib/geocode'
 import { fetchAllRows, supabase } from '@/lib/supabase'
@@ -26,6 +25,14 @@ const DEFAULT_ZOOM = 14
  * only mean something when you're close enough to be looking at one street,
  * and number chips floating over a whole town read as noise. */
 const NUMBERS_MIN_ZOOM = 16
+/** Below this zoom, individual pins give way to clickable density dots (tap
+ * one to zoom into that area). With ~10k geocoded doors, town-level zooms
+ * would otherwise mean thousands of live marker elements — the main thing
+ * that made Hunt crawl on phones. */
+const PINS_MIN_ZOOM = 15
+/** Hard cap on live pin elements even at close zoom (nearest to the map
+ * center win) — a safety net, not something a normal viewport hits. */
+const MAX_VISIBLE_PINS = 2000
 
 /** `persons(count)` is a PostgREST aggregate embed — one row per address
  * with a single { count } entry, giving household roster size in the same
@@ -126,7 +133,12 @@ const doorInfoByAddress = new Map<string, DoorPoint>()
 const loadError = ref('')
 
 let map: google.maps.Map | null = null
-let clusterer: MarkerClusterer | null = null
+/** Every geocoded door we know about, markers or not — the source of truth
+ * the viewport renderer draws from. Markers are created lazily for doors in
+ * (or near) the current view and torn down when they leave it. */
+const addressById = new Map<string, AddressWithRoster>()
+let densityMarkers: google.maps.marker.AdvancedMarkerElement[] = []
+let densityZoom = -1
 let areasLayer: TurfAreasLayer | null = null
 let cityLayer: CityLimitsLayer | null = null
 let markersByAddress = new Map<string, google.maps.marker.AdvancedMarkerElement>()
@@ -258,12 +270,16 @@ function rebuildTurfAreas() {
 }
 
 async function fetchKnockedToday(): Promise<Set<string>> {
-  const { data } = await supabase
-    .from('knock_logs')
-    .select('household_id')
-    .gte('occurred_at', startOfLocalDayISO())
-    .not('household_id', 'is', null)
-  return new Set((data ?? []).map((r) => r.household_id as string))
+  const rows = await fetchAllRows<{ household_id: string }>((from, to) =>
+    supabase
+      .from('knock_logs')
+      .select('household_id')
+      .gte('occurred_at', startOfLocalDayISO())
+      .not('household_id', 'is', null)
+      .order('id')
+      .range(from, to),
+  )
+  return new Set(rows.map((r) => r.household_id))
 }
 
 function applyStatusAndSummary(
@@ -277,12 +293,12 @@ function applyStatusAndSummary(
 }
 
 /** Each pin is a plain DOM dot (AdvancedMarkerElement content) rather than a
- * classic google.maps.Symbol. On the vector map these are GPU-composited and
- * far lighter than ~2k legacy Marker overlays. Fixed size — the clusterer
- * handles decluttering when zoomed out, so there's no per-zoom rescale loop
- * (that loop, running over every marker on every zoom tick, was the main
- * thing making the map feel sluggish). Located pin stands out larger with a
- * dark ring and sits above its neighbors. */
+ * classic google.maps.Symbol — far lighter than legacy Marker overlays.
+ * Fixed size — the viewport renderer handles decluttering (density dots when
+ * zoomed out), so there's no per-zoom rescale loop (that loop, running over
+ * every marker on every zoom tick, was the main thing making the map feel
+ * sluggish). Located pin stands out larger with a dark ring and sits above
+ * its neighbors. */
 function styleMarker(marker: google.maps.marker.AdvancedMarkerElement, addressId: string) {
   const el = marker.content as HTMLElement
   const outcome = statusByHousehold.value.get(addressId)
@@ -340,11 +356,19 @@ function refreshAllPinStyles() {
   for (const [id, marker] of markersByAddress) styleMarker(marker, id)
 }
 
-function addOrUpdateMarker(a: AddressWithRoster) {
+/** Register a door (turf membership, shading info, viewport source-of-truth)
+ * without creating a marker for it. */
+function registerDoor(a: AddressWithRoster) {
   if (a.turf_id) turfByAddress.value.set(a.id, a.turf_id)
   else turfByAddress.value.delete(a.id)
-  if (a.lat == null || a.lng == null || !map) return
+  if (a.lat == null || a.lng == null) return
+  addressById.set(a.id, a)
   doorInfoByAddress.set(a.id, { lat: a.lat, lng: a.lng, street: a.street })
+}
+
+function addOrUpdateMarker(a: AddressWithRoster) {
+  registerDoor(a)
+  if (a.lat == null || a.lng == null || !map) return
   let marker = markersByAddress.get(a.id)
   if (!marker) {
     const content = document.createElement('div')
@@ -355,14 +379,117 @@ function addOrUpdateMarker(a: AddressWithRoster) {
       title: `${a.street}${a.unit ? ' ' + a.unit : ''}`,
       content,
       gmpClickable: true,
+      map,
     })
     marker.addListener('gmp-click', () => void locateAddress(a))
     markersByAddress.set(a.id, marker)
-    clusterer?.addMarker(marker)
   } else {
     marker.position = { lat: a.lat, lng: a.lng }
   }
   styleMarker(marker, a.id)
+}
+
+// --- Viewport-scoped pins ---
+// Runs on every map 'idle' (pan/zoom settled, never per zoom tick). Zoomed
+// out: no individual pins at all, just density dots — tap one to zoom into
+// that patch. Zoomed in: real pins, but only for doors inside the padded
+// viewport; everything that left the view is torn down.
+
+function renderVisibleDoors() {
+  if (!map) return
+  const zoom = map.getZoom() ?? mapZoom
+  if (zoom < PINS_MIN_ZOOM) {
+    for (const [id, marker] of markersByAddress) {
+      if (id === locatedAddressId.value) continue // keep the highlighted pin
+      marker.map = null
+      markersByAddress.delete(id)
+    }
+    renderDensityDots(zoom)
+    return
+  }
+  clearDensityDots()
+  const b = map.getBounds()
+  if (!b) return
+  // Pad by half a viewport each side so short pans land on already-built pins.
+  const ne = b.getNorthEast()
+  const sw = b.getSouthWest()
+  const padLat = (ne.lat() - sw.lat()) / 2
+  const padLng = (ne.lng() - sw.lng()) / 2
+  const minLat = sw.lat() - padLat
+  const maxLat = ne.lat() + padLat
+  const minLng = sw.lng() - padLng
+  const maxLng = ne.lng() + padLng
+  let inView: AddressWithRoster[] = []
+  for (const a of addressById.values()) {
+    if (a.lat! >= minLat && a.lat! <= maxLat && a.lng! >= minLng && a.lng! <= maxLng) {
+      inView.push(a)
+    }
+  }
+  if (inView.length > MAX_VISIBLE_PINS) {
+    const c = map.getCenter()
+    const origin = c ? { lat: c.lat(), lng: c.lng() } : FALLBACK_CENTER
+    inView = inView
+      .sort(
+        (a, b2) =>
+          flatDistance({ lat: a.lat!, lng: a.lng! }, origin) -
+          flatDistance({ lat: b2.lat!, lng: b2.lng! }, origin),
+      )
+      .slice(0, MAX_VISIBLE_PINS)
+  }
+  const keepIds = new Set(inView.map((a) => a.id))
+  for (const [id, marker] of markersByAddress) {
+    if (!keepIds.has(id) && id !== locatedAddressId.value) {
+      marker.map = null
+      markersByAddress.delete(id)
+    }
+  }
+  for (const a of inView) {
+    if (!markersByAddress.has(a.id)) addOrUpdateMarker(a)
+  }
+}
+
+/** Grid-bucket every known door into ~72px cells and draw one clickable
+ * density dot per cell (same look as the Squad/Turf cluster bubbles).
+ * Tapping a dot zooms to that cell's doors — repeat taps walk you down
+ * until real pins take over at PINS_MIN_ZOOM. */
+function renderDensityDots(zoom: number) {
+  // Buckets are global (not viewport-dependent) — panning at the same zoom
+  // reuses the existing dots; only a zoom change re-bins.
+  if (zoom === densityZoom && densityMarkers.length) return
+  clearDensityDots()
+  if (!map) return
+  densityZoom = zoom
+  const worldPx = 256 * 2 ** zoom
+  const cellLng = (360 * 72) / worldPx
+  const cellLat = cellLng * 0.77 // ≈cos(40°N): keeps cells visually squarish here
+  type Bucket = { n: number; sumLat: number; sumLng: number; b: google.maps.LatLngBounds }
+  const buckets = new Map<string, Bucket>()
+  for (const a of addressById.values()) {
+    const key = `${Math.floor(a.lat! / cellLat)}:${Math.floor(a.lng! / cellLng)}`
+    let bkt = buckets.get(key)
+    if (!bkt) buckets.set(key, (bkt = { n: 0, sumLat: 0, sumLng: 0, b: new google.maps.LatLngBounds() }))
+    bkt.n++
+    bkt.sumLat += a.lat!
+    bkt.sumLng += a.lng!
+    bkt.b.extend({ lat: a.lat!, lng: a.lng! })
+  }
+  for (const bkt of buckets.values()) {
+    const marker = new google.maps.marker.AdvancedMarkerElement({
+      position: { lat: bkt.sumLat / bkt.n, lng: bkt.sumLng / bkt.n },
+      content: densityDotElement(bkt.n),
+      zIndex: 300,
+      gmpClickable: true,
+      map,
+    })
+    marker.addListener('gmp-click', () => map?.fitBounds(bkt.b, 48))
+    densityMarkers.push(marker)
+  }
+}
+
+function clearDensityDots() {
+  for (const marker of densityMarkers) marker.map = null
+  densityMarkers = []
+  densityZoom = -1
 }
 
 /** Where the map should open: the door this canvasser most recently knocked
@@ -431,7 +558,9 @@ async function initialize() {
       refreshAllPinStyles()
     }
   })
-  clusterer = new MarkerClusterer({ map, markers: [], renderer: dotClusterRenderer() })
+  // Pins and density dots are (re)built on every settled pan/zoom — never
+  // per zoom tick, and never for doors outside the padded viewport.
+  map.addListener('idle', renderVisibleDoors)
 
   areasLayer = new TurfAreasLayer(map)
   areasLayer.setVisible(showAreas.value)
@@ -442,7 +571,7 @@ async function initialize() {
   const myTurfBounds = new google.maps.LatLngBounds()
   for (const a of mapAddresses) {
     if (a.lat == null || a.lng == null) continue
-    addOrUpdateMarker(a)
+    registerDoor(a)
     bounds.extend({ lat: a.lat, lng: a.lng })
     if (a.turf_id && myTurfIds.value.has(a.turf_id)) {
       myTurfBounds.extend({ lat: a.lat, lng: a.lng })
@@ -450,8 +579,8 @@ async function initialize() {
   }
   // Opening frame, best anchor first: all of your (and your today-squad's)
   // turf together — the crew's whole assignment in one look — then your last
-  // knocked door, then every pin. (Fitting all ~2k county-wide pins zooms way
-  // out and looks like the map "doesn't know where to start".)
+  // knocked door, then every pin. (Fitting all ~10k county-wide pins zooms
+  // way out and looks like the map "doesn't know where to start".)
   if (!myTurfBounds.isEmpty()) map.fitBounds(myTurfBounds, 64)
   else if (!lastCenter && !bounds.isEmpty()) map.fitBounds(bounds, 48)
   rebuildTurfAreas()
@@ -481,13 +610,14 @@ async function refreshStatuses() {
   rebuildTurfAreas()
 }
 
-/** Pan/zoom to a turf's doors (the chips above the map). */
+/** Pan/zoom to a turf's doors (the chips above the map). Works off door
+ * data, not markers — the turf's pins may not be built yet. */
 function focusTurf(turfId: string) {
   if (!map) return
   const bounds = new google.maps.LatLngBounds()
-  for (const [addressId, marker] of markersByAddress) {
-    if (turfByAddress.value.get(addressId) === turfId && marker.position) {
-      bounds.extend(marker.position)
+  for (const [addressId, door] of doorInfoByAddress) {
+    if (turfByAddress.value.get(addressId) === turfId) {
+      bounds.extend({ lat: door.lat, lng: door.lng })
     }
   }
   if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
@@ -953,8 +1083,10 @@ onUnmounted(() => {
     void supabase.removeChannel(knockFeed)
     knockFeed = null
   }
-  clusterer?.clearMarkers()
+  for (const marker of markersByAddress.values()) marker.map = null
   markersByAddress.clear()
+  clearDensityDots()
+  addressById.clear()
   doorInfoByAddress.clear()
   areasLayer?.dispose()
   cityLayer?.dispose()
