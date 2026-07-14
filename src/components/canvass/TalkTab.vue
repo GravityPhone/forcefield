@@ -6,19 +6,33 @@ import { computed } from 'vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import { OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, OUTCOME_REQUIRES_PERSON } from '@/lib/outcomes'
 import { useTalkStore, type KnockHistoryEntry } from '@/stores/talk'
+import type { KnockOutcome } from '@/types'
 
 const talk = useTalkStore()
 
-// Household-level outcomes (Not Home / Skip / Hostile) belong to the door,
-// not a person, so they flood the address banner up top — but only while
-// they're the door's LATEST word. Once someone answers and gets a personal
-// outcome, their roster bubble carries the signal and the banner clears.
-// history[0] is newest-first and optimistically updated, so this recolors
-// the moment an outcome is logged (and reverts on undo).
-const householdOutcome = computed(() => {
+// Address-banner status — the same rules as the map pins (doorStatusOutcome
+// in lib/outcomes.ts), with labels: green "Everyone signed" once the whole
+// roster has signed, red while a door-level Skip/Hostile is the latest word
+// (that's how a partly-signed door gets retired), yellow "1/3 signed" while
+// somebody-but-not-everybody signed, and otherwise a household-level latest
+// outcome (Not Home / Skip / Hostile) floods as before — person-level
+// outcomes stay on their roster bubbles. history is newest-first and
+// optimistically updated, so this recolors the moment an outcome is logged
+// (and reverts on undo).
+const banner = computed<{ outcome: KnockOutcome; label: string } | null>(() => {
+  const signedIds = new Set(
+    talk.history.filter((h) => h.outcome === 'signed' && h.person_id).map((h) => h.person_id),
+  )
+  const total = talk.roster.length
+  if (total > 0 && signedIds.size >= total) return { outcome: 'signed', label: 'Everyone signed' }
   const latest = talk.history[0]
-  if (!latest || OUTCOME_REQUIRES_PERSON[latest.outcome]) return null
-  return latest.outcome
+  const householdLatest = latest && !OUTCOME_REQUIRES_PERSON[latest.outcome] ? latest.outcome : null
+  if (householdLatest === 'skip' || householdLatest === 'hostile') {
+    return { outcome: householdLatest, label: OUTCOME_LABELS[householdLatest] }
+  }
+  if (signedIds.size > 0) return { outcome: 'maybe', label: `${signedIds.size}/${total} signed` }
+  if (householdLatest) return { outcome: householdLatest, label: OUTCOME_LABELS[householdLatest] }
+  return null
 })
 
 // --- Door history display helpers ---
@@ -67,12 +81,12 @@ const PARTLY_SIGNED_OPTIONS = [
     <div
       v-if="talk.selectedAddress"
       class="card address-card"
-      :style="householdOutcome ? { borderColor: OUTCOME_HEX[householdOutcome] } : undefined"
+      :style="banner ? { borderColor: OUTCOME_HEX[banner.outcome] } : undefined"
     >
       <div
         class="address-head"
-        :class="{ tinted: householdOutcome }"
-        :style="householdOutcome ? { background: OUTCOME_HEX[householdOutcome], color: OUTCOME_INK[householdOutcome] } : undefined"
+        :class="{ tinted: banner }"
+        :style="banner ? { background: OUTCOME_HEX[banner.outcome], color: OUTCOME_INK[banner.outcome] } : undefined"
       >
         <div>
           <div class="address-line">
@@ -80,8 +94,8 @@ const PARTLY_SIGNED_OPTIONS = [
             }}{{ talk.selectedAddress.unit ? ' ' + talk.selectedAddress.unit : '' }}
           </div>
           <div class="muted address-city">{{ talk.selectedAddress.city }}</div>
-          <span v-if="householdOutcome" class="address-outcome">
-            {{ OUTCOME_LABELS[householdOutcome] }}
+          <span v-if="banner" class="address-outcome">
+            {{ banner.label }}
           </span>
         </div>
         <button class="btn btn-sm" @click="talk.clearAddress()">Clear</button>

@@ -20,8 +20,11 @@ export const OUTCOMES: { value: KnockOutcome; label: string; hex: string; ink: s
   { value: 'didnt_sign', label: "Didn't Sign", hex: '#d64545', ink: '#ffffff', requiresPerson: true },
   { value: 'maybe', label: 'Maybe', hex: '#e0a02e', ink: '#181c26', requiresPerson: true },
   { value: 'not_home', label: 'Not Home', hex: '#8a90a5', ink: '#181c26', requiresPerson: false },
-  { value: 'skip', label: 'Skip', hex: '#b9bdcc', ink: '#181c26', requiresPerson: false },
-  { value: 'hostile', label: 'Hostile', hex: '#7a2e2e', ink: '#ffffff', requiresPerson: false },
+  // Skip and Hostile share Didn't Sign's red ON PURPOSE (2026-07-14): to a
+  // canvasser all three mean the same thing — "this door is a no, don't come
+  // back". The labels/positions tell them apart where it matters.
+  { value: 'skip', label: 'Skip', hex: '#d64545', ink: '#ffffff', requiresPerson: false },
+  { value: 'hostile', label: 'Hostile', hex: '#d64545', ink: '#ffffff', requiresPerson: false },
 ]
 
 export const OUTCOME_LABELS: Record<KnockOutcome, string> = Object.fromEntries(
@@ -43,6 +46,34 @@ export const OUTCOME_REQUIRES_PERSON: Record<KnockOutcome, boolean> = Object.fro
 
 /** Pin color for addresses with no knock logged yet. */
 export const PIN_DEFAULT_HEX = '#2f6fed'
+
+/** Effective door status for map pins / status coloring (2026-07-14), from
+ * the door's latest outcome plus how many of its residents have signed
+ * (household_latest_knock's signed_count/person_count). The rules, in
+ * precedence order:
+ *
+ *  1. EVERYONE living there signed → 'signed' (green — door complete).
+ *  2. Latest outcome is Skip or Hostile → that outcome (red). These are
+ *     door-level "don't come back" calls, so they close even a partly-signed
+ *     door — hitting Skip is exactly how a canvasser retires a yellow door
+ *     whose remaining names turn out to be stale.
+ *  3. Somebody signed but not everybody → 'maybe' (yellow — worth another
+ *     look). Person-level outcomes (e.g. one resident's Didn't Sign) do NOT
+ *     override this: other residents are still gettable.
+ *  4. Otherwise the latest outcome as-is (or null = never knocked → blue).
+ */
+export function doorStatusOutcome(
+  latest: KnockOutcome | null | undefined,
+  signedCount: number | null | undefined,
+  personCount: number | null | undefined,
+): KnockOutcome | null {
+  const signed = signedCount ?? 0
+  const total = personCount ?? 0
+  if (signed > 0 && total > 0 && signed >= total) return 'signed'
+  if (latest === 'skip' || latest === 'hostile') return latest
+  if (signed > 0) return 'maybe'
+  return latest ?? null
+}
 
 /** Coarse 4-bucket status color for the Hunt "Knock" button — green once
  * signed, yellow while still a maybe, red once it's a closed no (didn't

@@ -11,7 +11,7 @@ import { fetchAllRows, supabase } from '@/lib/supabase'
 import { localToday, startOfLocalDayISO } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
 import { useTalkStore } from '@/stores/talk'
-import { OUTCOME_HEX, PIN_DEFAULT_HEX, knockButtonHex } from '@/lib/outcomes'
+import { OUTCOME_HEX, PIN_DEFAULT_HEX, doorStatusOutcome, knockButtonHex } from '@/lib/outcomes'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import OutcomeIndicatorGrid from './OutcomeIndicatorGrid.vue'
 import { fadeUp } from '@/lib/motion'
@@ -106,7 +106,7 @@ function toggleCity() {
   void cityLayer?.setVisible(showCity.value)
 }
 const locatedAddress = ref<AddressWithRoster | null>(null)
-const statusByHousehold = ref<Map<string, KnockOutcome>>(new Map())
+const statusByHousehold = ref<Map<string, HouseholdLatestKnock>>(new Map())
 const summaryByHousehold = ref<Map<string, HouseholdKnockSummary>>(new Map())
 /** Doors anyone in the org knocked since local midnight — the "someone was
  * already here today" signal on pins and result rows, so crews working the
@@ -290,7 +290,7 @@ function applyStatusAndSummary(
   summaryData: HouseholdKnockSummary[] | null,
   todayData?: Set<string>,
 ) {
-  statusByHousehold.value = new Map((statusData ?? []).map((s) => [s.household_id, s.outcome]))
+  statusByHousehold.value = new Map((statusData ?? []).map((s) => [s.household_id, s]))
   summaryByHousehold.value = new Map((summaryData ?? []).map((s) => [s.household_id, s]))
   if (todayData) knockedToday.value = todayData
 }
@@ -304,7 +304,7 @@ function applyStatusAndSummary(
  * its neighbors. */
 function styleMarker(marker: google.maps.marker.AdvancedMarkerElement, addressId: string) {
   const el = marker.content as HTMLElement
-  const outcome = statusByHousehold.value.get(addressId)
+  const outcome = doorOutcomeFor(addressId)
   const isLocated = addressId === locatedAddressId.value
   // Common look (shared by both modes): outcome color, white ring, dark ring
   // + raised when it's the located pin.
@@ -791,7 +791,18 @@ function subscribeToKnockFeed() {
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'knock_logs' }, (payload) => {
       const knock = payload.new as KnockLog
       if (!knock.household_id) return
-      statusByHousehold.value.set(knock.household_id, knock.outcome)
+      // Live-update the status row. signed_count is approximate here (we
+      // can't tell a repeat signer from a new one without a refetch —
+      // refreshStatuses corrects it on the next visit); person_count falls
+      // back to the address's roster embed for a door's first-ever knock.
+      const prev = statusByHousehold.value.get(knock.household_id)
+      statusByHousehold.value.set(knock.household_id, {
+        household_id: knock.household_id,
+        outcome: knock.outcome,
+        occurred_at: knock.occurred_at,
+        signed_count: (prev?.signed_count ?? 0) + (knock.outcome === 'signed' ? 1 : 0),
+        person_count: prev?.person_count ?? householdSize(addressById.get(knock.household_id)) ?? 0,
+      })
       if (new Date(knock.occurred_at) >= new Date(startOfLocalDayISO())) {
         knockedToday.value.add(knock.household_id)
       }
@@ -848,12 +859,22 @@ function householdSize(address: Partial<RosterCount> | null | undefined): number
   return address?.persons?.[0]?.count ?? null
 }
 
-/** Knock button color reflects the latest outcome at that door — same data
+/** Effective status outcome for a door — latest knock re-read through the
+ * all/partly-signed rules (green only when the whole roster signed, yellow
+ * while partly signed; see doorStatusOutcome). Drives pins AND the knock
+ * button so every surface tells the same story. */
+function doorOutcomeFor(addressId: string): KnockOutcome | null {
+  const row = statusByHousehold.value.get(addressId)
+  if (!row) return null
+  return doorStatusOutcome(row.outcome, row.signed_count, row.person_count)
+}
+
+/** Knock button color reflects the door's effective status — same data
  * already driving the map pins (household_latest_knock), just re-bucketed
  * into 4 colors instead of the pins' 6. */
 function knockColorFor(addressId: string | null | undefined): string {
   if (!addressId) return knockButtonHex(null)
-  return knockButtonHex(statusByHousehold.value.get(addressId))
+  return knockButtonHex(doorOutcomeFor(addressId))
 }
 
 function wasKnockedToday(addressId: string | null | undefined): boolean {

@@ -35,8 +35,12 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Pin colors',
         body:
-          'Blue means nobody has knocked yet. Other colors show the door’s latest ' +
-          'outcome — green is a signature. These colors never change with your theme.',
+          'Blue means nobody has knocked yet. Green means everyone in the household ' +
+          'signed. Yellow means take another look — someone signed but not everybody, ' +
+          'or the door was a maybe. Red means done, don’t go back: didn’t sign, skip, ' +
+          'or hostile. Gray is not home. If a yellow door’s remaining names look stale ' +
+          '(people who moved away), log Skip to retire it. These colors never change ' +
+          'with your theme.',
       },
       {
         heading: 'Spotty signal',

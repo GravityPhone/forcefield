@@ -32,7 +32,7 @@ import type { DoorPoint } from '@/lib/mapLayers'
 import { walkRanges } from '@/lib/doorPath'
 import { geocodeAndCache, geocodeMissing, streetsAtPoints } from '@/lib/geocode'
 import { localToday } from '@/lib/day'
-import { OUTCOME_HEX, PIN_DEFAULT_HEX } from '@/lib/outcomes'
+import { OUTCOME_HEX, PIN_DEFAULT_HEX, doorStatusOutcome } from '@/lib/outcomes'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import { useAuthStore } from '@/stores/auth'
@@ -583,7 +583,16 @@ async function fetchKnockStatuses() {
     const rows = await fetchAllRows<HouseholdLatestKnock>((from, to) =>
       supabase.from('household_latest_knock').select('*').order('household_id').range(from, to),
     )
-    statusByAddress.value = new Map(rows.map((r) => [r.household_id, r.outcome]))
+    // Effective status, not the raw latest outcome — green only when the
+    // whole roster signed, yellow while partly signed (doorStatusOutcome),
+    // so the cutter's fills match Scout exactly. No realtime feed here, so
+    // computing once at fetch time is enough.
+    statusByAddress.value = new Map(
+      rows.map((r) => [
+        r.household_id,
+        doorStatusOutcome(r.outcome, r.signed_count, r.person_count) ?? r.outcome,
+      ]),
+    )
   } catch {
     /* keep previous statuses */
   }

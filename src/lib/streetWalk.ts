@@ -6,9 +6,12 @@ export type WalkDirection = 'ascending' | 'descending'
 export type WalkParity = 'both' | 'even' | 'odd'
 
 /** Latest outcomes that mean "don't send the canvasser back to this door" —
- * a hostile household stays hostile, and a flat refusal is a refusal. Softer
- * outcomes (not home, maybe, skip) stay in the rotation for another pass. */
-const CLOSED_OUTCOMES: KnockOutcome[] = ['hostile', 'didnt_sign']
+ * a hostile household stays hostile, a flat refusal is a refusal, and Skip
+ * is the canvasser's explicit "retire this door" call (2026-07-14: it's how
+ * a partly-signed door whose remaining names are stale gets closed out, and
+ * it colors red on the maps to match). Softer outcomes (not home, maybe)
+ * stay in the rotation for another pass. */
+const CLOSED_OUTCOMES: KnockOutcome[] = ['hostile', 'didnt_sign', 'skip']
 
 export interface NextHouseOptions {
   /** Whether to stop at households where someone signed but other residents

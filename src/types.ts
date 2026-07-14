@@ -204,6 +204,11 @@ export interface HouseholdLatestKnock {
   household_id: string
   outcome: KnockOutcome
   occurred_at: string
+  /** Distinct residents who have EVER signed — feeds the all/partly-signed
+   * door colors (see doorStatusOutcome in lib/outcomes.ts). */
+  signed_count: number
+  /** Roster size (persons at this address). */
+  person_count: number
 }
 
 export interface HouseholdKnockSummary {
