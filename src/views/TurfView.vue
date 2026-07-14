@@ -33,7 +33,7 @@ import { walkRanges } from '@/lib/doorPath'
 import { geocodeAndCache, geocodeMissing, streetsAtPoints } from '@/lib/geocode'
 import { localToday } from '@/lib/day'
 import { OUTCOME_HEX, PIN_DEFAULT_HEX } from '@/lib/outcomes'
-import { supabase } from '@/lib/supabase'
+import { fetchAllRows, supabase } from '@/lib/supabase'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import { useAuthStore } from '@/stores/auth'
 import { useSquadsStore } from '@/stores/squads'
@@ -541,13 +541,14 @@ function upsertMarker(a: AddressLite) {
 }
 
 async function fetchAddresses(): Promise<AddressLite[]> {
-  const { data, error } = await supabase
-    .from('addresses')
-    .select('id, street, unit, city, zip, lat, lng, turf_id')
-    .not('lat', 'is', null)
-    .limit(2000)
-  if (error) throw error
-  return (data ?? []) as AddressLite[]
+  return fetchAllRows<AddressLite>((from, to) =>
+    supabase
+      .from('addresses')
+      .select('id, street, unit, city, zip, lat, lng, turf_id')
+      .not('lat', 'is', null)
+      .order('id')
+      .range(from, to),
+  )
 }
 
 async function fetchTurfs() {
@@ -575,12 +576,17 @@ async function fetchTurfs() {
   historyByTurf.value = hist
 }
 
-/** Latest outcome per door, for the status-colored pin fills. */
+/** Latest outcome per door, for the status-colored pin fills. Best-effort:
+ * a failed fetch keeps whatever colors we already had. */
 async function fetchKnockStatuses() {
-  const { data } = await supabase.from('household_latest_knock').select('*')
-  statusByAddress.value = new Map(
-    ((data ?? []) as HouseholdLatestKnock[]).map((r) => [r.household_id, r.outcome]),
-  )
+  try {
+    const rows = await fetchAllRows<HouseholdLatestKnock>((from, to) =>
+      supabase.from('household_latest_knock').select('*').order('household_id').range(from, to),
+    )
+    statusByAddress.value = new Map(rows.map((r) => [r.household_id, r.outcome]))
+  } catch {
+    /* keep previous statuses */
+  }
 }
 
 /** Which of my squads have no team_lead/campaign_manager/admin member — the

@@ -7,7 +7,7 @@ import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import { fadeUp } from '@/lib/motion'
-import { supabase } from '@/lib/supabase'
+import { fetchAllRows, supabase } from '@/lib/supabase'
 import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import { TurfAreasLayer, dotClusterRenderer } from '@/lib/mapLayers'
@@ -175,22 +175,31 @@ async function loadDashboard() {
   ]
   const turfIds = mine.map((t) => t.id)
 
-  const [doorsRes, knocksRes, ...recentRes] = await Promise.all([
+  // Both "whole set" queries page past PostgREST's 1000-row response cap
+  // (a plain .limit() above that silently truncates). Best-effort: a failed
+  // page just means fewer doors/knocks this refresh, same as before.
+  const [doorsData, knocksData, ...recentRes] = await Promise.all([
     turfIds.length
-      ? supabase
-          .from('addresses')
-          .select('id, street, unit, city, zip, lat, lng, turf_id')
-          .in('turf_id', turfIds)
-          .limit(10000)
-      : Promise.resolve({ data: [] as TurfDoor[] }),
+      ? fetchAllRows<TurfDoor>((from, to) =>
+          supabase
+            .from('addresses')
+            .select('id, street, unit, city, zip, lat, lng, turf_id')
+            .in('turf_id', turfIds)
+            .order('id')
+            .range(from, to),
+        ).catch(() => [] as TurfDoor[])
+      : Promise.resolve([] as TurfDoor[]),
     turfIds.length
-      ? supabase
-          .from('knock_logs')
-          .select('household_id, canvasser_id, addresses!inner(turf_id)')
-          .in('addresses.turf_id', turfIds)
-          .not('household_id', 'is', null)
-          .limit(20000)
-      : Promise.resolve({ data: [] as { household_id: string; canvasser_id: string }[] }),
+      ? fetchAllRows<{ household_id: string; canvasser_id: string }>((from, to) =>
+          supabase
+            .from('knock_logs')
+            .select('household_id, canvasser_id, addresses!inner(turf_id)')
+            .in('addresses.turf_id', turfIds)
+            .not('household_id', 'is', null)
+            .order('id')
+            .range(from, to),
+        ).catch(() => [] as { household_id: string; canvasser_id: string }[])
+      : Promise.resolve([] as { household_id: string; canvasser_id: string }[]),
     // Last doors each member touched — anywhere, not just in turf, so the
     // card always answers "where are they right now". Overfetch then dedupe
     // (re-knocking the same door shouldn't eat the whole list).
@@ -206,16 +215,11 @@ async function loadDashboard() {
   if (seq !== loadSeq) return
 
   squadTurfs.value = mine
-  turfDoors.value = new Map(
-    ((doorsRes.data ?? []) as TurfDoor[]).map((d) => [d.id, d]),
-  )
+  turfDoors.value = new Map(doorsData.map((d) => [d.id, d]))
 
   const knocked = new Set<string>()
   const byMember = new Map<string, Set<string>>()
-  for (const row of (knocksRes.data ?? []) as unknown as {
-    household_id: string
-    canvasser_id: string
-  }[]) {
+  for (const row of knocksData) {
     knocked.add(row.household_id)
     if (memberIds.includes(row.canvasser_id)) {
       let set = byMember.get(row.canvasser_id)

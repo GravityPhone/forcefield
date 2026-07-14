@@ -8,7 +8,7 @@ import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import { CityLimitsLayer, TurfAreasLayer, dotClusterRenderer, readMapPref, writeMapPref } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
 import { geocodeAndCache, geocodeMissing, streetsAtPoints } from '@/lib/geocode'
-import { supabase } from '@/lib/supabase'
+import { fetchAllRows, supabase } from '@/lib/supabase'
 import { localToday, startOfLocalDayISO } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
 import { useTalkStore } from '@/stores/talk'
@@ -163,18 +163,29 @@ function scrollHuntToTop() {
   el.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
-/** Only geocoded addresses get pins — a much smaller, growing-over-time set
- * (Talk mode, and now Hunt's "locate", both geocode on demand). */
+/** Only geocoded addresses get pins — a growing-over-time set (Talk mode,
+ * Hunt's "locate", and "Place pins" all geocode on demand). Now ~10k doors
+ * and climbing, so every query here pages past PostgREST's 1000-row cap. */
 async function fetchMapData() {
-  const [addressesRes, statusRes, summaryRes, todayRes] = await Promise.all([
-    supabase.from('addresses').select('*, persons(count)').not('lat', 'is', null).limit(2000),
-    supabase.from('household_latest_knock').select('*'),
-    supabase.from('household_knock_summary').select('*'),
+  const [addresses, statusRows, summaryRows, todayRes] = await Promise.all([
+    fetchAllRows<AddressWithRoster>((from, to) =>
+      supabase
+        .from('addresses')
+        .select('*, persons(count)')
+        .not('lat', 'is', null)
+        .order('id')
+        .range(from, to),
+    ),
+    fetchAllRows<HouseholdLatestKnock>((from, to) =>
+      supabase.from('household_latest_knock').select('*').order('household_id').range(from, to),
+    ),
+    fetchAllRows<HouseholdKnockSummary>((from, to) =>
+      supabase.from('household_knock_summary').select('*').order('household_id').range(from, to),
+    ),
     fetchKnockedToday(),
   ])
-  if (addressesRes.error) throw addressesRes.error
-  applyStatusAndSummary(statusRes.data, summaryRes.data, todayRes)
-  return (addressesRes.data ?? []) as AddressWithRoster[]
+  applyStatusAndSummary(statusRows, summaryRows, todayRes)
+  return addresses
 }
 
 /** All turfs (for the area shading), plus which of them are mine — dispatched
@@ -446,16 +457,25 @@ async function initialize() {
   pinsLoading.value = false
 }
 
-/** Re-pull statuses/summaries and recolor existing pins (cheap: two view
- * queries). Called whenever Hunt is revisited after logging knocks. */
+/** Re-pull statuses/summaries and recolor existing pins. Called whenever
+ * Hunt is revisited after logging knocks. On a failed refresh (flaky field
+ * signal) keep the colors we already have rather than blanking them. */
 async function refreshStatuses() {
-  const [statusRes, summaryRes, todayRes] = await Promise.all([
-    supabase.from('household_latest_knock').select('*'),
-    supabase.from('household_knock_summary').select('*'),
-    fetchKnockedToday(),
-    fetchTurfs(),
-  ])
-  applyStatusAndSummary(statusRes.data, summaryRes.data, todayRes)
+  try {
+    const [statusRows, summaryRows, todayRes] = await Promise.all([
+      fetchAllRows<HouseholdLatestKnock>((from, to) =>
+        supabase.from('household_latest_knock').select('*').order('household_id').range(from, to),
+      ),
+      fetchAllRows<HouseholdKnockSummary>((from, to) =>
+        supabase.from('household_knock_summary').select('*').order('household_id').range(from, to),
+      ),
+      fetchKnockedToday(),
+      fetchTurfs(),
+    ])
+    applyStatusAndSummary(statusRows, summaryRows, todayRes)
+  } catch {
+    return
+  }
   refreshAllPinStyles()
   rebuildTurfAreas()
 }
