@@ -18,7 +18,7 @@ import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import AppShell from '@/components/AppShell.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import type { SelectOption } from '@/components/ui/AppSelect.vue'
-import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
+import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
   CityLimitsLayer,
@@ -653,6 +653,7 @@ async function initialize() {
     center: FALLBACK_CENTER,
     zoom: 14,
     mapId: GOOGLE_MAPS_MAP_ID,
+    renderingType: MAP_RENDERING_TYPE,
     streetViewControl: false,
     mapTypeControl: false,
     fullscreenControl: false,

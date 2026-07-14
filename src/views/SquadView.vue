@@ -8,7 +8,7 @@ import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import { fadeUp } from '@/lib/motion'
 import { fetchAllRows, supabase } from '@/lib/supabase'
-import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
+import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import { TurfAreasLayer, dotClusterRenderer } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
@@ -302,8 +302,9 @@ async function initMap() {
   map = new google.maps.Map(el, {
     center: FALLBACK_CENTER,
     zoom: 13,
-    // Vector map — required for AdvancedMarker avatar pins.
+    // mapId — required for AdvancedMarker avatar pins.
     mapId: GOOGLE_MAPS_MAP_ID,
+    renderingType: MAP_RENDERING_TYPE,
     streetViewControl: false,
     mapTypeControl: false,
     fullscreenControl: false,

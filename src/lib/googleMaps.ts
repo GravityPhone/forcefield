@@ -8,6 +8,17 @@ import { GOOGLE_MAPS_API_KEY } from './config'
  * UI acknowledge it instead of leaving only the cryptic built-in dialog. */
 export const mapsAuthError = ref(false)
 
+/** Every app map must pass this as renderingType. The default (vector)
+ * renderer stopped painting our cloud style entirely on 2026-07-13: the map
+ * initializes, overlays and AdvancedMarkers draw, but the WebGL basemap
+ * never produces a frame — on every device, on both the weekly and
+ * quarterly API channels, with all config/tile RPCs returning 200. Raster
+ * rendering with the SAME map ID paints fine, and AdvancedMarkers support
+ * raster maps (they only require a mapId). String literal (not
+ * google.maps.RenderingType.RASTER) so importing this file doesn't touch
+ * the not-yet-loaded google global. */
+export const MAP_RENDERING_TYPE = 'RASTER' as google.maps.RenderingType
+
 let configured = false
 
 function configure() {

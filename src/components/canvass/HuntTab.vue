@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import { Geolocation } from '@capacitor/geolocation'
-import { loadMaps, mapsAuthError } from '@/lib/googleMaps'
+import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import { CityLimitsLayer, TurfAreasLayer, dotClusterRenderer, readMapPref, writeMapPref } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
@@ -407,9 +407,10 @@ async function initialize() {
   map = new google.maps.Map(mapEl.value, {
     center: lastCenter ?? FALLBACK_CENTER,
     zoom: lastCenter ? 16 : DEFAULT_ZOOM,
-    // Cloud-styled vector map. Also what lets pins render as AdvancedMarker
-    // elements instead of the heavier legacy Marker overlays.
+    // mapId is what lets pins render as AdvancedMarker elements instead of
+    // the heavier legacy Marker overlays.
     mapId: GOOGLE_MAPS_MAP_ID,
+    renderingType: MAP_RENDERING_TYPE,
     streetViewControl: false,
     mapTypeControl: false,
     fullscreenControl: false,
