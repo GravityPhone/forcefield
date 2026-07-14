@@ -314,6 +314,7 @@ const PARTLY_SIGNED_OPTIONS = [
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+  color: var(--text);
   resize: vertical;
 }
 

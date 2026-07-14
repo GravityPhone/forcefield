@@ -145,6 +145,7 @@ function remove(id: string) {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+  color: var(--text);
 }
 
 .picker-input:focus {
