@@ -71,6 +71,12 @@ async function saveSettings() {
       </div>
 
       <div class="card">
+        <h3>Analytics</h3>
+        <p class="muted">Charts, probabilities, and build-your-own regression models on the knock data.</p>
+        <router-link class="btn btn-primary btn-sm" to="/admin/analytics">Explore</router-link>
+      </div>
+
+      <div class="card">
         <h3>Campaign Bulletin</h3>
         <p class="muted">Post announcements the whole team sees.</p>
         <router-link class="btn btn-primary btn-sm" to="/bulletin">Open bulletin</router-link>

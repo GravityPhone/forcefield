@@ -77,10 +77,11 @@ const moreItems = computed<NavItem[]>(() => {
   const appearance: NavItem = { to: '/appearance', label: 'Appearance', icon: 'palette' }
   if (auth.profile.role === 'admin') {
     // Admins have no team — their Roster opens with a team picker.
-    return [roster, aboutMe, appearance]
+    return [{ to: '/admin/analytics', label: 'Analytics', icon: 'chart' }, roster, aboutMe, appearance]
   }
   if (auth.profile.role === 'campaign_manager') {
     return [
+      { to: '/admin/analytics', label: 'Analytics', icon: 'chart' },
       { to: '/admin/roles', label: 'Roles', icon: 'shield' },
       roster,
       myKnocks,
@@ -126,6 +127,7 @@ const ICONS = {
   map: '<path d="M9 4l6 2 6-2v14l-6 2-6-2-6 2V6z"/><path d="M9 4v14M15 6v14"/>',
   shield: '<path d="M12 3l7 2.6v5.6c0 4.3-2.9 7.9-7 9.8-4.1-1.9-7-5.5-7-9.8V5.6z"/><path d="M9.2 12l2 2 3.6-4"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l2.9 1.9"/>',
+  chart: '<path d="M4 4v16h16"/><path d="M8 16v-5M12 16V7M16 16v-8"/>',
   sliders: '<path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>',
   more: '<circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>',
   logout: '<path d="M14 4h-8a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h8M10 12h11M18 8.5L21.5 12 18 15.5"/>',
@@ -194,12 +196,14 @@ onUnmounted(() => {
         <template v-if="auth.profile.role === 'admin'">
           <router-link to="/admin/roles">Roles</router-link>
           <router-link to="/admin/campaigns">Campaigns</router-link>
+          <router-link to="/admin/analytics">Analytics</router-link>
           <router-link to="/roster">Roster</router-link>
         </template>
         <template v-else-if="auth.profile.role === 'campaign_manager'">
           <router-link to="/admin">Dashboard</router-link>
           <!-- Managers go out canvassing themselves, not just run the org. -->
           <router-link to="/canvass">Canvass</router-link>
+          <router-link to="/admin/analytics">Analytics</router-link>
           <router-link to="/admin/roles">Roles</router-link>
           <router-link to="/turf">Turf</router-link>
           <router-link to="/admin/chat">AI Chat</router-link>

@@ -267,6 +267,28 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     ],
   },
 
+  '/admin/analytics': {
+    title: 'Analytics',
+    sections: [
+      {
+        body:
+          'The campaign’s numbers room. The filter row up top (date range + area) scopes every ' +
+          'chart below it. Overview shows daily activity and outcome mixes; Areas compares ' +
+          'sign/answer rates by city with confidence whiskers; Probability shows how answer ' +
+          'rates change with repeat visits, time of day, and the door-to-signature funnel.',
+      },
+      {
+        heading: 'Model Lab',
+        body:
+          'Builds a logistic regression right in your browser: pick what to predict and which ' +
+          'factors to include, then Train. Coefficients show how much each factor moves the odds, ' +
+          'the calibration chart shows whether predictions match reality, and the what-if panel ' +
+          'predicts probabilities for door scenarios you compose. Every chart has a Table toggle ' +
+          'with the exact numbers.',
+      },
+    ],
+  },
+
   '/admin/roles': {
     title: 'Roles',
     sections: [
