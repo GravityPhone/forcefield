@@ -4,8 +4,16 @@ import type { RealtimeChannel } from '@supabase/supabase-js'
 import { Geolocation } from '@capacitor/geolocation'
 import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
-import { CityLimitsLayer, TurfAreasLayer, densityDotElement, readMapPref, writeMapPref } from '@/lib/mapLayers'
-import type { DoorPoint } from '@/lib/mapLayers'
+import {
+  CityLimitsLayer,
+  TurfAreasLayer,
+  densityDotElement,
+  readMapPref,
+  readTurfShadeMode,
+  writeMapPref,
+  writeTurfShadeMode,
+} from '@/lib/mapLayers'
+import type { DoorPoint, TurfShadeMode } from '@/lib/mapLayers'
 import { geocodeAndCache } from '@/lib/geocode'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { localToday, startOfLocalDayISO } from '@/lib/day'
@@ -88,16 +96,22 @@ function setPinMode(mode: PinMode) {
 }
 
 // Map layer toggles (turf area shading, city limits), prefs shared with the
-// turf cutter so the map looks the same on both pages. Turf shading is for
-// EVERYONE — a canvasser with no assignment still gets to see where all the
-// turfs are (own turf shades stronger).
-const showAreas = ref(readMapPref('map-show-areas', true))
+// turf cutter so the map looks the same on both pages (the Squad map keeps
+// its own shading pref). Turf shading is for EVERYONE — a canvasser with no
+// assignment still gets to see where all the turfs are (own turf shades
+// stronger). It's a tri-state: "My turf" shades only yours, "All turf"
+// shades everything, tapping the active one turns shading off. The legacy
+// `map-show-areas` boolean seeds the default so an old "off" choice sticks.
+const turfShade = ref<TurfShadeMode>(
+  readTurfShadeMode('map-turf-shading', readMapPref('map-show-areas', true) ? 'all' : 'off'),
+)
 const showCity = ref(readMapPref('map-show-city', false))
 
-function toggleAreas() {
-  showAreas.value = !showAreas.value
-  writeMapPref('map-show-areas', showAreas.value)
-  areasLayer?.setVisible(showAreas.value)
+function setTurfShade(mode: 'mine' | 'all') {
+  turfShade.value = turfShade.value === mode ? 'off' : mode
+  writeTurfShadeMode('map-turf-shading', turfShade.value)
+  areasLayer?.setVisible(turfShade.value !== 'off')
+  rebuildTurfAreas()
 }
 
 function toggleCity() {
@@ -247,7 +261,8 @@ async function fetchTurfs() {
 
 const myTurfColorById = computed(() => new Map(myTurfs.value.map((t) => [t.id, t.color])))
 
-/** Redraw the shaded turf areas from whatever doors the map knows about. */
+/** Redraw the shaded turf areas from whatever doors the map knows about —
+ * every turf in "All turf" mode, only yours in "My turf" mode. */
 function rebuildTurfAreas() {
   if (!areasLayer) return
   const doorsByTurf = new Map<string, DoorPoint[]>()
@@ -261,6 +276,7 @@ function rebuildTurfAreas() {
   void areasLayer.setTurfs(
     allTurfs.value
       .filter((t) => doorsByTurf.has(t.id))
+      .filter((t) => turfShade.value !== 'mine' || myTurfIds.value.has(t.id))
       .map((t) => ({
         id: t.id,
         color: t.color,
@@ -564,7 +580,7 @@ async function initialize() {
   map.addListener('idle', renderVisibleDoors)
 
   areasLayer = new TurfAreasLayer(map)
-  areasLayer.setVisible(showAreas.value)
+  areasLayer.setVisible(turfShade.value !== 'off')
   cityLayer = new CityLimitsLayer(map)
   if (showCity.value) void cityLayer.setVisible(true)
 
@@ -1134,18 +1150,29 @@ onUnmounted(() => {
           123
         </button>
       </div>
-      <!-- Map layers: turf area shading and city/village limits. Below the
+      <!-- Map layers: turf area shading (yours only / everyone's — tap the
+           active one to turn shading off) and city/village limits. Below the
            pin-style toggle, same chrome. -->
       <div class="layer-toggle" role="group" aria-label="Map layers">
         <button
           type="button"
           class="layer-btn"
-          :class="{ active: showAreas }"
-          :aria-pressed="showAreas"
-          title="Shade each turf's area on the map"
-          @click="toggleAreas"
+          :class="{ active: turfShade === 'mine' }"
+          :aria-pressed="turfShade === 'mine'"
+          title="Shade only your turf"
+          @click="setTurfShade('mine')"
         >
-          Turf
+          My turf
+        </button>
+        <button
+          type="button"
+          class="layer-btn"
+          :class="{ active: turfShade === 'all' }"
+          :aria-pressed="turfShade === 'all'"
+          title="Shade every turf"
+          @click="setTurfShade('all')"
+        >
+          All turf
         </button>
         <button
           type="button"

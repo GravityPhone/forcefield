@@ -10,8 +10,13 @@ import { fadeUp } from '@/lib/motion'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
-import { TurfAreasLayer, dotClusterRenderer } from '@/lib/mapLayers'
-import type { DoorPoint } from '@/lib/mapLayers'
+import {
+  TurfAreasLayer,
+  dotClusterRenderer,
+  readTurfShadeMode,
+  writeTurfShadeMode,
+} from '@/lib/mapLayers'
+import type { DoorPoint, TurfShadeMode } from '@/lib/mapLayers'
 import { rangeCovers, walkRanges } from '@/lib/doorPath'
 import { OUTCOME_HEX, PIN_DEFAULT_HEX, doorStatusOutcome } from '@/lib/outcomes'
 import { avatarUrl } from '@/lib/avatars'
@@ -243,6 +248,7 @@ async function loadDashboard() {
   if (seq !== loadSeq) return
 
   squadTurfs.value = mine
+  allTurfList.value = all
   turfDoors.value = new Map(doorsData.map((d) => [d.id, d]))
   statusByDoor.value = new Map(statusRows.map((r) => [r.household_id, r]))
 
@@ -355,19 +361,7 @@ async function initMap() {
 function applyMapData(refit = false) {
   if (!map || !areasLayer) return
 
-  const doorsByTurf = new Map<string, DoorPoint[]>()
-  for (const d of turfDoors.value.values()) {
-    if (d.lat == null || d.lng == null) continue
-    const list = doorsByTurf.get(d.turf_id)
-    const door = { lat: d.lat, lng: d.lng, street: d.street }
-    if (list) list.push(door)
-    else doorsByTurf.set(d.turf_id, [door])
-  }
-  void areasLayer.setTurfs(
-    squadTurfs.value
-      .filter((t) => doorsByTurf.has(t.id))
-      .map((t) => ({ id: t.id, color: t.color, doors: doorsByTurf.get(t.id)!, emphasis: true })),
-  )
+  void rebuildAreas()
 
   applyDoorMarkers()
 
@@ -383,6 +377,111 @@ function applyMapData(refit = false) {
   for (const m of members) updateMemberMarker(m)
 
   if (refit) fitToSquad()
+}
+
+// --- Turf shading: "Our turf" (the crew's assignment, shaded strong) or
+// "All turf" (the whole campaign's cut, ours emphasized); tapping the active
+// button turns shading off. Same control as the Scout map but its OWN pref
+// key defaulting to the crew's turf — a plain squad-page load must never
+// pay for the org-wide door download, which is only fetched the first time
+// All turf switches on. ---
+
+const turfShade = ref<TurfShadeMode>(readTurfShadeMode('squad-turf-shading', 'mine'))
+/** Every turf row, unfiltered — "All turf" shades from these. */
+const allTurfList = ref<TurfLite[]>([])
+
+interface OrgDoor {
+  id: string
+  street: string
+  lat: number
+  lng: number
+  turf_id: string
+}
+let orgDoorsByTurf: Map<string, DoorPoint[]> | null = null
+let orgDoorsLoading: Promise<void> | null = null
+
+async function ensureOrgDoors(): Promise<void> {
+  if (orgDoorsByTurf) return
+  if (!orgDoorsLoading) {
+    orgDoorsLoading = fetchAllRows<OrgDoor>((from, to) =>
+      supabase
+        .from('addresses')
+        .select('id, street, lat, lng, turf_id')
+        .not('turf_id', 'is', null)
+        .not('lat', 'is', null)
+        .order('id')
+        .range(from, to),
+    )
+      .then((rows) => {
+        const byTurf = new Map<string, DoorPoint[]>()
+        for (const r of rows) {
+          const door = { lat: r.lat, lng: r.lng, street: r.street }
+          const list = byTurf.get(r.turf_id)
+          if (list) list.push(door)
+          else byTurf.set(r.turf_id, [door])
+        }
+        orgDoorsByTurf = byTurf
+      })
+      .catch(() => {
+        // Flaky signal — All turf falls back to the crew's shading below;
+        // the next toggle retries the download.
+        orgDoorsByTurf = null
+      })
+      .finally(() => {
+        orgDoorsLoading = null
+      })
+  }
+  await orgDoorsLoading
+}
+
+function setTurfShade(mode: 'mine' | 'all') {
+  turfShade.value = turfShade.value === mode ? 'off' : mode
+  writeTurfShadeMode('squad-turf-shading', turfShade.value)
+  void rebuildAreas()
+}
+
+/** Shade turf areas per the current mode: the squad's turfs from doors
+ * already on the page, or every turf from the org-wide set (ours kept
+ * emphasized so the crew's ground still stands out among the rest). */
+async function rebuildAreas() {
+  if (!areasLayer) return
+  areasLayer.setVisible(turfShade.value !== 'off')
+  if (turfShade.value === 'off') return
+
+  if (turfShade.value === 'all') {
+    await ensureOrgDoors()
+    // The mode may have flipped while the org doors downloaded.
+    if (turfShade.value !== 'all' || !areasLayer) return
+    if (orgDoorsByTurf) {
+      const byTurf = orgDoorsByTurf
+      void areasLayer.setTurfs(
+        allTurfList.value
+          .filter((t) => byTurf.has(t.id))
+          .map((t) => ({
+            id: t.id,
+            color: t.color,
+            doors: byTurf.get(t.id)!,
+            emphasis: turfIdSet.value.has(t.id),
+          })),
+      )
+      return
+    }
+    // Download failed — fall through to the crew's shading.
+  }
+
+  const doorsByTurf = new Map<string, DoorPoint[]>()
+  for (const d of turfDoors.value.values()) {
+    if (d.lat == null || d.lng == null) continue
+    const door = { lat: d.lat, lng: d.lng, street: d.street }
+    const list = doorsByTurf.get(d.turf_id)
+    if (list) list.push(door)
+    else doorsByTurf.set(d.turf_id, [door])
+  }
+  void areasLayer.setTurfs(
+    squadTurfs.value
+      .filter((t) => doorsByTurf.has(t.id))
+      .map((t) => ({ id: t.id, color: t.color, doors: doorsByTurf.get(t.id)!, emphasis: true })),
+  )
 }
 
 /** House-number chip for one door, filled with the door's knock STATUS —
@@ -1098,7 +1197,33 @@ watch(
         <p v-if="mapsAuthError || mapFailed" class="error map-error">
           Couldn't load Google Maps — check the connection and reload.
         </p>
-        <div v-else ref="mapEl" class="squad-map"></div>
+        <div v-else class="squad-map-wrap">
+          <div ref="mapEl" class="squad-map"></div>
+          <!-- Turf shading, same tri-state as the Scout map: the crew's turf,
+               everyone's, or (tap the active button again) none. -->
+          <div class="layer-toggle" role="group" aria-label="Turf shading">
+            <button
+              type="button"
+              class="layer-btn"
+              :class="{ active: turfShade === 'mine' }"
+              :aria-pressed="turfShade === 'mine'"
+              title="Shade only your squad's turf"
+              @click="setTurfShade('mine')"
+            >
+              Our turf
+            </button>
+            <button
+              type="button"
+              class="layer-btn"
+              :class="{ active: turfShade === 'all' }"
+              :aria-pressed="turfShade === 'all'"
+              title="Shade every turf in the campaign"
+              @click="setTurfShade('all')"
+            >
+              All turf
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Member cards -->
@@ -1342,10 +1467,51 @@ watch(
   overflow: hidden;
 }
 
+.squad-map-wrap {
+  position: relative;
+}
+
 .squad-map {
   width: 100%;
   height: min(52vh, 420px);
   min-height: 260px;
+}
+
+/* Same chrome as the Scout map's layer strip. */
+.layer-toggle {
+  position: absolute;
+  top: 0.6rem;
+  left: 0.6rem;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.layer-btn {
+  min-height: 36px;
+  padding: 0 0.6rem;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.layer-btn + .layer-btn {
+  border-left: 1px solid var(--border);
+}
+
+.layer-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.layer-btn:not(.active):hover {
+  background: var(--surface-2);
 }
 
 .map-error {

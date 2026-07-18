@@ -220,6 +220,31 @@ export function dotClusterRenderer(color = '#2f6fed') {
 
 // --- Per-device layer preferences (same pattern as Hunt's pin mode). ---
 
+/** Turf shading is a tri-state on the Scout, Squad, and Turf maps: shade
+ * only YOUR turf, shade ALL turf (yours emphasized), or none. Scout and the
+ * cutter share one key (`map-turf-shading`); the Squad map keeps its own —
+ * its default is the crew's turf, so a plain squad-page load never pays for
+ * the org-wide door download that "All turf" needs there. */
+export type TurfShadeMode = 'off' | 'mine' | 'all'
+
+export function readTurfShadeMode(key: string, fallback: TurfShadeMode): TurfShadeMode {
+  try {
+    const v = localStorage.getItem(key)
+    if (v === 'off' || v === 'mine' || v === 'all') return v
+  } catch {
+    /* private mode — fall through */
+  }
+  return fallback
+}
+
+export function writeTurfShadeMode(key: string, mode: TurfShadeMode) {
+  try {
+    localStorage.setItem(key, mode)
+  } catch {
+    /* private mode — the toggle still works this session */
+  }
+}
+
 export function readMapPref(key: string, fallback: boolean): boolean {
   try {
     const v = localStorage.getItem(key)

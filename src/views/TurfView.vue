@@ -26,7 +26,9 @@ import {
   corridorFor,
   dotClusterRenderer,
   readMapPref,
+  readTurfShadeMode,
   writeMapPref,
+  writeTurfShadeMode,
 } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
 import { walkRanges } from '@/lib/doorPath'
@@ -291,12 +293,19 @@ const listTurfs = computed(() => {
 })
 
 // Layer toggles, persisted per device like Hunt's pin mode.
-const showAreas = ref(readMapPref('map-show-areas', true))
+// The cutter has no mine/all split — its shading exists to show the whole
+// existing cut while you carve. It shares Scout's tri-state pref, mapping
+// its one Shade button to off ↔ all (Scout's 'mine' just counts as
+// "shading on" here). Legacy `map-show-areas` boolean seeds the default.
+const showAreas = ref(
+  readTurfShadeMode('map-turf-shading', readMapPref('map-show-areas', true) ? 'all' : 'off') !==
+    'off',
+)
 const showCity = ref(readMapPref('map-show-city', false))
 
 function toggleAreas() {
   showAreas.value = !showAreas.value
-  writeMapPref('map-show-areas', showAreas.value)
+  writeTurfShadeMode('map-turf-shading', showAreas.value ? 'all' : 'off')
   areasLayer?.setVisible(showAreas.value)
 }
 

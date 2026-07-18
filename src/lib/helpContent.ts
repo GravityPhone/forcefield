@@ -69,7 +69,9 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
           'Door pins wear the same status colors as the Scout map — blue means nobody has ' +
           'knocked yet, green means everyone there signed, yellow means partly signed, red ' +
           'means a closed no. Tap a door pin to open it in Talk mode. Tap a squadmate’s card ' +
-          'to zoom to the last door they knocked.',
+          'to zoom to the last door they knocked. The Our turf / All turf buttons shade turf ' +
+          'areas — just your crew’s ground, or the whole campaign’s cut (tap the lit one to ' +
+          'turn shading off).',
       },
       {
         heading: 'Assign doors',
