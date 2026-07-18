@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
@@ -8,8 +9,16 @@ import { useSquadsStore, type SquadListItem } from '@/stores/squads'
 import { useChatStore } from '@/stores/chat'
 import type { ChatProfile } from '@/types'
 
+const router = useRouter()
 const squads = useSquadsStore()
 const chat = useChatStore()
+
+/** A campaign manager can be out knocking too — their own squads float to
+ * the top, wearing an "Open" button into the same squad page (map, member
+ * cards, assign mode) everyone else lives on. */
+const sortedSquads = computed(() =>
+  [...squads.squads].sort((a, b) => Number(b.isMember) - Number(a.isMember)),
+)
 
 const composing = ref(false)
 const squadName = ref('')
@@ -39,7 +48,8 @@ async function createSquad() {
   creating.value = false
   if (squad) {
     composing.value = false
-    openSquadChat(squad)
+    // You just made today's crew — land on its squad page, not just a chat.
+    void router.push('/squad')
   }
 }
 
@@ -65,7 +75,7 @@ function memberNames(squad: SquadListItem): string {
       </p>
 
       <div
-        v-for="(s, i) in squads.squads"
+        v-for="(s, i) in sortedSquads"
         :key="s.id"
         v-motion="fadeUp(Math.min(i, 8) * 45)"
         class="card squad-card"
@@ -77,12 +87,19 @@ function memberNames(squad: SquadListItem): string {
             {{ memberNames(s) }}
           </span>
         </div>
+        <!-- Your own squad opens the full squad page (map, member cards,
+             assign mode — leaving lives there too); Chat stays as the
+             one-tap shortcut. Everyone else's squads offer Join. -->
         <div class="squad-actions">
-          <button v-if="s.isMember" class="btn btn-sm btn-primary" @click="openSquadChat(s)">
-            Chat
+          <button
+            v-if="s.isMember"
+            class="btn btn-sm btn-primary"
+            @click="router.push({ path: '/squad', query: { squad: s.id } })"
+          >
+            Open
           </button>
-          <button v-if="s.isMember" class="btn btn-sm btn-ghost" @click="squads.leaveSquad(s.id)">
-            Leave
+          <button v-if="s.isMember" class="btn btn-sm btn-ghost" @click="openSquadChat(s)">
+            Chat
           </button>
           <button v-else class="btn btn-sm btn-primary" @click="squads.joinSquad(s.id)">
             Join

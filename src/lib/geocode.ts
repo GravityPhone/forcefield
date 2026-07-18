@@ -43,42 +43,6 @@ export async function geocodeAndCache(address: GeocodableAddress): Promise<{ lat
   }
 }
 
-/** Reverse-geocode a spread of map points to the streets under them — how
- * "Place pins" discovers streets in view even when none of their doors are
- * pinned yet (an unpinned door has no coordinates to test against the
- * viewport, but the viewport itself knows what ground it's over). Returns
- * street names in the DB's format ("N MAIN ST") with the locality when
- * Google reports one. Failures on individual points are skipped. */
-export async function streetsAtPoints(
-  points: { lat: number; lng: number }[],
-): Promise<{ name: string; city: string | null }[]> {
-  const found = new Map<string, { name: string; city: string | null }>()
-  try {
-    const g = await getGeocoder()
-    for (const p of points) {
-      try {
-        const { results } = await g.geocode({ location: p })
-        const hit = results.find((r) =>
-          r.address_components.some((c) => c.types.includes('route')),
-        )
-        const route = hit?.address_components.find((c) => c.types.includes('route'))
-        if (!route) continue
-        const locality = hit!.address_components.find((c) => c.types.includes('locality'))
-        const name = route.short_name.toUpperCase()
-        found.set(`${name}|${locality?.long_name.toUpperCase() ?? ''}`, {
-          name,
-          city: locality?.long_name ?? null,
-        })
-      } catch {
-        // No result / momentary rate limit — this sample point just misses.
-      }
-    }
-  } catch {
-    // Geocoder itself unavailable — caller falls back to pinned streets only.
-  }
-  return [...found.values()]
-}
-
 /** Geocode a batch of addresses one at a time (the Maps JS Geocoder has no
  * batch call and rate-limits hard on bursts, so sequential-with-await is the
  * safe cadence). Already-located rows are skipped for free. `onLocated` fires

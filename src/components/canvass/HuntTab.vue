@@ -6,7 +6,7 @@ import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import { CityLimitsLayer, TurfAreasLayer, densityDotElement, readMapPref, writeMapPref } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
-import { geocodeAndCache, geocodeMissing, streetsAtPoints } from '@/lib/geocode'
+import { geocodeAndCache } from '@/lib/geocode'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { localToday, startOfLocalDayISO } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
@@ -176,7 +176,7 @@ function scrollHuntToTop() {
 }
 
 /** Only geocoded addresses get pins — a growing-over-time set (Talk mode,
- * Hunt's "locate", and "Place pins" all geocode on demand). Now ~10k doors
+ * Hunt's "locate", and turf cutting all geocode on demand). Now ~10k doors
  * and climbing, so every query here pages past PostgREST's 1000-row cap. */
 async function fetchMapData() {
   const [addresses, statusRows, summaryRows, todayRes] = await Promise.all([
@@ -245,9 +245,6 @@ async function fetchTurfs() {
 }
 
 const myTurfColorById = computed(() => new Map(myTurfs.value.map((t) => [t.id, t.color])))
-
-/** Any turf doors at all — gates the "All turf" zoom chip. */
-const anyTurfDoors = computed(() => turfByAddress.value.size > 0)
 
 /** Redraw the shaded turf areas from whatever doors the map knows about. */
 function rebuildTurfAreas() {
@@ -626,130 +623,17 @@ function focusTurf(turfId: string) {
   if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
 }
 
-// --- Geolocate what's on screen ---
-// Coordinates are the only way to know a door is "on screen", so the button
-// works street-wise: every street with at least one pinned door in view gets
-// ALL of its doors geocoded. A confirm gates batches over 100 (the Geocoder
-// runs one door at a time, so big batches take minutes).
-
-const GEOLOCATE_WARN_AT = 100
-const geolocating = ref(false)
-const geoProgress = ref('')
-const geoNote = ref('')
-let geoNoteTimer: ReturnType<typeof setTimeout> | undefined
-let huntUnmounted = false
-
-function flashGeoNote(msg: string) {
-  geoNote.value = msg
-  clearTimeout(geoNoteTimer)
-  geoNoteTimer = setTimeout(() => {
-    geoNote.value = ''
-  }, 3500)
-}
-
-async function geolocateVisible() {
-  if (!map || geolocating.value) return
-  const bounds = map.getBounds()
-  if (!bounds) return
-  geolocating.value = true
-  try {
-    // Streets in view, two ways: any street with a pinned door on screen,
-    // plus reverse-geocoding a spread of viewport points — so panning over
-    // a completely pinless neighborhood still finds its streets.
-    const names = new Set<string>()
-    for (const [id, marker] of markersByAddress) {
-      if (!marker.position || !bounds.contains(marker.position)) continue
-      const info = doorInfoByAddress.get(id)
-      const name = info ? streetNameOf(info.street) : ''
-      if (name) names.add(name)
-    }
-    const ne = bounds.getNorthEast()
-    const sw = bounds.getSouthWest()
-    const cLat = (ne.lat() + sw.lat()) / 2
-    const cLng = (ne.lng() + sw.lng()) / 2
-    const qLat = (ne.lat() - sw.lat()) / 4
-    const qLng = (ne.lng() - sw.lng()) / 4
-    const sampled = await streetsAtPoints([
-      { lat: cLat, lng: cLng },
-      { lat: cLat + qLat, lng: cLng + qLng },
-      { lat: cLat + qLat, lng: cLng - qLng },
-      { lat: cLat - qLat, lng: cLng + qLng },
-      { lat: cLat - qLat, lng: cLng - qLng },
-    ])
-    for (const s of sampled) names.add(s.name)
-    if (!names.size) {
-      flashGeoNote("Couldn't identify any streets here — zoom in on a neighborhood and try again.")
-      return
-    }
-    const missing: AddressWithRoster[] = []
-    for (const name of names) {
-      const { data } = await supabase
-        .from('addresses')
-        .select('*, persons(count)')
-        .ilike('street', `%${name}`)
-        .is('lat', null)
-      for (const r of (data ?? []) as AddressWithRoster[]) {
-        if (streetNameOf(r.street) === name) missing.push(r)
-      }
-    }
-    if (!missing.length) {
-      flashGeoNote('Every door on the streets in view already has a pin.')
-      return
-    }
-    if (
-      missing.length > GEOLOCATE_WARN_AT &&
-      !window.confirm(
-        `Place pins for ${missing.length} doors? That's a big batch — they geocode one at a time, so it can take several minutes. Continue?`,
-      )
-    ) {
-      return
-    }
-    let done = 0
-    geoProgress.value = `0/${missing.length}`
-    await geocodeMissing(
-      missing,
-      (id, loc) => {
-        const a = missing.find((m) => m.id === id)
-        if (a) {
-          a.lat = loc.lat
-          a.lng = loc.lng
-          addOrUpdateMarker(a)
-        }
-        geoProgress.value = `${++done}/${missing.length}`
-      },
-      () => huntUnmounted,
-    )
-    if (!huntUnmounted) {
-      rebuildTurfAreas()
-      flashGeoNote(`Placed ${done} of ${missing.length} pins.`)
-    }
-  } finally {
-    geolocating.value = false
-    geoProgress.value = ''
-  }
-}
-
-/** Re-frame around every turf that's yours — same view the map opens with. */
+/** Re-frame around every turf that's yours — same view the map opens with.
+ * Works off door data, not markers — with viewport-scoped pins, your turf's
+ * markers may not exist while you're panned somewhere else. */
 function focusAllMyTurf() {
   if (!map) return
   const bounds = new google.maps.LatLngBounds()
-  for (const [addressId, marker] of markersByAddress) {
-    const turfId = turfByAddress.value.get(addressId)
-    if (turfId && myTurfIds.value.has(turfId) && marker.position) {
-      bounds.extend(marker.position)
-    }
-  }
-  if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
-}
-
-/** Frame every turf anyone has — the whole campaign's cut geography in one
- * look. Works off door data (not markers), so it doesn't matter whether the
- * pins are built yet. */
-function focusAllTurf() {
-  if (!map) return
-  const bounds = new google.maps.LatLngBounds()
   for (const [addressId, door] of doorInfoByAddress) {
-    if (turfByAddress.value.has(addressId)) bounds.extend({ lat: door.lat, lng: door.lng })
+    const turfId = turfByAddress.value.get(addressId)
+    if (turfId && myTurfIds.value.has(turfId)) {
+      bounds.extend({ lat: door.lat, lng: door.lng })
+    }
   }
   if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
 }
@@ -1113,7 +997,6 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  huntUnmounted = true
   resizeObserver?.disconnect()
   if (knockFeed) {
     void supabase.removeChannel(knockFeed)
@@ -1159,38 +1042,31 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- Turf assigned to you (or a squad you're in today) gets a zoom chip;
-         "All turf" frames every turf anyone has — visible to every role, so
-         a plain canvasser can still see how the campaign's ground is cut. -->
-    <div v-if="myTurfs.length || anyTurfDoors" class="turf-chips">
+    <!-- Turf assigned to you (or a squad you're in today) gets a
+         "Zoom to my turf" chip framing all of it, plus one chip per turf
+         when the crew holds several. Campaign-wide framing needs no chip —
+         the map's "Turf" layer toggle shades every turf already. -->
+    <div v-if="myTurfs.length" class="turf-chips">
       <button
-        v-if="myTurfs.length > 1"
         class="turf-chip"
-        :style="{ '--turf-color': 'var(--accent)' }"
+        :style="{ '--turf-color': myTurfs.length === 1 ? myTurfs[0].color : 'var(--accent)' }"
         @click="focusAllMyTurf"
       >
         <span class="turf-chip-dot" aria-hidden="true"></span>
-        All our turf
+        Zoom to my turf
       </button>
-      <button
-        v-for="t in myTurfs"
-        :key="t.id"
-        class="turf-chip"
-        :style="{ '--turf-color': t.color }"
-        @click="focusTurf(t.id)"
-      >
-        <span class="turf-chip-dot" aria-hidden="true"></span>
-        Your turf: {{ t.name }}
-      </button>
-      <button
-        v-if="anyTurfDoors"
-        class="turf-chip"
-        :style="{ '--turf-color': 'var(--text-muted)' }"
-        @click="focusAllTurf"
-      >
-        <span class="turf-chip-dot" aria-hidden="true"></span>
-        All turf
-      </button>
+      <template v-if="myTurfs.length > 1">
+        <button
+          v-for="t in myTurfs"
+          :key="t.id"
+          class="turf-chip"
+          :style="{ '--turf-color': t.color }"
+          @click="focusTurf(t.id)"
+        >
+          <span class="turf-chip-dot" aria-hidden="true"></span>
+          {{ t.name }}
+        </button>
+      </template>
     </div>
 
     <div ref="mapWrapEl" class="map-wrap" :class="{ 'map-wrap-fullscreen': isFullscreen }">
@@ -1251,16 +1127,6 @@ onUnmounted(() => {
           City
         </button>
       </div>
-      <button
-        type="button"
-        class="place-pins-btn"
-        :disabled="geolocating"
-        title="Place a pin for every door on the streets in view"
-        @click="geolocateVisible"
-      >
-        {{ geolocating ? geoProgress || 'Placing…' : 'Place pins' }}
-      </button>
-      <div v-if="geoNote" class="pins-loading" role="status" aria-live="polite">{{ geoNote }}</div>
       <button
         type="button"
         class="map-fullscreen-btn"
@@ -1571,34 +1437,6 @@ onUnmounted(() => {
 }
 
 /* Layers control, stacked directly beneath the pin-style toggle. */
-/* Standalone pin-filling action, stacked under the layer toggles (it's an
- * action, not a toggle, so it doesn't share their strip). */
-.place-pins-btn {
-  position: absolute;
-  top: calc(0.6rem + 36px + 0.5rem + 36px + 0.5rem);
-  left: 0.6rem;
-  min-height: 36px;
-  padding: 0 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
-}
-
-.place-pins-btn:disabled {
-  color: var(--text-muted);
-  cursor: default;
-}
-
-.place-pins-btn:not(:disabled):hover {
-  background: var(--surface-2);
-}
-
 .layer-toggle {
   position: absolute;
   top: calc(0.6rem + 36px + 0.5rem);

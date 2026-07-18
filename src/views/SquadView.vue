@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import AppShell from '@/components/AppShell.vue'
@@ -13,7 +13,7 @@ import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import { TurfAreasLayer, dotClusterRenderer } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
 import { rangeCovers, walkRanges } from '@/lib/doorPath'
-import { geocodeMissing } from '@/lib/geocode'
+import { OUTCOME_HEX, PIN_DEFAULT_HEX, doorStatusOutcome } from '@/lib/outcomes'
 import { avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
 import { telHref } from '@/lib/phone'
@@ -22,20 +22,17 @@ import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useSquadsStore, type SquadListItem } from '@/stores/squads'
 import { useTalkStore } from '@/stores/talk'
-import type { ChatProfile, KnockLog } from '@/types'
+import type { ChatProfile, HouseholdLatestKnock, KnockLog } from '@/types'
 
 // Fallback map center: Richwood, OH (the imported demo subset).
 const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
 
-// Door-pin colors (fixed hex, like the outcome/Hunt pins — not themed, so
-// "done vs to-do" reads the same in every color scheme).
-const DOOR_KNOCKED_HEX = '#2e9e5b'
-const DOOR_TODO_HEX = '#2f6fed'
 /** Below this zoom the house-number chips fall back to plain dots — numbers
  * only mean something when you're close enough to read a street. */
 const NUMBERS_MIN_ZOOM = 16
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 const chat = useChatStore()
 const squads = useSquadsStore()
@@ -44,6 +41,9 @@ const talk = useTalkStore()
 // --- Which squad is "mine" (you can be in several crews in one day) ---
 
 const selectedSquadId = ref<string | null>(null)
+// /squad?squad=<id> (the Squads page's "Open" button) picks that squad when
+// you're in several; an id that isn't yours falls back to your first squad.
+if (typeof route.query.squad === 'string') selectedSquadId.value = route.query.squad
 const mySquad = computed<SquadListItem | null>(() => {
   const mine = squads.mySquads
   return mine.find((s) => s.id === selectedSquadId.value) ?? mine[0] ?? null
@@ -87,6 +87,9 @@ const knockedDoors = ref<Set<string>>(new Set())
 const knockedByMember = ref<Map<string, Set<string>>>(new Map())
 /** member id -> their latest knocked doors, newest first, deduped, max 5. */
 const recentByMember = ref<Map<string, RecentDoor[]>>(new Map())
+/** door id -> latest-knock status row (outcome + signed/person counts) —
+ * the door pins wear the same doorStatusOutcome colors as the Scout map. */
+const statusByDoor = ref<Map<string, HouseholdLatestKnock>>(new Map())
 const selectedMemberId = ref<string | null>(null)
 const dashboardLoading = ref(false)
 
@@ -142,6 +145,28 @@ const progressPct = computed(() =>
 
 /** Guards against an older async load landing after a newer one. */
 let loadSeq = 0
+
+/** Latest-knock status rows for the squad's doors. The view has no turf
+ * column to filter on server-side, so this chunks .in() over door ids —
+ * scoped to the turf (vs pulling the org-wide view like Scout must) while
+ * staying clear of URL-length limits. Best-effort like the other fetches. */
+const STATUS_CHUNK = 150
+async function fetchDoorStatuses(doorIds: string[]): Promise<HouseholdLatestKnock[]> {
+  const chunks: string[][] = []
+  for (let i = 0; i < doorIds.length; i += STATUS_CHUNK) {
+    chunks.push(doorIds.slice(i, i + STATUS_CHUNK))
+  }
+  const results = await Promise.all(
+    chunks.map(async (ids) => {
+      const { data } = await supabase
+        .from('household_latest_knock')
+        .select('*')
+        .in('household_id', ids)
+      return (data ?? []) as HouseholdLatestKnock[]
+    }),
+  )
+  return results.flat()
+}
 
 async function loadDashboard() {
   const squad = mySquad.value
@@ -212,10 +237,14 @@ async function loadDashboard() {
         .limit(15),
     ),
   ])
+  const statusRows = await fetchDoorStatuses(doorsData.map((d) => d.id)).catch(
+    () => [] as HouseholdLatestKnock[],
+  )
   if (seq !== loadSeq) return
 
   squadTurfs.value = mine
   turfDoors.value = new Map(doorsData.map((d) => [d.id, d]))
+  statusByDoor.value = new Map(statusRows.map((r) => [r.household_id, r]))
 
   const knocked = new Set<string>()
   const byMember = new Map<string, Set<string>>()
@@ -356,14 +385,16 @@ function applyMapData(refit = false) {
   if (refit) fitToSquad()
 }
 
-/** House-number chip for one door: green once anyone's knocked it, blue while
- * it's still to-do — the door-level echo of the "X of Y knocked" bar. In
+/** House-number chip for one door, filled with the door's knock STATUS —
+ * the exact colors the Scout map uses (doorStatusOutcome: green only when
+ * everyone signed, yellow partly signed, red closed-no, blue untouched). In
  * assign mode, selected doors wear the member's color instead and doors the
  * viewer can't hand out fade back. */
 function styleDoorMarker(marker: google.maps.marker.AdvancedMarkerElement, door: TurfDoor) {
   const el = marker.content as HTMLElement
   const s = el.style
-  const knocked = knockedDoors.value.has(door.id)
+  const status = statusByDoor.value.get(door.id)
+  const outcome = doorStatusOutcome(status?.outcome, status?.signed_count, status?.person_count)
   const turfColor = turfColorById.value.get(door.turf_id)
   const showNumber = !!el.dataset.house && mapZoom >= NUMBERS_MIN_ZOOM
   el.textContent = showNumber ? el.dataset.house! : ''
@@ -382,7 +413,7 @@ function styleDoorMarker(marker: google.maps.marker.AdvancedMarkerElement, door:
   s.lineHeight = '1'
   s.color = '#fff'
   s.opacity = '1'
-  s.background = knocked ? DOOR_KNOCKED_HEX : DOOR_TODO_HEX
+  s.background = outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
   s.border = '1.5px solid #fff'
   // Thin ring in the turf's own color, so doors from different turfs (yours
   // vs a squadmate's directly-assigned turf) stay tellable apart.
@@ -567,56 +598,6 @@ function focusTurf(turfId: string) {
   if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
 }
 
-// --- Geolocate the turf's unpinned doors ---
-// Turf doors normally geocode at cut time, but imports and misses leave
-// gaps — this pins whatever's still missing so the map shows the whole
-// assignment. Batches over 100 get a confirm (one door at a time is slow).
-
-const GEOLOCATE_WARN_AT = 100
-const geolocating = ref(false)
-const geoProgress = ref('')
-let squadUnmounted = false
-
-const missingDoorCount = computed(
-  () => [...turfDoors.value.values()].filter((d) => d.lat == null || d.lng == null).length,
-)
-
-async function geolocateTurfDoors() {
-  if (geolocating.value) return
-  const missing = [...turfDoors.value.values()].filter((d) => d.lat == null || d.lng == null)
-  if (!missing.length) return
-  if (
-    missing.length > GEOLOCATE_WARN_AT &&
-    !window.confirm(
-      `Place pins for ${missing.length} doors? That's a big batch — they geocode one at a time, so it can take several minutes. Continue?`,
-    )
-  ) {
-    return
-  }
-  geolocating.value = true
-  let done = 0
-  geoProgress.value = `0/${missing.length}`
-  try {
-    await geocodeMissing(
-      missing,
-      (id, loc) => {
-        const d = turfDoors.value.get(id)
-        if (d) {
-          d.lat = loc.lat
-          d.lng = loc.lng
-        }
-        geoProgress.value = `${++done}/${missing.length}`
-        applyDoorMarkers()
-      },
-      () => squadUnmounted,
-    )
-    if (!squadUnmounted) applyMapData(false)
-  } finally {
-    geolocating.value = false
-    geoProgress.value = ''
-  }
-}
-
 // --- Live knocks: squadmates' doors land on the page as they happen ---
 
 let knockFeed: RealtimeChannel | null = null
@@ -652,6 +633,14 @@ async function onLiveKnock(knock: KnockLog) {
     let set = knockedByMember.value.get(knock.canvasser_id)
     if (!set) knockedByMember.value.set(knock.canvasser_id, (set = new Set()))
     set.add(a.id)
+    // Re-pull just this door's status row so the pin recolors exactly
+    // (signed counts included) instead of approximating from the raw knock.
+    const { data: status } = await supabase
+      .from('household_latest_knock')
+      .select('*')
+      .eq('household_id', a.id)
+      .maybeSingle()
+    if (status) statusByDoor.value.set(a.id, status as HouseholdLatestKnock)
     restyleDoor(a.id)
   }
 
@@ -992,7 +981,6 @@ watch(mapEl, (el) => {
 }, { flush: 'post' })
 
 onUnmounted(() => {
-  squadUnmounted = true
   squads.unsubscribeFromRosters()
   if (knockFeed) void supabase.removeChannel(knockFeed)
   areasLayer?.dispose()
@@ -1110,19 +1098,7 @@ watch(
         <p v-if="mapsAuthError || mapFailed" class="error map-error">
           Couldn't load Google Maps — check the connection and reload.
         </p>
-        <div v-else class="squad-map-wrap">
-          <div ref="mapEl" class="squad-map"></div>
-          <button
-            v-if="missingDoorCount || geolocating"
-            type="button"
-            class="geolocate-btn"
-            :disabled="geolocating"
-            title="Place a pin for every turf door that has none yet"
-            @click="geolocateTurfDoors"
-          >
-            {{ geolocating ? geoProgress || 'Placing…' : `Place ${missingDoorCount} pins` }}
-          </button>
-        </div>
+        <div v-else ref="mapEl" class="squad-map"></div>
       </div>
 
       <!-- Member cards -->
@@ -1366,37 +1342,10 @@ watch(
   overflow: hidden;
 }
 
-.squad-map-wrap {
-  position: relative;
-}
-
 .squad-map {
   width: 100%;
   height: min(52vh, 420px);
   min-height: 260px;
-}
-
-/* Same chrome as the turf cutter's map controls. */
-.geolocate-btn {
-  position: absolute;
-  top: 0.6rem;
-  left: 0.6rem;
-  min-height: 36px;
-  padding: 0 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
-}
-
-.geolocate-btn:disabled {
-  cursor: default;
-  color: var(--text-muted);
 }
 
 .map-error {

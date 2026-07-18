@@ -63,8 +63,10 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'The map',
         body:
-          'Green pins are doors already knocked, blue ones aren’t yet. Tap a door pin to ' +
-          'open it in Talk mode. Tap a squadmate’s card to zoom to the last door they knocked.',
+          'Door pins wear the same status colors as the Scout map — blue means nobody has ' +
+          'knocked yet, green means everyone there signed, yellow means partly signed, red ' +
+          'means a closed no. Tap a door pin to open it in Talk mode. Tap a squadmate’s card ' +
+          'to zoom to the last door they knocked.',
       },
       {
         heading: 'Assign doors',
@@ -102,6 +104,13 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body:
           'Name the crew and optionally add people right away — anyone can also join on their ' +
           'own from this page. A squad chat is created automatically.',
+      },
+      {
+        heading: 'Your own squad',
+        body:
+          'Squads you’re in sort to the top with an Open button — it goes to the full squad ' +
+          'page: the turf map with live knock progress, member cards, door assignment, and ' +
+          'leaving the crew.',
       },
     ],
   },

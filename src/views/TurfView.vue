@@ -30,7 +30,7 @@ import {
 } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
 import { walkRanges } from '@/lib/doorPath'
-import { geocodeAndCache, geocodeMissing, streetsAtPoints } from '@/lib/geocode'
+import { geocodeAndCache, geocodeMissing } from '@/lib/geocode'
 import { localToday } from '@/lib/day'
 import { OUTCOME_HEX, PIN_DEFAULT_HEX, doorStatusOutcome } from '@/lib/outcomes'
 import { fetchAllRows, supabase } from '@/lib/supabase'
@@ -763,100 +763,6 @@ async function geocodeTurfDoors(turfId: string) {
     () => unmounted,
   )
   if (!unmounted) buildSavedAreas()
-}
-
-// --- Place pins for what's on screen ---
-// An unpinned door has no coordinates to test against the viewport, so the
-// button works street-wise, finding streets in view two ways: any street
-// with a pinned door in view, PLUS reverse-geocoding a spread of viewport
-// sample points — so panning over a completely pinless neighborhood still
-// pins it. Every found street gets ALL of its doors geocoded (a warning
-// gates batches over 100 — the Geocoder runs one door at a time).
-
-const GEOLOCATE_WARN_AT = 100
-const geolocating = ref(false)
-const geoProgress = ref('')
-
-/** Center + the four quadrant midpoints of the current viewport. */
-function viewportSamples(bounds: google.maps.LatLngBounds): { lat: number; lng: number }[] {
-  const ne = bounds.getNorthEast()
-  const sw = bounds.getSouthWest()
-  const cLat = (ne.lat() + sw.lat()) / 2
-  const cLng = (ne.lng() + sw.lng()) / 2
-  const qLat = (ne.lat() - sw.lat()) / 4
-  const qLng = (ne.lng() - sw.lng()) / 4
-  return [
-    { lat: cLat, lng: cLng },
-    { lat: cLat + qLat, lng: cLng + qLng },
-    { lat: cLat + qLat, lng: cLng - qLng },
-    { lat: cLat - qLat, lng: cLng + qLng },
-    { lat: cLat - qLat, lng: cLng - qLng },
-  ]
-}
-
-async function geolocateVisible() {
-  if (!map || geolocating.value) return
-  const bounds = map.getBounds()
-  if (!bounds) return
-  geolocating.value = true
-  try {
-    const streets = new Map<string, { name: string; city: string | null }>()
-    for (const a of addressById.values()) {
-      if (a.lat == null || a.lng == null) continue
-      if (!bounds.contains({ lat: a.lat, lng: a.lng })) continue
-      const name = streetNameOf(a.street)
-      if (name) streets.set(`${name}|${a.city.toUpperCase()}`, { name, city: a.city })
-    }
-    for (const s of await streetsAtPoints(viewportSamples(bounds))) {
-      // A pinned-door entry for the same street wins — its city spelling is
-      // the DB's own.
-      if (![...streets.keys()].some((k) => k.startsWith(`${s.name}|`))) {
-        streets.set(`${s.name}|${(s.city ?? '').toUpperCase()}`, s)
-      }
-    }
-    if (!streets.size) {
-      flash("Couldn't identify any streets here — zoom in on a neighborhood and try again.")
-      return
-    }
-    const rowsByStreet = await Promise.all(
-      [...streets.values()].map((s) => fetchStreetRows(s.name, s.city)),
-    )
-    const missing = rowsByStreet.flat().filter((a) => a.lat == null || a.lng == null)
-    if (!missing.length) {
-      flash('Every door on the streets in view already has a pin.')
-      return
-    }
-    if (
-      missing.length > GEOLOCATE_WARN_AT &&
-      !window.confirm(
-        `Place pins for ${missing.length} doors? That's a big batch — they geocode one at a time, so it can take several minutes. Continue?`,
-      )
-    ) {
-      return
-    }
-    let done = 0
-    geoProgress.value = `0/${missing.length}`
-    await geocodeMissing(
-      missing,
-      (id, loc) => {
-        const a = missing.find((m) => m.id === id)
-        if (a) {
-          a.lat = loc.lat
-          a.lng = loc.lng
-          upsertMarker(a)
-        }
-        geoProgress.value = `${++done}/${missing.length}`
-      },
-      () => unmounted,
-    )
-    if (!unmounted) {
-      buildSavedAreas()
-      flash(`Placed ${done} of ${missing.length} pins.`)
-    }
-  } finally {
-    geolocating.value = false
-    geoProgress.value = ''
-  }
 }
 
 // --- Sweeping ---
@@ -1702,17 +1608,6 @@ onUnmounted(() => {
             City
           </button>
         </div>
-        <!-- Fills in pins for every door on the streets in view (unmapped
-             doors have no coordinates, so they ride in via their street). -->
-        <button
-          type="button"
-          class="place-pins-btn"
-          :disabled="geolocating"
-          title="Place a pin for every door on the streets in view"
-          @click="geolocateVisible"
-        >
-          {{ geolocating ? geoProgress || 'Placing…' : 'Place pins' }}
-        </button>
       </div>
       <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
       <p v-if="mapsAuthError" class="muted map-error">
@@ -2121,34 +2016,6 @@ onUnmounted(() => {
 }
 
 .layer-btn:not(.active):hover {
-  background: var(--surface-2);
-}
-
-/* Standalone pin-filling button, top-right on the map (deliberately NOT in
- * the layers strip — it's an action, not a toggle). */
-.place-pins-btn {
-  position: absolute;
-  top: 0.6rem;
-  right: 0.6rem;
-  min-height: 36px;
-  padding: 0 0.7rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 0.8rem;
-  font-weight: 700;
-  cursor: pointer;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
-}
-
-.place-pins-btn:disabled {
-  color: var(--text-muted);
-  cursor: default;
-}
-
-.place-pins-btn:not(:disabled):hover {
   background: var(--surface-2);
 }
 
