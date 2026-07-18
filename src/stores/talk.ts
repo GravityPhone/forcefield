@@ -254,8 +254,10 @@ export const useTalkStore = defineStore('talk', {
      * the next house on the street per walkDirection/walkParity (falling
      * back to staying put, roster and all, if there's no next house — e.g.
      * end of the street — since door conversations often involve several
-     * residents anyway). */
-    async confirmNext() {
+     * residents anyway). `reverse` walks the street the OPPOSITE way from
+     * the direction pref — the Previous button, for doubling back without
+     * flipping the dropdown. Same skip rules either way. */
+    async confirmNext(reverse = false) {
       this.pendingOutcome = null
       this.activeClientId = null
       this.selectedPerson = null
@@ -263,7 +265,12 @@ export const useTalkStore = defineStore('talk', {
 
       const current = this.selectedAddress
       if (!current) return
-      const next = await findNextOnStreet(current, this.walkDirection, this.walkParity, {
+      const direction: WalkDirection = reverse
+        ? this.walkDirection === 'ascending'
+          ? 'descending'
+          : 'ascending'
+        : this.walkDirection
+      const next = await findNextOnStreet(current, direction, this.walkParity, {
         knockPartlySigned: this.knockPartlySigned,
       })
       if (next) await this.loadAddress(next.id)

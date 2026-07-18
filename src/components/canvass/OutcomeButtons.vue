@@ -16,9 +16,9 @@ function logOutcome(value: KnockOutcome) {
   talk.logOutcome(value)
 }
 
-function confirmNext() {
+function confirmAdvance(reverse: boolean) {
   hapticNotify('success')
-  talk.confirmNext()
+  void talk.confirmNext(reverse)
 }
 
 // Not Home / Skip / Hostile describe the door interaction, so they only need
@@ -48,15 +48,13 @@ function disabledFor(requiresPerson: boolean): boolean {
       </button>
     </div>
     <!-- Confirms before the screen clears — no silent auto-advance. Only
-         appears once something is actually logged for the current target. -->
-    <button
-      v-if="talk.pendingOutcome"
-      v-motion="popIn()"
-      class="btn btn-primary next-btn"
-      @click="confirmNext"
-    >
-      Next
-    </button>
+         appears once something is actually logged for the current target.
+         Next walks the street per the direction pref above; Previous walks
+         the opposite way (same skip rules), for doubling back mid-street. -->
+    <div v-if="talk.pendingOutcome" v-motion="popIn()" class="advance-row">
+      <button class="btn prev-btn" @click="confirmAdvance(true)">‹ Previous</button>
+      <button class="btn btn-primary next-btn" @click="confirmAdvance(false)">Next ›</button>
+    </div>
   </div>
 </template>
 
@@ -92,10 +90,23 @@ function disabledFor(requiresPerson: boolean): boolean {
   color: var(--accent-contrast);
 }
 
-/* The single most-tapped button in the app — full width, can't miss it
- * walking between doors in the sun. */
+/* Next stays the single most-tapped button in the app — Previous shares the
+ * row but Next keeps the lion's share of the width, primary-filled, so the
+ * default thumb target is still can't-miss walking between doors in the sun. */
+.advance-row {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.prev-btn {
+  flex: 1;
+  min-height: 64px;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
 .next-btn {
-  width: 100%;
+  flex: 1.7;
   min-height: 64px;
   font-size: 1.15rem;
   font-weight: 700;

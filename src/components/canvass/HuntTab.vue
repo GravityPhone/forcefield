@@ -151,9 +151,10 @@ watch(
     if (tab !== 'hunt') return
     if (!initStarted) {
       initStarted = true
-      void initialize()
+      void initialize() // syncFromTalk runs at its tail, once the map exists
     } else {
       void refreshStatuses()
+      void syncFromTalk()
     }
   },
   { immediate: true },
@@ -585,6 +586,9 @@ async function initialize() {
   else if (!lastCenter && !bounds.isEmpty()) map.fitBounds(bounds, 48)
   rebuildTurfAreas()
   pinsLoading.value = false
+  // Entering Scout with a door already loaded in Talk: land on that door
+  // (locate wins over the turf frame above — you're mid-walk, not arriving).
+  void syncFromTalk()
 }
 
 /** Re-pull statuses/summaries and recolor existing pins. Called whenever
@@ -719,12 +723,22 @@ function onListInput(value: string) {
         .select('*, addresses(id, street, unit, city, persons(count))')
         .ilike('name', pattern)
         .limit(20),
-      supabase.from('addresses').select('*, persons(count)').ilike('street', pattern).limit(20),
+      // 100 addresses so a whole street fits in one search (scrolling a
+      // street top to bottom is the point of the Talk→Scout handoff below).
+      supabase.from('addresses').select('*, persons(count)').ilike('street', pattern).limit(100),
     ])
     if (listQuery.value.trim() !== q) return
+    // Street order, then house-number order — a street search reads as a
+    // walkable list instead of DB insertion order.
+    const rows = (addressesRes.data ?? []) as AddressWithRoster[]
+    rows.sort(
+      (a, b) =>
+        streetNameOf(a.street).localeCompare(streetNameOf(b.street)) ||
+        houseNumber(a.street) - houseNumber(b.street),
+    )
     searchResults.value = {
       persons: (personsRes.data ?? []) as PersonHit[],
-      addresses: (addressesRes.data ?? []) as AddressWithRoster[],
+      addresses: rows,
     }
     searching.value = false
   }, 250)
@@ -836,6 +850,23 @@ async function locateAddress(address: AddressWithRoster) {
   } finally {
     locating.value = false
   }
+}
+
+/** Arrive on Scout already oriented on whatever door Talk mode is working:
+ * the search box fills with that door's street as though typed (so the list
+ * below it is the street's houses, scrollable in walk order) and the map
+ * locates the door itself — zoomed in, pin highlighted. Runs once per Talk
+ * address, so flipping back after poking around Scout doesn't clobber a
+ * manual search or map position on every tab switch. */
+let syncedFromTalkId: string | null = null
+async function syncFromTalk() {
+  const current = talk.selectedAddress
+  if (!current || current.id === syncedFromTalkId) return
+  syncedFromTalkId = current.id
+  const street = streetNameOf(current.street)
+  // Title-case for the visible input — matching is case-insensitive anyway.
+  onListInput(street.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()))
+  await locateAddress(addressById.get(current.id) ?? { ...current })
 }
 
 function knock(addressId: string, personId?: string) {

@@ -24,13 +24,16 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body:
           'Scout is the map — see nearby doors, find your turf, and tap a pin to open that ' +
           'address. Talk is the door screen — the household roster, past visits, notes, and ' +
-          'the outcome buttons for logging the knock.',
+          'the outcome buttons for logging the knock. Flip back to Scout and it lands on the ' +
+          'door Talk was working, with that street filled into the search below the map.',
       },
       {
         heading: 'Logging outcomes',
         body:
           'Signed, Didn’t Sign, and Maybe need a specific person picked from the roster. ' +
-          'Not Home, Skip, and Hostile log against the whole household — no person needed.',
+          'Not Home, Skip, and Hostile log against the whole household — no person needed. ' +
+          'Once something’s logged, Next and Previous move you to the next worthwhile door ' +
+          'in either direction along the street.',
       },
       {
         heading: 'Pin colors',
