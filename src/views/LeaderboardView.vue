@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { RealtimeChannel } from '@supabase/supabase-js'
+import AppSelect from '@/components/ui/AppSelect.vue'
 import AppShell from '@/components/AppShell.vue'
 import CampaignProgress from '@/components/CampaignProgress.vue'
 import { supabase } from '@/lib/supabase'
@@ -24,6 +25,40 @@ const auth = useAuthStore()
 const myId = auth.profile?.id ?? null
 const today = localToday()
 
+// --- Board options (campaign managers, right here on the leaderboard —
+// the knobs moved off the dashboard 2026-07-21). Edits bind straight into
+// `settings`, so the metric flip re-ranks live; Save persists. ---
+
+const canManage =
+  auth.profile?.role === 'admin' || auth.profile?.role === 'campaign_manager'
+const metricOptions = Object.entries(METRIC_LABELS).map(([value, label]) => ({ value, label }))
+const optionsOpen = ref(false)
+const optionsSaving = ref(false)
+const optionsSaved = ref(false)
+const optionsError = ref('')
+
+async function saveOptions() {
+  const s = settings.value
+  if (!s) return
+  optionsSaving.value = true
+  optionsError.value = ''
+  const { error } = await supabase
+    .from('leaderboard_settings')
+    .update({
+      primary_metric: s.primary_metric,
+      doors_board_enabled: s.doors_board_enabled,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', true)
+  optionsSaving.value = false
+  if (error) {
+    optionsError.value = 'Could not save — try again.'
+    return
+  }
+  optionsSaved.value = true
+  setTimeout(() => (optionsSaved.value = false), 2000)
+}
+
 const settings = ref<LeaderboardSettings | null>(null)
 const canvassersAllTime = ref<CanvasserLeaderboardRow[]>([])
 const canvassersForDay = ref<CanvasserLeaderboardRow[]>([])
@@ -46,7 +81,9 @@ async function loadAllTime() {
     supabase.from('leaderboard_settings').select('*').eq('id', true).single(),
     supabase.from('canvasser_leaderboard').select('*'),
   ])
-  if (s.data) settings.value = s.data as LeaderboardSettings
+  // Realtime knocks refetch everything — don't clobber a manager's unsaved
+  // Board options edits while the card is open.
+  if (s.data && !optionsOpen.value) settings.value = s.data as LeaderboardSettings
   if (c.data) canvassersAllTime.value = c.data as CanvasserLeaderboardRow[]
 }
 
@@ -200,6 +237,35 @@ onUnmounted(() => {
       </p>
 
       <template v-else>
+        <!-- Manager knobs live on the leaderboard itself, not the dashboard. -->
+        <div v-if="canManage && settings" class="card options-card">
+          <button class="options-head" :aria-expanded="optionsOpen" @click="optionsOpen = !optionsOpen">
+            <span>Board options</span>
+            <span class="options-caret" aria-hidden="true">{{ optionsOpen ? '▴' : '▾' }}</span>
+          </button>
+          <div v-if="optionsOpen" class="options-body">
+            <div class="field">
+              <label id="primary-metric-label">Ranking metric</label>
+              <AppSelect
+                :model-value="settings.primary_metric"
+                :options="metricOptions"
+                aria-labelledby="primary-metric-label"
+                @update:model-value="settings.primary_metric = $event as LeaderboardMetric"
+              />
+            </div>
+            <label class="check">
+              <input type="checkbox" v-model="settings.doors_board_enabled" />
+              Also show a separate doors-knocked board
+            </label>
+            <div class="options-actions">
+              <button class="btn btn-primary btn-sm" :disabled="optionsSaving" @click="saveOptions">
+                {{ optionsSaved ? 'Saved ✓' : optionsSaving ? 'Saving…' : 'Save' }}
+              </button>
+            </div>
+            <p v-if="optionsError" class="error">{{ optionsError }}</p>
+          </div>
+        </div>
+
         <!-- History: browse any past day's standings, or jump back to
              career totals / today. -->
         <div class="history-row">
@@ -335,6 +401,60 @@ onUnmounted(() => {
   align-items: center;
   gap: 0.5rem;
   margin: 0;
+}
+
+/* --- Board options (manager-only collapsible card) --- */
+
+.options-card {
+  padding: 0;
+}
+
+.options-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.7rem 0.9rem;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.options-caret {
+  color: var(--text-muted);
+}
+
+.options-body {
+  padding: 0 0.9rem 0.9rem;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.92rem;
+  margin: 0.35rem 0 0.75rem;
+}
+
+.check input {
+  width: auto;
+}
+
+.options-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.error {
+  color: var(--danger, #c0392b);
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
 }
 
 .history-row {

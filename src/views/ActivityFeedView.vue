@@ -8,6 +8,7 @@ import { startOfLocalDayISO } from '@/lib/day'
 import { memberColor } from '@/lib/memberColors'
 import { OUTCOME_HEX, OUTCOME_LABELS } from '@/lib/outcomes'
 import { fetchAllRows, supabase } from '@/lib/supabase'
+import { useAuthStore } from '@/stores/auth'
 import { DEFAULT_FEED_SETTINGS } from '@/types'
 import type { ActivityFeedSettings, KnockOutcome } from '@/types'
 
@@ -78,6 +79,54 @@ const settings = ref<ActivityFeedSettings>({ ...DEFAULT_FEED_SETTINGS })
 const items = ref<FeedItem[]>([])
 const loading = ref(true)
 const loadError = ref(false)
+
+// --- Feed options (campaign managers, right here on the feed — the knobs
+// moved off the dashboard 2026-07-21). Checkbox edits bind straight into
+// `settings`, so the show_* toggles preview live; Save persists and replays
+// today so milestone lines match the new steps. ---
+
+const auth = useAuthStore()
+const canManage =
+  auth.profile?.role === 'admin' || auth.profile?.role === 'campaign_manager'
+const optionsOpen = ref(false)
+const optionsSaving = ref(false)
+const optionsSaved = ref(false)
+const optionsError = ref('')
+
+/** Milestone steps must be whole numbers ≥ 1 (the DB CHECKs agree). */
+function cleanStep(n: number): number {
+  return Math.max(1, Math.round(Number.isFinite(n) ? n : 1))
+}
+
+async function saveOptions() {
+  const f = settings.value
+  optionsSaving.value = true
+  optionsError.value = ''
+  const { error } = await supabase
+    .from('activity_feed_settings')
+    .update({
+      show_knocks: f.show_knocks,
+      show_signatures: f.show_signatures,
+      person_milestones: f.person_milestones,
+      person_door_step: cleanStep(f.person_door_step),
+      squad_milestones: f.squad_milestones,
+      squad_door_step: cleanStep(f.squad_door_step),
+      squad_signature_step: cleanStep(f.squad_signature_step),
+      team_milestones: f.team_milestones,
+      team_door_step: cleanStep(f.team_door_step),
+      team_signature_step: cleanStep(f.team_signature_step),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', true)
+  optionsSaving.value = false
+  if (error) {
+    optionsError.value = 'Could not save — try again.'
+    return
+  }
+  optionsSaved.value = true
+  setTimeout(() => (optionsSaved.value = false), 2000)
+  await load()
+}
 
 // --- Day counters (module state, reset per load) ---
 // Doors are DISTINCT households and signatures DISTINCT signed persons —
@@ -330,6 +379,53 @@ function ms(item: FeedItem): MilestoneItem {
         </span>
       </div>
 
+      <!-- Manager knobs live on the feed itself, not the dashboard. -->
+      <div v-if="canManage" class="card options-card">
+        <button class="options-head" :aria-expanded="optionsOpen" @click="optionsOpen = !optionsOpen">
+          <span>Feed options</span>
+          <span class="options-caret" aria-hidden="true">{{ optionsOpen ? '▴' : '▾' }}</span>
+        </button>
+        <div v-if="optionsOpen" class="options-body">
+          <label class="check">
+            <input type="checkbox" v-model="settings.show_signatures" />
+            Show each signature as it lands
+          </label>
+          <label class="check">
+            <input type="checkbox" v-model="settings.show_knocks" />
+            Show every knock too
+          </label>
+          <label class="check">
+            <input type="checkbox" v-model="settings.person_milestones" />
+            Personal milestones
+          </label>
+          <div v-if="settings.person_milestones" class="step-row">
+            every <input type="number" min="1" v-model.number="settings.person_door_step" /> doors
+          </div>
+          <label class="check">
+            <input type="checkbox" v-model="settings.squad_milestones" />
+            Squad milestones
+          </label>
+          <div v-if="settings.squad_milestones" class="step-row">
+            every <input type="number" min="1" v-model.number="settings.squad_door_step" /> doors ·
+            <input type="number" min="1" v-model.number="settings.squad_signature_step" /> signatures
+          </div>
+          <label class="check">
+            <input type="checkbox" v-model="settings.team_milestones" />
+            Whole-team milestones
+          </label>
+          <div v-if="settings.team_milestones" class="step-row">
+            every <input type="number" min="1" v-model.number="settings.team_door_step" /> doors ·
+            <input type="number" min="1" v-model.number="settings.team_signature_step" /> signatures
+          </div>
+          <div class="options-actions">
+            <button class="btn btn-primary btn-sm" :disabled="optionsSaving" @click="saveOptions">
+              {{ optionsSaved ? 'Saved ✓' : optionsSaving ? 'Saving…' : 'Save' }}
+            </button>
+          </div>
+          <p v-if="optionsError" class="error options-error">{{ optionsError }}</p>
+        </div>
+      </div>
+
       <p v-if="loading" class="muted state">Loading today's activity…</p>
       <p v-else-if="loadError" class="error state">
         Couldn't load the feed — check the connection and reload.
@@ -448,6 +544,81 @@ function ms(item: FeedItem): MilestoneItem {
   .live-dot {
     animation: none;
   }
+}
+
+/* --- Feed options (manager-only collapsible card) --- */
+
+.options-card {
+  padding: 0;
+}
+
+.options-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.7rem 0.9rem;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.options-caret {
+  color: var(--text-muted);
+}
+
+.options-body {
+  padding: 0 0.9rem 0.9rem;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.92rem;
+  margin: 0.35rem 0 0.75rem;
+}
+
+.check input {
+  width: auto;
+}
+
+/* Indented "every N doors" rows under their milestone toggle. */
+.step-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin: -0.45rem 0 0.75rem 1.75rem;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+.step-row input {
+  width: 4.2em;
+  padding: 0.25rem 0.4rem;
+  font: inherit;
+  font-size: 0.88rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.options-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.options-error {
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
 }
 
 /* --- Feed rows --- */

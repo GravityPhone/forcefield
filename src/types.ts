@@ -369,7 +369,7 @@ export interface CanvasserLeaderboardRow {
  * rows show, and where the milestone lines fall. Doors are DISTINCT
  * households and signatures DISTINCT signed persons (the squad-progress /
  * door-status semantics, not the leaderboard's every-log count). Managed
- * from the campaign manager's dashboard. */
+ * from the Feed options card on /activity (campaign managers only). */
 export interface ActivityFeedSettings {
   id: boolean
   show_knocks: boolean

@@ -58,10 +58,13 @@ const barItems = computed<NavItem[]>(() => {
     ]
   }
   if (auth.profile.role === 'campaign_manager') {
+    // Turf is a first-class tab: cutting and dispatching happen daily, not
+    // from a dashboard detour.
     return [
       { to: '/admin', label: 'Dashboard', icon: 'dashboard' },
       { to: '/canvass', label: 'Canvass', icon: 'pin' },
       { to: '/squads', label: 'Squads', icon: 'squads' },
+      { to: '/turf', label: 'Turf', icon: 'map' },
       { to: '/activity', label: 'Feed', icon: 'pulse' },
       { to: '/leaderboard', label: 'Leaders', icon: 'trophy' },
     ]
@@ -95,7 +98,7 @@ const moreItems = computed<NavItem[]>(() => {
       roster,
       myKnocks,
       { to: '/admin/chat', label: 'AI Chat', icon: 'sparkle' },
-      { to: '/turf', label: 'Turf', icon: 'map' },
+      // Turf lives in the bottom tab bar now, not here.
       { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
       aboutMe,
       appearance,

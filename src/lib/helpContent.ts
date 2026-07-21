@@ -144,8 +144,8 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
           'Along the way the feed celebrates progress: personal door counts (every 5 by ' +
           'default), squads heating up (doors and signatures for the day), and whole-team ' +
           'moments like passing 100 doors. Doors count once per household; signatures once ' +
-          'per person. The campaign manager picks what shows and where the lines fall from ' +
-          'their dashboard.',
+          'per person. Campaign managers pick what shows and where the lines fall right ' +
+          'here — the Feed options card at the top.',
       },
     ],
   },
@@ -157,6 +157,12 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body:
           'Announcements from leadership, newest first. Check here for meetup spots, turf ' +
           'plans, and anything else the whole team should see.',
+      },
+      {
+        heading: 'Posting',
+        body:
+          'Campaign managers write announcements right on this screen — the composer at ' +
+          'the top posts to everyone, and Delete retires stale ones.',
       },
     ],
   },
@@ -171,8 +177,9 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       },
       {
         body:
-          'Whether the main board ranks signatures or doors knocked is a campaign setting; ' +
-          'past days are browsable with the date picker.',
+          'Whether the main board ranks signatures or doors knocked is a campaign setting — ' +
+          'campaign managers set it right here in the Board options card. Past days are ' +
+          'browsable with the date picker.',
       },
     ],
   },
@@ -330,10 +337,10 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         body:
-          'The campaign manager’s home base: campaign progress up top, the knobs for the ' +
-          'leaderboards and the team activity feed (what shows, and where the milestone ' +
-          'lines fall), and shortcuts to analytics, roles, turf cutting, the bulletin, ' +
-          'and campaigns.',
+          'Org-level setup: role and team placement, campaigns, and (soon) the voter-data ' +
+          'import. Everything day-to-day lives on its own screen now — post on the ' +
+          'Bulletin, tune the boards and team feed from their pages, cut turf from the ' +
+          'Turf tab.',
       },
     ],
   },

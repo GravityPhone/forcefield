@@ -7,7 +7,10 @@ import { useAuthStore } from '@/stores/auth'
 import type { Bulletin } from '@/types'
 
 const auth = useAuthStore()
-const isAdmin = auth.profile?.role === 'admin'
+// Campaign managers run comms and post right here — no dashboard detour.
+// True admins keep the ability too (RLS's is_admin() covers both).
+const role = auth.profile?.role
+const canPost = role === 'admin' || role === 'campaign_manager'
 
 const bulletins = ref<Bulletin[]>([])
 const loading = ref(true)
@@ -87,7 +90,7 @@ onUnmounted(() => {
 <template>
   <AppShell title="Campaign Bulletin">
     <div class="stack">
-      <div v-if="isAdmin" class="card">
+      <div v-if="canPost" class="card">
         <h3>Post an announcement</h3>
         <form @submit.prevent="post">
           <div class="field">
@@ -120,13 +123,13 @@ onUnmounted(() => {
         <span class="spinner" aria-hidden="true"></span> Loading announcements…
       </p>
       <p v-else-if="!bulletins.length" class="muted">
-        No announcements yet{{ isAdmin ? ' — post the first one above.' : '.' }}
+        No announcements yet{{ canPost ? ' — post the first one above.' : '.' }}
       </p>
 
       <article v-for="b in bulletins" :key="b.id" class="card bulletin">
         <div class="bulletin-head">
           <h3>{{ b.title }}</h3>
-          <button v-if="isAdmin" class="btn btn-ghost btn-sm" @click="remove(b)">Delete</button>
+          <button v-if="canPost" class="btn btn-ghost btn-sm" @click="remove(b)">Delete</button>
         </div>
         <p class="muted meta">{{ authorName(b) }} · {{ formatDate(b.created_at) }}</p>
         <p class="body">{{ b.body }}</p>

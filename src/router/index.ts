@@ -61,7 +61,7 @@ const router = createRouter({
       },
     },
 
-    // Campaign bulletin (everyone reads; admins post) and leaderboards
+    // Campaign bulletin (everyone reads; managers post inline) and leaderboards
     { path: '/bulletin', name: 'bulletin', component: () => import('@/views/BulletinView.vue'), meta: { roles: [] } },
     { path: '/leaderboard', name: 'leaderboard', component: () => import('@/views/LeaderboardView.vue'), meta: { roles: [] } },
 
