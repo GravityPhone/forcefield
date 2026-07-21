@@ -205,7 +205,7 @@ export const useTalkStore = defineStore('talk', {
         this.walkDirection,
         this.walkParity,
         { knockPartlySigned: this.knockPartlySigned },
-        3,
+        4,
       )
       if (seq !== upcomingSeq || this.selectedAddress?.id !== current.id) return
       this.upcoming = list

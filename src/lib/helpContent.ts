@@ -32,16 +32,16 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body:
           'Signed, Didn’t Sign, and Maybe need a specific person picked from the roster. ' +
           'Not Home, Skip, and Hostile log against the whole household — no person needed. ' +
-          'Once something’s logged, Next moves you along the street per your walk pattern, ' +
-          'and Previous steps back through the doors YOU’ve knocked, newest first.',
+          'Right below the outcomes: Next moves you along the street per your walk pattern, ' +
+          'and ‹ Back steps back through the doors YOU’ve knocked, newest first — ' +
+          'neither needs an outcome logged first.',
       },
       {
         heading: 'Walking the street',
         body:
           'The walk pattern (direction, side of the street, partly-signed doors) drives ' +
-          'the Up next chips — the next three doors worth knocking, each with its status ' +
-          'color. Tap a chip to jump straight to that door, or ‹ Back to retrace your own ' +
-          'knocked doors one at a time — neither needs an outcome logged first.',
+          'the Up next grid at the bottom of the screen — the next four doors worth ' +
+          'knocking, each with its status color. Tap one to jump straight to that door.',
       },
       {
         heading: 'Pin colors',

@@ -52,13 +52,13 @@ function disabledFor(requiresPerson: boolean): boolean {
         {{ o.label }}
       </button>
     </div>
-    <!-- Confirms before the screen clears — no silent auto-advance. Only
-         appears once something is actually logged for the current target.
-         Next walks the street per the direction pref above; Previous steps
+    <!-- On deck whenever a door is loaded — no outcome required (with one
+         logged, moving on doubles as the confirm; nothing auto-advances).
+         Next walks the street per the direction pref above; Back steps
          back through YOUR knock history (the doors you've logged, newest
          first) — retracing your day, not the street. -->
-    <div v-if="talk.pendingOutcome" v-motion="popIn()" class="advance-row">
-      <button class="btn prev-btn" title="Back through the doors you've knocked" @click="confirmPrevious">‹ Previous</button>
+    <div v-if="talk.selectedAddress" v-motion="popIn()" class="advance-row">
+      <button class="btn prev-btn" title="Back through the doors you've knocked" @click="confirmPrevious">‹ Back</button>
       <button class="btn btn-primary next-btn" @click="confirmNext">Next ›</button>
     </div>
   </div>
@@ -96,7 +96,7 @@ function disabledFor(requiresPerson: boolean): boolean {
   color: var(--accent-contrast);
 }
 
-/* Next stays the single most-tapped button in the app — Previous shares the
+/* Next stays the single most-tapped button in the app — Back shares the
  * row but Next keeps the lion's share of the width, primary-filled, so the
  * default thumb target is still can't-miss walking between doors in the sun. */
 .advance-row {

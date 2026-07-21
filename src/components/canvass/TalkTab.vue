@@ -12,7 +12,7 @@ import type { Address, KnockOutcome } from '@/types'
 
 const talk = useTalkStore()
 
-// --- Walk navigation: the Up-next chips + Back ---
+// --- Walk navigation: the Up-next grid ---
 
 /** House number alone — the chips all sit on the current door's street. A
  * numberless address (rare) falls back to its full line. */
@@ -24,11 +24,6 @@ function chipLabel(a: Address): string {
 function jumpChip(addressId: string) {
   hapticTap('light')
   void talk.jumpTo(addressId)
-}
-
-function stepBack() {
-  hapticTap('light')
-  void talk.confirmPrevious()
 }
 
 // Address-banner status — the same rules as the map pins (doorStatusOutcome
@@ -185,18 +180,16 @@ const PARTLY_SIGNED_OPTIONS = [
       />
     </div>
 
-    <!-- Walk navigation without logging: Back retraces your own knock
-         history one door at a time (same as the Previous button below);
-         the Up-next chips are the next houses the pattern above will visit
-         — tap one to jump straight to it. Dot = that door's status color
-         (blue = never knocked). -->
+    <OutcomeButtons />
+
+    <!-- Up next, at the very bottom below the outcome + Next/Back buttons:
+         the next four houses the pattern above will visit, two by two —
+         tap one to jump straight to it without logging anything. Dot =
+         that door's status color (blue = never knocked). -->
     <div v-if="talk.selectedAddress" class="up-next">
-      <button class="up-chip back-chip" title="Back through the doors you've knocked" @click="stepBack">
-        ‹ Back
-      </button>
       <span class="muted up-label">Up next:</span>
       <span v-if="talk.upcoming === null" class="muted up-none">…</span>
-      <template v-else-if="talk.upcoming.length">
+      <div v-else-if="talk.upcoming.length" class="up-grid">
         <button
           v-for="u in talk.upcoming"
           :key="u.address.id"
@@ -211,11 +204,9 @@ const PARTLY_SIGNED_OPTIONS = [
           ></span>
           {{ chipLabel(u.address) }}
         </button>
-      </template>
+      </div>
       <span v-else class="muted up-none">end of the street</span>
     </div>
-
-    <OutcomeButtons />
   </div>
 </template>
 
@@ -409,32 +400,37 @@ const PARTLY_SIGNED_OPTIONS = [
   font-size: 0.92rem;
 }
 
-/* --- Up next / Back chips --- */
+/* --- Up next grid --- */
 
 .up-next {
   display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  flex-wrap: wrap;
-  /* Reads as one block with the walk-order row above it. */
+  flex-direction: column;
+  gap: 0.4rem;
+  /* Reads as one block with the Next/Back row above it. */
   margin-top: -0.35rem;
 }
 
 .up-label {
   font-size: 0.85rem;
-  flex-shrink: 0;
+}
+
+/* Always two side by side — an odd remainder near the end of the street
+ * leaves a half-width cell rather than one stretched full-width chip. */
+.up-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.6rem;
 }
 
 .up-chip {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.4rem;
-  flex: 1;
-  min-height: 42px;
+  gap: 0.45rem;
+  min-height: 52px;
   padding: 0.3rem 0.7rem;
   font: inherit;
-  font-size: 0.98rem;
+  font-size: 1.02rem;
   font-weight: 700;
   border: 1.5px solid var(--border);
   border-radius: 999px;
@@ -445,10 +441,6 @@ const PARTLY_SIGNED_OPTIONS = [
 
 .up-chip:active {
   filter: brightness(0.95);
-}
-
-.back-chip {
-  flex: 0 0 auto;
 }
 
 .up-dot {
