@@ -32,8 +32,16 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body:
           'Signed, Didn’t Sign, and Maybe need a specific person picked from the roster. ' +
           'Not Home, Skip, and Hostile log against the whole household — no person needed. ' +
-          'Once something’s logged, Next and Previous move you to the next worthwhile door ' +
-          'in either direction along the street.',
+          'Once something’s logged, Next moves you along the street per your walk pattern, ' +
+          'and Previous steps back through the doors YOU’ve knocked, newest first.',
+      },
+      {
+        heading: 'Walking the street',
+        body:
+          'The walk pattern (direction, side of the street, partly-signed doors) drives ' +
+          'the Up next chips — the next three doors worth knocking, each with its status ' +
+          'color. Tap a chip to jump straight to that door, or ‹ Back to retrace your own ' +
+          'knocked doors one at a time — neither needs an outcome logged first.',
       },
       {
         heading: 'Pin colors',
@@ -68,10 +76,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body:
           'Door pins wear the same status colors as the Scout map — blue means nobody has ' +
           'knocked yet, green means everyone there signed, yellow means partly signed, red ' +
-          'means a closed no. Tap a door pin to open it in Talk mode. Tap a squadmate’s card ' +
-          'to zoom to the last door they knocked. The Our turf / All turf buttons shade turf ' +
-          'areas — just your crew’s ground, or the whole campaign’s cut (tap the lit one to ' +
-          'turn shading off).',
+          'means a closed no. Doors knocked today also wear the knocker’s animal, so the map ' +
+          'doubles as a live picture of who covered what. Tap a door pin to open it in Talk ' +
+          'mode. Tap a squadmate’s card to zoom to the last door they knocked. The Our turf / ' +
+          'All turf buttons shade turf areas — just your crew’s ground, or the whole ' +
+          'campaign’s cut (tap the lit one to turn shading off).',
       },
       {
         heading: 'Assign doors',
@@ -300,8 +309,10 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         body:
-          'The campaign manager’s home base: campaign progress up top, with shortcuts to ' +
-          'the bulletin, campaigns, user management, turf cutting, and data import.',
+          'The campaign manager’s home base: campaign progress up top, the knobs for the ' +
+          'leaderboards and the team activity feed (what shows, and where the milestone ' +
+          'lines fall), and shortcuts to analytics, roles, turf cutting, the bulletin, ' +
+          'and campaigns.',
       },
     ],
   },

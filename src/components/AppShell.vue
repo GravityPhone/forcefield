@@ -44,7 +44,8 @@ const barItems = computed<NavItem[]>(() => {
   // (ChatDrawer), reachable from every screen via the right-edge handle.
   // Admins get oversight tabs only; campaign managers run the day-to-day
   // and hold what used to be the admin nav.
-  // Admins run the org, not a campaign — no Bulletin/Leaders/Squads for them.
+  // Admins run the org, not a campaign — no Bulletin/Leaders/Squads/Feed
+  // for them (the /activity route itself is open to any logged-in role).
   if (auth.profile.role === 'admin') {
     return [
       { to: '/admin/roles', label: 'Roles', icon: 'shield' },
