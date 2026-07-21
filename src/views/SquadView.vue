@@ -95,10 +95,18 @@ const recentByMember = ref<Map<string, RecentDoor[]>>(new Map())
 /** door id -> latest-knock status row (outcome + signed/person counts) —
  * the door pins wear the same doorStatusOutcome colors as the Scout map. */
 const statusByDoor = ref<Map<string, HouseholdLatestKnock>>(new Map())
+/** door id -> who knocked it most recently TODAY (`at` = epoch ms). Doors a
+ * squad member knocked today wear that member's animal avatar on the map —
+ * the "who's covered what so far" layer. Non-member knockers can land here
+ * too (turf is shared); they simply have no avatar to show. */
+const todayKnockerByDoor = ref<Map<string, { canvasserId: string; at: number }>>(new Map())
 const selectedMemberId = ref<string | null>(null)
 const dashboardLoading = ref(false)
 
 const memberIdSet = computed(() => new Set(mySquad.value?.members.map((m) => m.id) ?? []))
+const memberById = computed(
+  () => new Map((mySquad.value?.members ?? []).map((m) => [m.id, m])),
+)
 const turfIdSet = computed(() => new Set(squadTurfs.value.map((t) => t.id)))
 
 /** Yourself first, then everyone else alphabetically — your own card is the
@@ -220,16 +228,17 @@ async function loadDashboard() {
         ).catch(() => [] as TurfDoor[])
       : Promise.resolve([] as TurfDoor[]),
     turfIds.length
-      ? fetchAllRows<{ household_id: string; canvasser_id: string }>((from, to) =>
-          supabase
-            .from('knock_logs')
-            .select('household_id, canvasser_id, addresses!inner(turf_id)')
-            .in('addresses.turf_id', turfIds)
-            .not('household_id', 'is', null)
-            .order('id')
-            .range(from, to),
-        ).catch(() => [] as { household_id: string; canvasser_id: string }[])
-      : Promise.resolve([] as { household_id: string; canvasser_id: string }[]),
+      ? fetchAllRows<{ household_id: string; canvasser_id: string; occurred_at: string }>(
+          (from, to) =>
+            supabase
+              .from('knock_logs')
+              .select('household_id, canvasser_id, occurred_at, addresses!inner(turf_id)')
+              .in('addresses.turf_id', turfIds)
+              .not('household_id', 'is', null)
+              .order('id')
+              .range(from, to),
+        ).catch(() => [] as { household_id: string; canvasser_id: string; occurred_at: string }[])
+      : Promise.resolve([] as { household_id: string; canvasser_id: string; occurred_at: string }[]),
     // Last doors each member touched — anywhere, not just in turf, so the
     // card always answers "where are they right now". Overfetch then dedupe
     // (re-knocking the same door shouldn't eat the whole list).
@@ -254,6 +263,11 @@ async function loadDashboard() {
 
   const knocked = new Set<string>()
   const byMember = new Map<string, Set<string>>()
+  // Epoch-ms compare, not ISO-string compare — PostgREST's timestamptz
+  // formatting (+00:00, varying precision) doesn't sort lexicographically
+  // against Date.toISOString().
+  const dayStart = new Date().setHours(0, 0, 0, 0)
+  const todayBy = new Map<string, { canvasserId: string; at: number }>()
   for (const row of knocksData) {
     knocked.add(row.household_id)
     if (memberIds.includes(row.canvasser_id)) {
@@ -261,9 +275,17 @@ async function loadDashboard() {
       if (!set) byMember.set(row.canvasser_id, (set = new Set()))
       set.add(row.household_id)
     }
+    const at = Date.parse(row.occurred_at)
+    if (at >= dayStart) {
+      const prev = todayBy.get(row.household_id)
+      if (!prev || prev.at < at) {
+        todayBy.set(row.household_id, { canvasserId: row.canvasser_id, at })
+      }
+    }
   }
   knockedDoors.value = knocked
   knockedByMember.value = byMember
+  todayKnockerByDoor.value = todayBy
 
   const recents = new Map<string, RecentDoor[]>()
   memberIds.forEach((id, i) => {
@@ -486,9 +508,12 @@ async function rebuildAreas() {
 
 /** House-number chip for one door, filled with the door's knock STATUS —
  * the exact colors the Scout map uses (doorStatusOutcome: green only when
- * everyone signed, yellow partly signed, red closed-no, blue untouched). In
- * assign mode, selected doors wear the member's color instead and doors the
- * viewer can't hand out fade back. */
+ * everyone signed, yellow partly signed, red closed-no, blue untouched).
+ * Doors a squad member knocked TODAY additionally wear that member's animal
+ * avatar, so the map shows who covered what as the day unfolds. In assign
+ * mode, selected doors wear the member's color instead, doors the viewer
+ * can't hand out fade back, and the avatars sit out (door-picking needs the
+ * selection colors legible, not decorated). */
 function styleDoorMarker(marker: google.maps.marker.AdvancedMarkerElement, door: TurfDoor) {
   const el = marker.content as HTMLElement
   const s = el.style
@@ -496,17 +521,52 @@ function styleDoorMarker(marker: google.maps.marker.AdvancedMarkerElement, door:
   const outcome = doorStatusOutcome(status?.outcome, status?.signed_count, status?.person_count)
   const turfColor = turfColorById.value.get(door.turf_id)
   const showNumber = !!el.dataset.house && mapZoom >= NUMBERS_MIN_ZOOM
+  const knocker = assigningMember.value ? undefined : todayKnockerByDoor.value.get(door.id)
+  const member = knocker ? memberById.value.get(knocker.canvasserId) : undefined
+  // textContent assignment also clears any previous badge child.
   el.textContent = showNumber ? el.dataset.house! : ''
+  if (member) {
+    const url = avatarUrl(member.avatar)
+    const badge = document.createElement(url ? 'img' : 'span') as HTMLElement
+    const bs = badge.style
+    if (url) {
+      const img = badge as HTMLImageElement
+      img.src = url
+      img.alt = ''
+      bs.objectFit = 'contain'
+      bs.padding = '1px'
+      bs.background = '#fff'
+    } else {
+      // No animal picked — same initial-letter fallback as their big marker.
+      badge.textContent = memberName(member).slice(0, 1).toUpperCase()
+      bs.display = 'flex'
+      bs.alignItems = 'center'
+      bs.justifyContent = 'center'
+      bs.fontSize = '10px'
+      bs.background = memberColor(member)
+    }
+    bs.boxSizing = 'border-box'
+    bs.width = '17px'
+    bs.height = '17px'
+    bs.borderRadius = '50%'
+    bs.flexShrink = '0'
+    bs.pointerEvents = 'none'
+    el.prepend(badge)
+  }
+  // Avatar pins run a hair bigger than the plain 19/14px chips — today's
+  // covered doors are the map's live story, they get to pop.
+  const size = member ? 22 : showNumber ? 19 : 14
   s.boxSizing = 'border-box'
   s.cursor = 'pointer'
   s.display = 'flex'
   s.alignItems = 'center'
   s.justifyContent = 'center'
-  s.height = showNumber ? '19px' : '14px'
-  s.minWidth = showNumber ? '19px' : '14px'
-  s.padding = showNumber ? '0 5px' : '0'
-  s.borderRadius = showNumber ? '7px' : '50%'
-  s.width = showNumber ? 'auto' : '14px'
+  s.gap = '3px'
+  s.height = `${size}px`
+  s.minWidth = `${size}px`
+  s.padding = showNumber ? (member ? '0 6px 0 2px' : '0 5px') : '0'
+  s.borderRadius = showNumber ? `${Math.ceil(size / 2)}px` : '50%'
+  s.width = showNumber ? 'auto' : `${size}px`
   s.fontSize = '11px'
   s.fontWeight = '700'
   s.lineHeight = '1'
@@ -519,11 +579,11 @@ function styleDoorMarker(marker: google.maps.marker.AdvancedMarkerElement, door:
   s.boxShadow = turfColor
     ? `0 0 0 2px ${turfColor}, 0 0 3px rgba(0, 0, 0, 0.45)`
     : '0 0 3px rgba(0, 0, 0, 0.45)'
-  const member = assigningMember.value
+  const assignee = assigningMember.value
   s.animation = ''
-  if (member) {
+  if (assignee) {
     if (assignSelected.value.has(door.id)) {
-      s.background = memberColor(member)
+      s.background = memberColor(assignee)
       s.boxShadow = '0 0 0 2.5px #fff, 0 0 5px rgba(0, 0, 0, 0.55)'
       // The walk anchor pulses: the next unselected door tapped sweeps the
       // whole walk from here.
@@ -534,6 +594,9 @@ function styleDoorMarker(marker: google.maps.marker.AdvancedMarkerElement, door:
       s.opacity = '0.35'
     }
   }
+  marker.title = member ? `${door.street} — ${memberName(member)}` : door.street
+  // Today's avatar pins ride above their plain neighbors.
+  marker.zIndex = member ? 10 : null
 }
 
 /** Sync the door pins with the current turf doors: add new ones, restyle
@@ -732,6 +795,15 @@ async function onLiveKnock(knock: KnockLog) {
     let set = knockedByMember.value.get(knock.canvasser_id)
     if (!set) knockedByMember.value.set(knock.canvasser_id, (set = new Set()))
     set.add(a.id)
+    // The knocker's avatar lands on the pin live — guard on "today" anyway
+    // (an offline knock can sync in hours late) and keep the newest.
+    const at = Date.parse(knock.occurred_at)
+    if (at >= new Date().setHours(0, 0, 0, 0)) {
+      const prev = todayKnockerByDoor.value.get(a.id)
+      if (!prev || prev.at <= at) {
+        todayKnockerByDoor.value.set(a.id, { canvasserId: knock.canvasser_id, at })
+      }
+    }
     // Re-pull just this door's status row so the pin recolors exactly
     // (signed counts included) instead of approximating from the raw knock.
     const { data: status } = await supabase

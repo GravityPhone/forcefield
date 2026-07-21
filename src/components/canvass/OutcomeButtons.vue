@@ -16,9 +16,14 @@ function logOutcome(value: KnockOutcome) {
   talk.logOutcome(value)
 }
 
-function confirmAdvance(reverse: boolean) {
+function confirmNext() {
   hapticNotify('success')
-  void talk.confirmNext(reverse)
+  void talk.confirmNext()
+}
+
+function confirmPrevious() {
+  hapticNotify('success')
+  void talk.confirmPrevious()
 }
 
 // Not Home / Skip / Hostile describe the door interaction, so they only need
@@ -49,11 +54,12 @@ function disabledFor(requiresPerson: boolean): boolean {
     </div>
     <!-- Confirms before the screen clears — no silent auto-advance. Only
          appears once something is actually logged for the current target.
-         Next walks the street per the direction pref above; Previous walks
-         the opposite way (same skip rules), for doubling back mid-street. -->
+         Next walks the street per the direction pref above; Previous steps
+         back through YOUR knock history (the doors you've logged, newest
+         first) — retracing your day, not the street. -->
     <div v-if="talk.pendingOutcome" v-motion="popIn()" class="advance-row">
-      <button class="btn prev-btn" @click="confirmAdvance(true)">‹ Previous</button>
-      <button class="btn btn-primary next-btn" @click="confirmAdvance(false)">Next ›</button>
+      <button class="btn prev-btn" title="Back through the doors you've knocked" @click="confirmPrevious">‹ Previous</button>
+      <button class="btn btn-primary next-btn" @click="confirmNext">Next ›</button>
     </div>
   </div>
 </template>

@@ -4,11 +4,32 @@ import RosterList from './RosterList.vue'
 import OutcomeButtons from './OutcomeButtons.vue'
 import { computed } from 'vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
-import { OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, OUTCOME_REQUIRES_PERSON } from '@/lib/outcomes'
+import { hapticTap } from '@/lib/native'
+import { OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, OUTCOME_REQUIRES_PERSON, PIN_DEFAULT_HEX } from '@/lib/outcomes'
+import { houseNumber } from '@/lib/streetWalk'
 import { useTalkStore, type KnockHistoryEntry } from '@/stores/talk'
-import type { KnockOutcome } from '@/types'
+import type { Address, KnockOutcome } from '@/types'
 
 const talk = useTalkStore()
+
+// --- Walk navigation: the Up-next chips + Back ---
+
+/** House number alone — the chips all sit on the current door's street. A
+ * numberless address (rare) falls back to its full line. */
+function chipLabel(a: Address): string {
+  const n = houseNumber(a.street)
+  return n > 0 ? String(n) : a.street
+}
+
+function jumpChip(addressId: string) {
+  hapticTap('light')
+  void talk.jumpTo(addressId)
+}
+
+function stepBack() {
+  hapticTap('light')
+  void talk.confirmPrevious()
+}
 
 // Address-banner status — the same rules as the map pins (doorStatusOutcome
 // in lib/outcomes.ts), with labels: green "Everyone signed" once the whole
@@ -162,6 +183,36 @@ const PARTLY_SIGNED_OPTIONS = [
         aria-label="Doors where someone already signed but others have not"
         @update:model-value="talk.setKnockPartlySigned($event === 'knock')"
       />
+    </div>
+
+    <!-- Walk navigation without logging: Back retraces your own knock
+         history one door at a time (same as the Previous button below);
+         the Up-next chips are the next houses the pattern above will visit
+         — tap one to jump straight to it. Dot = that door's status color
+         (blue = never knocked). -->
+    <div v-if="talk.selectedAddress" class="up-next">
+      <button class="up-chip back-chip" title="Back through the doors you've knocked" @click="stepBack">
+        ‹ Back
+      </button>
+      <span class="muted up-label">Up next:</span>
+      <span v-if="talk.upcoming === null" class="muted up-none">…</span>
+      <template v-else-if="talk.upcoming.length">
+        <button
+          v-for="u in talk.upcoming"
+          :key="u.address.id"
+          class="up-chip"
+          :title="u.address.street"
+          @click="jumpChip(u.address.id)"
+        >
+          <span
+            class="up-dot"
+            :style="{ background: u.status ? OUTCOME_HEX[u.status] : PIN_DEFAULT_HEX }"
+            aria-hidden="true"
+          ></span>
+          {{ chipLabel(u.address) }}
+        </button>
+      </template>
+      <span v-else class="muted up-none">end of the street</span>
     </div>
 
     <OutcomeButtons />
@@ -356,5 +407,60 @@ const PARTLY_SIGNED_OPTIONS = [
   min-width: 0;
   width: auto;
   font-size: 0.92rem;
+}
+
+/* --- Up next / Back chips --- */
+
+.up-next {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  /* Reads as one block with the walk-order row above it. */
+  margin-top: -0.35rem;
+}
+
+.up-label {
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.up-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  flex: 1;
+  min-height: 42px;
+  padding: 0.3rem 0.7rem;
+  font: inherit;
+  font-size: 0.98rem;
+  font-weight: 700;
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.up-chip:active {
+  filter: brightness(0.95);
+}
+
+.back-chip {
+  flex: 0 0 auto;
+}
+
+.up-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid #fff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
+  flex-shrink: 0;
+}
+
+.up-none {
+  font-size: 0.85rem;
 }
 </style>

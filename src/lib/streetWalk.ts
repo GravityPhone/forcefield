@@ -36,22 +36,32 @@ function matchesParity(n: number, parity: WalkParity): boolean {
 
 type AddressWithRoster = Address & { persons?: { count: number }[] }
 
-/** Next house on the same street, in walk order — used by Talk mode's "Next"
- * button to auto-advance instead of leaving the canvasser to search again.
- * Direction/parity mimic real walk patterns (one side of the street, then
- * the other; ascending or descending house numbers).
+/** One door ahead on the walk, with the status its "Up next" chip wears:
+ * 'maybe' once somebody-but-not-everybody there signed (the yellow
+ * partly-signed rule from doorStatusOutcome), else the latest soft outcome
+ * (not home / maybe), null for a door never knocked. */
+export interface UpcomingDoor {
+  address: Address
+  status: KnockOutcome | null
+}
+
+/** The next houses on the same street, in walk order — Talk mode's "Next"
+ * button advances to the first, and the "Up next" chips preview the first
+ * few. Direction/parity mimic real walk patterns (one side of the street,
+ * then the other; ascending or descending house numbers).
  *
- * Houses are walked PAST (not stopped at) when knocking again would waste
+ * Houses are walked PAST (not returned) when knocking again would waste
  * the door: someone already knocked it today (any canvasser — squads share
- * turf), its latest outcome closed it (hostile / didn't sign), everyone
- * there has signed, or it's partly signed and the toggle says skip those.
- * Returns null when nothing past the current house survives the filters. */
-export async function findNextOnStreet(
+ * turf), its latest outcome closed it (hostile / didn't sign / skip),
+ * everyone there has signed, or it's partly signed and the toggle says skip
+ * those. Returns [] when nothing past the current house survives. */
+export async function findUpcomingOnStreet(
   current: Address,
   direction: WalkDirection,
   parity: WalkParity,
   options: NextHouseOptions = { knockPartlySigned: true },
-): Promise<Address | null> {
+  limit = 1,
+): Promise<UpcomingDoor[]> {
   const targetName = streetNameOf(current.street)
   const currentNumber = houseNumber(current.street)
   const { data } = await supabase
@@ -70,7 +80,7 @@ export async function findNextOnStreet(
       ? rows.filter((a) => houseNumber(a.street) > currentNumber)
       : rows.filter((a) => houseNumber(a.street) < currentNumber)
 
-  if (!ahead.length) return null
+  if (!ahead.length) return []
 
   ahead.sort((a, b) =>
     direction === 'ascending'
@@ -99,6 +109,7 @@ export async function findNextOnStreet(
   )
   const knockedToday = new Set((todayRes.data ?? []).map((r) => r.household_id as string))
 
+  const out: UpcomingDoor[] = []
   for (const candidate of ahead) {
     if (knockedToday.has(candidate.id)) continue
 
@@ -112,7 +123,19 @@ export async function findNextOnStreet(
       if (everyoneSigned || !options.knockPartlySigned) continue
     }
 
-    return candidate
+    out.push({ address: candidate, status: signed > 0 ? 'maybe' : (latest ?? null) })
+    if (out.length >= limit) break
   }
-  return null
+  return out
+}
+
+/** First house the walk would visit next — see findUpcomingOnStreet. */
+export async function findNextOnStreet(
+  current: Address,
+  direction: WalkDirection,
+  parity: WalkParity,
+  options: NextHouseOptions = { knockPartlySigned: true },
+): Promise<Address | null> {
+  const [next] = await findUpcomingOnStreet(current, direction, parity, options, 1)
+  return next?.address ?? null
 }
