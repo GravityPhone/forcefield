@@ -98,8 +98,8 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Cards and colors',
         body:
-          'Your card’s accent color and your avatar are yours to pick — both live on the ' +
-          'Appearance page.',
+          'Your card’s accent color and your emoji are yours to pick — both live on the ' +
+          'About me page.',
       },
     ],
   },
@@ -234,6 +234,21 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
           'name never changes either way.',
       },
       {
+        heading: 'Pick my emoji',
+        body:
+          'Your emoji is your face on the squad map, in chat, and on member lists — 260+ to ' +
+          'choose from, each with its name shown so the crew knows what to call you. Search ' +
+          'by name (“dragon”, “taco”, “disco”) or browse the groups.',
+      },
+      {
+        heading: 'Pick my color',
+        body:
+          'Your accent color tints your Squad-page card and map marker, your roster row, and ' +
+          'your name in chat. Grab one from the team palette or mix your own — hue, punch, ' +
+          'and brightness sliders, or type any hex code. Until you pick, one is assigned ' +
+          'automatically.',
+      },
+      {
         heading: 'Phone number',
         body:
           'Save a number and teammates get a one-tap Call button next to your name on the ' +
@@ -268,11 +283,10 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
           'download, so nothing gets slower.',
       },
       {
-        heading: 'Avatar & color',
+        heading: 'Emoji & color',
         body:
-          'Pick any avatar — animals, smileys, food, whatever feels like you. It shows next ' +
-          'to your chat messages and on member lists; your color tints your card and knock ' +
-          'marker on the Squad page. Until you pick a color, one is assigned automatically.',
+          'Your personal emoji and accent color moved to the About me page — they’re part ' +
+          'of who you are, not how the app looks.',
       },
     ],
   },

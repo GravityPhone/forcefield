@@ -10,6 +10,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { vacStyles } from '@/lib/themes'
 import { avatarUrl } from '@/lib/avatars'
+import { memberColor } from '@/lib/memberColors'
 import { hapticTap } from '@/lib/native'
 import { canvassGameOpen } from '@/lib/easterEgg'
 import type { ChatProfile } from '@/types'
@@ -334,6 +335,62 @@ const vacMessages = computed(() =>
   })),
 )
 
+// --- Member-colored usernames inside the chat widget ---
+// vue-advanced-chat has no per-user color option, but its shadow root is
+// open: whenever the message list changes, paint every .vac-text-username
+// span whose text matches a known member's shown name with that member's
+// accent color (same hue as their Squad card / roster row). Setting style
+// is an attribute mutation, which the childList-only observer ignores — no
+// feedback loop.
+
+const vacEl = ref<HTMLElement | null>(null)
+
+const usernameColors = computed(() => {
+  const map = new Map<string, string>()
+  const add = (p: ChatProfile) => map.set(p.display_name || p.username, memberColor(p))
+  for (const p of Object.values(chat.profiles)) add(p)
+  for (const p of chat.orgMembers) add(p)
+  chat.activeChat?.members.forEach(add)
+  return map
+})
+
+let usernameObserver: MutationObserver | null = null
+let recolorQueued = false
+
+function recolorUsernames() {
+  recolorQueued = false
+  const root = vacEl.value?.shadowRoot
+  if (!root) return
+  const map = usernameColors.value
+  root
+    .querySelectorAll<HTMLElement>('.vac-text-username span, .vac-reply-username')
+    .forEach((el) => {
+      const color = map.get(el.textContent?.trim() ?? '')
+      if (color) {
+        el.style.color = color
+        el.style.fontWeight = '700'
+      }
+    })
+}
+
+function queueRecolor() {
+  if (recolorQueued) return
+  recolorQueued = true
+  requestAnimationFrame(recolorUsernames)
+}
+
+watch([vacEl, usernameColors], () => {
+  usernameObserver?.disconnect()
+  usernameObserver = null
+  const root = vacEl.value?.shadowRoot
+  if (!root) return
+  usernameObserver = new MutationObserver(queueRecolor)
+  usernameObserver.observe(root, { childList: true, subtree: true })
+  queueRecolor()
+})
+
+onUnmounted(() => usernameObserver?.disconnect())
+
 // --- Custom element events (native CustomEvent; payload is event.detail[0]) ---
 
 async function onFetchMessages(e: Event) {
@@ -561,6 +618,7 @@ async function addPeople() {
         <div ref="widgetBox" class="widget-box">
           <vue-advanced-chat
             v-if="widgetReady && chat.myId && chat.activeChatId"
+            ref="vacEl"
             :height="`${widgetHeight}px`"
             :theme="vacBaseTheme"
             :styles.prop="vacThemeStyles"

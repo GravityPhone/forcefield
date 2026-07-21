@@ -1,13 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
+import EmojiPickerSheet from '@/components/profile/EmojiPickerSheet.vue'
+import ColorPickerSheet from '@/components/profile/ColorPickerSheet.vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
-import { avatarUrl } from '@/lib/avatars'
+import { avatarName, avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
 import { ROLE_LABELS } from '@/types'
 
 const auth = useAuthStore()
+
+// The emoji + color pickers live HERE (moved off /appearance 2026-07-21) —
+// identity is About-me business; /appearance keeps schemes & readability.
+const emojiOpen = ref(false)
+const colorOpen = ref(false)
 
 // Admins aren't on a team (guard_profile_privileges nulls team_id), so a
 // saved number would be visible to no one — hide the field rather than
@@ -124,17 +131,51 @@ async function save() {
 <template>
   <AppShell title="About me">
     <div v-if="auth.profile" class="about-page">
-      <!-- Who this is — avatar and color are picked on /appearance. -->
+      <!-- Who this is — the avatar doubles as a shortcut into the picker. -->
       <div class="card identity" :style="{ '--member-color': memberColor(auth.profile) }">
-        <span class="identity-avatar" :style="!avatarUrl(auth.profile.avatar) ? { background: memberColor(auth.profile) } : {}">
+        <button
+          class="identity-avatar"
+          :style="!avatarUrl(auth.profile.avatar) ? { background: memberColor(auth.profile) } : {}"
+          aria-label="Pick my emoji"
+          @click="emojiOpen = true"
+        >
           <img v-if="avatarUrl(auth.profile.avatar)" :src="avatarUrl(auth.profile.avatar)" alt="" />
           <template v-else>{{ previewName.slice(0, 1).toUpperCase() }}</template>
-        </span>
+        </button>
         <span class="identity-text">
           <span class="identity-name">{{ previewName }}</span>
           <span class="muted identity-role">{{ ROLE_LABELS[auth.profile.role] }}</span>
         </span>
-        <router-link class="btn btn-sm identity-edit" to="/appearance">Avatar &amp; color</router-link>
+      </div>
+
+      <!-- The two identity submenus: emoji + color. -->
+      <div class="picker-row">
+        <button class="picker-btn" @click="emojiOpen = true">
+          <span class="picker-preview">
+            <img v-if="avatarUrl(auth.profile.avatar)" :src="avatarUrl(auth.profile.avatar)" alt="" />
+            <template v-else>🙂</template>
+          </span>
+          <span class="picker-copy">
+            <span class="picker-title">Pick my emoji</span>
+            <span class="muted picker-sub">
+              {{ auth.profile.avatar ? avatarName(auth.profile.avatar) : 'None yet — go grab one' }}
+            </span>
+          </span>
+          <span class="muted picker-chevron" aria-hidden="true">›</span>
+        </button>
+        <button class="picker-btn" @click="colorOpen = true">
+          <span
+            class="picker-preview picker-color"
+            :style="{ background: memberColor(auth.profile) }"
+          ></span>
+          <span class="picker-copy">
+            <span class="picker-title">Pick my color</span>
+            <span class="muted picker-sub">
+              {{ auth.profile.color ? auth.profile.color.toUpperCase() : 'Automatic' }}
+            </span>
+          </span>
+          <span class="muted picker-chevron" aria-hidden="true">›</span>
+        </button>
       </div>
 
       <div class="field">
@@ -208,6 +249,9 @@ async function save() {
         </button>
         <span v-if="savedFlash" class="saved-flash">Saved ✓</span>
       </div>
+
+      <EmojiPickerSheet v-model:open="emojiOpen" />
+      <ColorPickerSheet v-model:open="colorOpen" />
     </div>
   </AppShell>
 </template>
@@ -233,13 +277,17 @@ async function save() {
   justify-content: center;
   width: 52px;
   height: 52px;
+  padding: 0;
   border-radius: 50%;
   border: 2.5px solid var(--member-color);
+  background: transparent;
   overflow: hidden;
   flex-shrink: 0;
+  font: inherit;
   font-weight: 800;
   font-size: 1.3rem;
   color: #fff;
+  cursor: pointer;
 }
 
 .identity-avatar img {
@@ -266,8 +314,84 @@ async function save() {
   font-size: 0.85rem;
 }
 
-.identity-edit {
-  margin-left: auto;
+/* --- Emoji / color picker buttons --- */
+
+.picker-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+}
+
+@media (max-width: 420px) {
+  .picker-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.picker-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 64px;
+  padding: 0.6rem 0.75rem;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+
+.picker-btn:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  transform: translateY(-1px);
+}
+
+.picker-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  font-size: 1.5rem;
+}
+
+.picker-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.picker-color {
+  border-radius: 50%;
+  border: 2px solid var(--border);
+}
+
+.picker-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.picker-title {
+  font-weight: 800;
+  font-size: 0.98rem;
+}
+
+.picker-sub {
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-chevron {
+  font-size: 1.3rem;
   flex-shrink: 0;
 }
 

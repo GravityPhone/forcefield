@@ -76,7 +76,7 @@ export interface Profile {
   display_name: string | null
   /** Slug of a Fluent emoji SVG in public/avatars/ (see lib/avatars.ts). */
   avatar: string | null
-  /** Personal accent hex, picked on /appearance — colors this member's card
+  /** Personal accent hex, picked on /profile (About me) — colors this member's card
    * and marker on the Squad page. Null = deterministic palette fallback
    * (lib/memberColors.ts). */
   color: string | null

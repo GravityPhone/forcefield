@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useChatStore, type ChatListItem } from '@/stores/chat'
 import { avatarUrl } from '@/lib/avatars'
+import { memberColor } from '@/lib/memberColors'
 import { telHref } from '@/lib/phone'
 import type { ChatProfile } from '@/types'
 
@@ -49,9 +50,11 @@ function canAdd(member: ChatProfile): boolean {
         <button
           class="member-name-btn"
           :class="{ me: m.id === chat.myId }"
+          :style="{ color: memberColor(m) }"
           @click="toggleMenu(m.id)"
         >
           <img v-if="avatarUrl(m.avatar)" class="member-avatar" :src="avatarUrl(m.avatar)" alt="" />
+          <span v-else class="member-dot" :style="{ background: memberColor(m) }" aria-hidden="true"></span>
           {{ m.display_name || m.username }}{{ m.id === chat.myId ? ' (you)' : '' }}
         </button>
         <div v-if="openMenuFor === m.id" class="member-menu">
@@ -120,6 +123,16 @@ function canAdd(member: ChatProfile): boolean {
   flex-shrink: 0;
 }
 
+.member-dot {
+  width: 12px;
+  height: 12px;
+  margin: 0 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Names wear each member's accent color (inline style) — same hue as their
+ * Squad card, roster row, and chat-message username. */
 .member-name-btn {
   display: flex;
   align-items: center;
@@ -133,6 +146,7 @@ function canAdd(member: ChatProfile): boolean {
   text-align: left;
   font: inherit;
   font-size: 0.9rem;
+  font-weight: 600;
   color: var(--text);
   cursor: pointer;
 }
@@ -143,7 +157,6 @@ function canAdd(member: ChatProfile): boolean {
 
 .member-name-btn.me {
   cursor: default;
-  color: var(--text-muted);
 }
 
 .member-name-btn.me:hover {

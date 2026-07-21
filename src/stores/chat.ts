@@ -138,7 +138,7 @@ export const useChatStore = defineStore('chat', {
       const { data, error } = await supabase
         .from('chats')
         .select(
-          '*, chat_members(user_id, profiles!chat_members_user_id_fkey(id, username, display_name, avatar, member_phones(phone)))',
+          '*, chat_members(user_id, profiles!chat_members_user_id_fkey(id, username, display_name, avatar, color, member_phones(phone)))',
         )
         .order('created_at')
       this.loadingChats = false
@@ -394,7 +394,7 @@ export const useChatStore = defineStore('chat', {
       if (!missing.length) return
       const { data } = await supabase
         .from('profiles')
-        .select('id, username, display_name, avatar')
+        .select('id, username, display_name, avatar, color')
         .in('id', missing)
       for (const p of (data ?? []) as ChatProfile[]) this.profiles[p.id] = p
     },
@@ -570,7 +570,7 @@ export const useChatStore = defineStore('chat', {
     async loadOrgMembers() {
       const { data } = await supabase
         .from('profiles')
-        .select('id, username, display_name, avatar, role, team_id, member_phones(phone)')
+        .select('id, username, display_name, avatar, color, role, team_id, member_phones(phone)')
         .order('username')
       type Row = ChatProfile & { member_phones?: unknown }
       this.orgMembers = ((data ?? []) as Row[]).map(({ member_phones, ...p }) => ({
@@ -588,7 +588,7 @@ export const useChatStore = defineStore('chat', {
       if (q.length < 1) return []
       const { data } = await supabase
         .from('profiles')
-        .select('id, username, display_name, avatar')
+        .select('id, username, display_name, avatar, color')
         .or(`username.ilike.%${q}%,display_name.ilike.%${q}%`)
         .neq('id', this.myId ?? '')
         .limit(10)

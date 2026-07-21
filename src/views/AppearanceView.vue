@@ -1,11 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
-import { supabase } from '@/lib/supabase'
 import { useThemeStore } from '@/stores/theme'
-import { useAuthStore } from '@/stores/auth'
-import { AVATAR_GROUPS, avatarUrl } from '@/lib/avatars'
-import { MEMBER_COLORS, memberColor } from '@/lib/memberColors'
 import { FONT_STACKS, TEXT_SCALES } from '@/lib/themes'
 import type { ThemeGroup } from '@/lib/themes'
 import { PATTERNS, getPattern } from '@/lib/patterns'
@@ -13,7 +9,6 @@ import type { PatternDef } from '@/lib/patterns'
 import type { DisplayPrefs, FontId, ThemeId } from '@/types'
 
 const theme = useThemeStore()
-const auth = useAuthStore()
 const saving = ref<ThemeId | null>(null)
 
 async function pick(id: ThemeId) {
@@ -85,38 +80,6 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
     `-webkit-mask-size:${size};mask-size:${size};` +
     `-webkit-mask-repeat:repeat;mask-repeat:repeat;`
   )
-}
-
-// --- Avatar (Fluent Emoji, shipped locally in public/avatars/) ---
-
-const savingAvatar = ref(false)
-
-async function pickAvatar(slug: string | null) {
-  if (savingAvatar.value || !auth.profile) return
-  savingAvatar.value = true
-  await supabase.auth.getSession() // refresh-token race guard, same as theme saves
-  const { error } = await supabase
-    .from('profiles')
-    .update({ avatar: slug, updated_at: new Date().toISOString() })
-    .eq('id', auth.profile.id)
-  if (!error) auth.profile.avatar = slug
-  savingAvatar.value = false
-}
-
-// --- Member color (squad card + squad-map marker accent) ---
-
-const savingColor = ref(false)
-
-async function pickColor(hex: string | null) {
-  if (savingColor.value || !auth.profile) return
-  savingColor.value = true
-  await supabase.auth.getSession() // refresh-token race guard, same as theme saves
-  const { error } = await supabase
-    .from('profiles')
-    .update({ color: hex, updated_at: new Date().toISOString() })
-    .eq('id', auth.profile.id)
-  if (!error) auth.profile.color = hex
-  savingColor.value = false
 }
 </script>
 
@@ -308,67 +271,15 @@ async function pickColor(hex: string | null) {
       <span class="switch" aria-hidden="true"></span>
     </button>
 
-    <!-- ============ Avatar ============ -->
-    <h2 class="section-heading">Your avatar</h2>
-    <section v-for="group in AVATAR_GROUPS" :key="group.label" class="avatar-group">
-      <h3 class="group-heading">{{ group.label }}</h3>
-      <div class="avatar-grid" :class="{ busy: savingAvatar }">
-        <button
-          v-for="slug in group.slugs"
-          :key="slug"
-          class="avatar-cell"
-          :class="{ active: auth.profile?.avatar === slug }"
-          :disabled="savingAvatar"
-          :aria-label="slug.replace(/_/g, ' ')"
-          :title="slug.replace(/_/g, ' ')"
-          @click="pickAvatar(slug)"
-        >
-          <img :src="avatarUrl(slug)" :alt="slug.replace(/_/g, ' ')" loading="lazy" />
-        </button>
-      </div>
-    </section>
-    <button
-      v-if="auth.profile?.avatar"
-      class="btn btn-ghost btn-sm avatar-clear"
-      :disabled="savingAvatar"
-      @click="pickAvatar(null)"
-    >
-      Remove avatar
-    </button>
-
-    <!-- ============ Member color ============ -->
-    <h2 class="section-heading">Your color</h2>
-    <div class="color-grid" :class="{ busy: savingColor }">
-      <button
-        v-for="hex in MEMBER_COLORS"
-        :key="hex"
-        class="color-cell"
-        :class="{ active: auth.profile?.color === hex }"
-        :style="{ background: hex }"
-        :disabled="savingColor"
-        :aria-label="`Pick ${hex}`"
-        @click="pickColor(hex)"
-      >
-        <span v-if="auth.profile?.color === hex" class="color-check">✓</span>
-      </button>
-    </div>
-    <p v-if="auth.profile && !auth.profile.color" class="muted small color-hint">
-      No pick yet — you're currently showing as
-      <span
-        class="color-dot"
-        :style="{ background: memberColor(auth.profile) }"
-        aria-hidden="true"
-      ></span>
-      (assigned automatically).
-    </p>
-    <button
-      v-if="auth.profile?.color"
-      class="btn btn-ghost btn-sm avatar-clear"
-      :disabled="savingColor"
-      @click="pickColor(null)"
-    >
-      Reset to automatic color
-    </button>
+    <!-- ============ Emoji & color moved ============ -->
+    <router-link class="moved-note" to="/profile">
+      <span class="moved-emoji" aria-hidden="true">🙂🎨</span>
+      <span class="moved-copy">
+        <span class="moved-title">Looking for your emoji &amp; color?</span>
+        <span class="moved-sub muted">They moved to the About me page — tap to go pick.</span>
+      </span>
+      <span class="muted moved-chevron" aria-hidden="true">›</span>
+    </router-link>
   </AppShell>
 </template>
 
@@ -697,102 +608,50 @@ async function pickColor(hex: string | null) {
   background: var(--accent-contrast);
 }
 
-/* --- Avatar picker --- */
+/* --- Emoji & color moved note --- */
 
-.avatar-group + .avatar-group {
-  margin-top: 1.1rem;
-}
-
-.avatar-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
-  gap: 0.5rem;
-}
-
-.avatar-grid.busy {
-  opacity: 0.7;
-}
-
-.avatar-cell {
-  aspect-ratio: 1;
+.moved-note {
   display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 0.4rem;
-  border: 2px solid var(--border);
-  border-radius: 14px;
-  background: var(--surface);
-  cursor: pointer;
-  transition: border-color 0.12s ease, transform 0.12s ease;
-}
-
-.avatar-cell:not(:disabled):hover {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  transform: translateY(-1px);
-}
-
-.avatar-cell.active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
-}
-
-.avatar-cell img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.avatar-clear {
-  margin-top: 0.6rem;
-}
-
-/* --- Member color picker --- */
-
-.color-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
-  gap: 0.5rem;
+  gap: 0.75rem;
   max-width: 640px;
-}
-
-.color-grid.busy {
-  opacity: 0.7;
-}
-
-.color-cell {
-  aspect-ratio: 1;
+  margin-top: 1.6rem;
+  padding: 0.8rem 0.9rem;
   border: 2px solid var(--border);
-  border-radius: 14px;
-  cursor: pointer;
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.12s ease;
+}
+
+.moved-note:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.moved-emoji {
+  font-size: 1.4rem;
+  flex-shrink: 0;
+}
+
+.moved-copy {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: border-color 0.12s ease, transform 0.12s ease;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1;
 }
 
-.color-cell:not(:disabled):hover {
-  transform: translateY(-1px);
+.moved-title {
+  font-weight: 700;
 }
 
-.color-cell.active {
-  border-color: var(--text);
+.moved-sub {
+  font-size: 0.85rem;
 }
 
-.color-check {
-  color: #fff;
-  font-weight: 800;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
-}
-
-.color-hint {
-  margin-top: 0.6rem;
-}
-
-.color-dot {
-  display: inline-block;
-  width: 0.85em;
-  height: 0.85em;
-  border-radius: 50%;
-  vertical-align: -0.08em;
+.moved-chevron {
+  font-size: 1.3rem;
+  flex-shrink: 0;
 }
 </style>
