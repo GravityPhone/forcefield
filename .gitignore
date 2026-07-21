@@ -26,6 +26,10 @@ CLAUDE.md
 # any secrets passed on the command line) — keep it local, never push it.
 .claude/settings.local.json
 
+# Demo Studio working files (recordings/renders + mutable project state)
+demo-studio/media/
+demo-studio/project.json
+
 # Local Netlify folder
 .netlify
 

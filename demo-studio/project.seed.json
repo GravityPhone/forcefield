@@ -1,0 +1,146 @@
+{
+  "title": "Forcefield demo video",
+  "music": null,
+  "musicVolume": 0.22,
+  "labels": true,
+  "segments": [
+    {
+      "id": "hook",
+      "label": "Forcefield",
+      "title": "1 · Hook",
+      "hint": "Record this LAST — it's a 10–15s montage. Screen-record yourself flipping through the app's best screens (map full of pins, squad page, chat drawer, leaderboard) and talk over what Forcefield is.",
+      "bullets": [
+        "What Forcefield is — door-to-door canvassing for Union County in one app",
+        "Replaces the clipboard-and-spreadsheet mess",
+        "Teaser: live map, squads, chat, leaderboards"
+      ],
+      "videoTakes": [],
+      "audioTakes": [],
+      "selectedVideo": null,
+      "selectedAudio": null
+    },
+    {
+      "id": "talk",
+      "label": "Talk mode",
+      "title": "2 · Talk mode",
+      "hint": "Search a street, tap a result to load the household, tap a resident, log Signed, hit Next, then show the Up-next grid at the bottom and tap a chip.",
+      "bullets": [
+        "Talk mode: search any address, the whole household appears",
+        "One-tap outcomes — a signature is credited to a specific person",
+        "Next walks you down the street; Up-next queues the coming 4 doors",
+        "Works offline — knocks queue and sync when signal returns"
+      ],
+      "videoTakes": [],
+      "audioTakes": [],
+      "selectedVideo": null,
+      "selectedAudio": null
+    },
+    {
+      "id": "scout",
+      "label": "Scout",
+      "title": "3 · Scout map",
+      "hint": "Map segment — drive it yourself. Flip from Talk to Scout (it auto-orients on your door), pan the colored pins, tap one to show the signed ratio, zoom in until house numbers appear.",
+      "bullets": [
+        "Scout: the whole turf at a glance",
+        "Every door color-coded — green everyone signed, yellow partial, red no, blue untouched",
+        "Tap a pin: exact signed ratio + knock button",
+        "Zoom in and house numbers appear on the pins"
+      ],
+      "videoTakes": [],
+      "audioTakes": [],
+      "selectedVideo": null,
+      "selectedAudio": null
+    },
+    {
+      "id": "squad",
+      "label": "Squad",
+      "title": "4 · Squad page",
+      "hint": "Map segment. For the live pin-pop: keep a second browser window logged in as a sim canvasser and log a knock mid-take — the pin pops and their avatar lands on the door.",
+      "bullets": [
+        "Squad page: the crew's home base — cards with avatar, color, last 5 doors",
+        "Shared map + 'Our turf' progress bar",
+        "Live: pins pop as squadmates knock, avatars mark today's doors",
+        "Tap a member to jump to where they are"
+      ],
+      "videoTakes": [],
+      "audioTakes": [],
+      "selectedVideo": null,
+      "selectedAudio": null
+    },
+    {
+      "id": "chat",
+      "label": "Chat",
+      "title": "5 · Chat",
+      "hint": "Pull the orange handle from the right edge, show the room list, open a room, send a message, add a reaction.",
+      "bullets": [
+        "Chat is one pull away, from any screen",
+        "Everyone room, squad rooms, DMs",
+        "Reactions and image attachments"
+      ],
+      "videoTakes": [],
+      "audioTakes": [],
+      "selectedVideo": null,
+      "selectedAudio": null
+    },
+    {
+      "id": "assign",
+      "label": "Assign doors",
+      "title": "6 · Assign doors",
+      "hint": "Map segment. On /squad tap 'Assign doors' on a member card, tap one door then another a few houses down — the run between lights up — then Save.",
+      "bullets": [
+        "Splitting turf takes seconds",
+        "Tap two doors — every house between them sweeps in, even around a corner",
+        "Save: the doors wear that member's color"
+      ],
+      "videoTakes": [],
+      "audioTakes": [],
+      "selectedVideo": null,
+      "selectedAudio": null
+    },
+    {
+      "id": "feed",
+      "label": "Activity feed",
+      "title": "7 · Activity feed",
+      "hint": "Open /activity. Show the 'Today so far' strip, scroll the live feed, point out a milestone banner.",
+      "bullets": [
+        "The whole campaign as a live scoreboard",
+        "Today-so-far strip: doors and signatures",
+        "Milestones hype the team automatically"
+      ],
+      "videoTakes": [],
+      "audioTakes": [],
+      "selectedVideo": null,
+      "selectedAudio": null
+    },
+    {
+      "id": "leaders",
+      "label": "Leaderboard + AI",
+      "title": "8 · Leaderboard + AI",
+      "hint": "Show /leaderboard standings, then use the header role badge (demo switcher) to hop to Campaign Manager and ask the /admin AI a question you already know the answer to.",
+      "bullets": [
+        "Leaderboards: canvassers and squads, browsable by day",
+        "For managers: a built-in AI analyst with live database access",
+        "Ask in plain English, get real numbers back"
+      ],
+      "videoTakes": [],
+      "audioTakes": [],
+      "selectedVideo": null,
+      "selectedAudio": null
+    },
+    {
+      "id": "close",
+      "label": "Make it yours",
+      "title": "9 · Personalize + close",
+      "hint": "Quick flashes: /appearance theme swap ('80s Neon reads great on camera), /profile emoji + color sheets, then hold on the home screen for the CTA.",
+      "bullets": [
+        "18 themes, patterns, readability controls — make it yours",
+        "Pick your emoji and accent color",
+        "forcefield.ninja — built for the field, built for the team"
+      ],
+      "videoTakes": [],
+      "audioTakes": [],
+      "selectedVideo": null,
+      "selectedAudio": null
+    }
+  ]
+}
