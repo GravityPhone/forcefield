@@ -120,6 +120,27 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     ],
   },
 
+  '/activity': {
+    title: 'Team feed',
+    sections: [
+      {
+        body:
+          'Live activity from the whole operation, today only, newest first — every ' +
+          'signature as it lands (and every knock, if the campaign manager left those on). ' +
+          'It resets each morning, like squads do.',
+      },
+      {
+        heading: 'Milestones',
+        body:
+          'Along the way the feed celebrates progress: personal door counts (every 5 by ' +
+          'default), squads heating up (doors and signatures for the day), and whole-team ' +
+          'moments like passing 100 doors. Doors count once per household; signatures once ' +
+          'per person. The campaign manager picks what shows and where the lines fall from ' +
+          'their dashboard.',
+      },
+    ],
+  },
+
   '/bulletin': {
     title: 'Bulletin',
     sections: [

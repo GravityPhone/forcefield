@@ -4,7 +4,7 @@ import AppShell from '@/components/AppShell.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import { supabase } from '@/lib/supabase'
 import { METRIC_LABELS } from '@/types'
-import type { LeaderboardMetric, LeaderboardSettings } from '@/types'
+import type { ActivityFeedSettings, LeaderboardMetric, LeaderboardSettings } from '@/types'
 
 const metricOptions = Object.entries(METRIC_LABELS).map(([value, label]) => ({ value, label }))
 
@@ -13,9 +13,18 @@ const saving = ref(false)
 const saved = ref(false)
 const saveError = ref('')
 
+const feed = ref<ActivityFeedSettings | null>(null)
+const feedSaving = ref(false)
+const feedSaved = ref(false)
+const feedError = ref('')
+
 onMounted(async () => {
-  const { data } = await supabase.from('leaderboard_settings').select('*').eq('id', true).single()
-  if (data) settings.value = data as LeaderboardSettings
+  const [lb, af] = await Promise.all([
+    supabase.from('leaderboard_settings').select('*').eq('id', true).single(),
+    supabase.from('activity_feed_settings').select('*').eq('id', true).single(),
+  ])
+  if (lb.data) settings.value = lb.data as LeaderboardSettings
+  if (af.data) feed.value = af.data as ActivityFeedSettings
 })
 
 async function saveSettings() {
@@ -37,6 +46,41 @@ async function saveSettings() {
   }
   saved.value = true
   setTimeout(() => (saved.value = false), 2000)
+}
+
+/** Milestone steps must be whole numbers ≥ 1 (the DB CHECKs agree). */
+function cleanStep(n: number): number {
+  return Math.max(1, Math.round(Number.isFinite(n) ? n : 1))
+}
+
+async function saveFeedSettings() {
+  const f = feed.value
+  if (!f) return
+  feedSaving.value = true
+  feedError.value = ''
+  const { error } = await supabase
+    .from('activity_feed_settings')
+    .update({
+      show_knocks: f.show_knocks,
+      show_signatures: f.show_signatures,
+      person_milestones: f.person_milestones,
+      person_door_step: cleanStep(f.person_door_step),
+      squad_milestones: f.squad_milestones,
+      squad_door_step: cleanStep(f.squad_door_step),
+      squad_signature_step: cleanStep(f.squad_signature_step),
+      team_milestones: f.team_milestones,
+      team_door_step: cleanStep(f.team_door_step),
+      team_signature_step: cleanStep(f.team_signature_step),
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', true)
+  feedSaving.value = false
+  if (error) {
+    feedError.value = 'Could not save — try again.'
+    return
+  }
+  feedSaved.value = true
+  setTimeout(() => (feedSaved.value = false), 2000)
 }
 </script>
 
@@ -66,6 +110,54 @@ async function saveSettings() {
             <router-link class="btn btn-ghost btn-sm" to="/leaderboard">View leaderboard</router-link>
           </div>
           <p v-if="saveError" class="error">{{ saveError }}</p>
+        </template>
+        <p v-else class="muted">Loading settings…</p>
+      </div>
+
+      <!-- The team feed's knobs: what shows per-event, and where the
+           milestone lines fall. The feed itself derives everything from
+           knock_logs client-side — these are the only server settings. -->
+      <div class="card">
+        <h3>Activity Feed</h3>
+        <template v-if="feed">
+          <label class="check">
+            <input type="checkbox" v-model="feed.show_signatures" />
+            Show each signature as it lands
+          </label>
+          <label class="check">
+            <input type="checkbox" v-model="feed.show_knocks" />
+            Show every knock too
+          </label>
+          <label class="check">
+            <input type="checkbox" v-model="feed.person_milestones" />
+            Personal milestones
+          </label>
+          <div v-if="feed.person_milestones" class="step-row">
+            every <input type="number" min="1" v-model.number="feed.person_door_step" /> doors
+          </div>
+          <label class="check">
+            <input type="checkbox" v-model="feed.squad_milestones" />
+            Squad milestones
+          </label>
+          <div v-if="feed.squad_milestones" class="step-row">
+            every <input type="number" min="1" v-model.number="feed.squad_door_step" /> doors ·
+            <input type="number" min="1" v-model.number="feed.squad_signature_step" /> signatures
+          </div>
+          <label class="check">
+            <input type="checkbox" v-model="feed.team_milestones" />
+            Whole-team milestones
+          </label>
+          <div v-if="feed.team_milestones" class="step-row">
+            every <input type="number" min="1" v-model.number="feed.team_door_step" /> doors ·
+            <input type="number" min="1" v-model.number="feed.team_signature_step" /> signatures
+          </div>
+          <div class="actions">
+            <button class="btn btn-primary btn-sm" :disabled="feedSaving" @click="saveFeedSettings">
+              {{ feedSaved ? 'Saved ✓' : feedSaving ? 'Saving…' : 'Save' }}
+            </button>
+            <router-link class="btn btn-ghost btn-sm" to="/activity">View feed</router-link>
+          </div>
+          <p v-if="feedError" class="error">{{ feedError }}</p>
         </template>
         <p v-else class="muted">Loading settings…</p>
       </div>
@@ -127,6 +219,28 @@ async function saveSettings() {
 
 .check input {
   width: auto;
+}
+
+/* Indented "every N doors" rows under their milestone toggle. */
+.step-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin: -0.45rem 0 0.75rem 1.75rem;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+.step-row input {
+  width: 4.2em;
+  padding: 0.25rem 0.4rem;
+  font: inherit;
+  font-size: 0.88rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
 }
 
 .actions {

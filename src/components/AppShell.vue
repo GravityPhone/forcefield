@@ -56,6 +56,7 @@ const barItems = computed<NavItem[]>(() => {
       { to: '/admin', label: 'Dashboard', icon: 'dashboard' },
       { to: '/canvass', label: 'Canvass', icon: 'pin' },
       { to: '/squads', label: 'Squads', icon: 'squads' },
+      { to: '/activity', label: 'Feed', icon: 'pulse' },
       { to: '/leaderboard', label: 'Leaders', icon: 'trophy' },
     ]
   }
@@ -64,6 +65,7 @@ const barItems = computed<NavItem[]>(() => {
   return [
     { to: '/canvass', label: 'Canvass', icon: 'pin' },
     { to: '/squad', label: 'Squad', icon: 'squads' },
+    { to: '/activity', label: 'Feed', icon: 'pulse' },
     { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
     { to: '/leaderboard', label: 'Leaders', icon: 'trophy' },
   ]
@@ -174,6 +176,7 @@ const ICONS = {
   bulletin: '<rect x="4" y="4" width="16" height="14" rx="2"/><path d="M8 9h8M8 13h5M12 18v2"/>',
   palette: '<path d="M12 3a9 9 0 1 0 0 18c1.5 0 2-1 1.5-2s0-2 1.5-2h2a3 3 0 0 0 3-3 9 9 0 0 0-8-11z"/><circle cx="8" cy="10" r="1.2"/><circle cx="12" cy="7.5" r="1.2"/><circle cx="16" cy="10" r="1.2"/>',
   sparkle: '<path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/>',
+  pulse: '<path d="M3 12h4l2.5-6.5 4.5 13 2.5-6.5H21"/>',
   map: '<path d="M9 4l6 2 6-2v14l-6 2-6-2-6 2V6z"/><path d="M9 4v14M15 6v14"/>',
   shield: '<path d="M12 3l7 2.6v5.6c0 4.3-2.9 7.9-7 9.8-4.1-1.9-7-5.5-7-9.8V5.6z"/><path d="M9.2 12l2 2 3.6-4"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l2.9 1.9"/>',

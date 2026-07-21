@@ -65,6 +65,10 @@ const router = createRouter({
     { path: '/bulletin', name: 'bulletin', component: () => import('@/views/BulletinView.vue'), meta: { roles: [] } },
     { path: '/leaderboard', name: 'leaderboard', component: () => import('@/views/LeaderboardView.vue'), meta: { roles: [] } },
 
+    // Team activity feed — today's signatures/knocks live, plus milestone
+    // moments (personal, squad, whole-team). Every role can watch.
+    { path: '/activity', name: 'activity', component: () => import('@/views/ActivityFeedView.vue'), meta: { roles: [] } },
+
     // Per-account cosmetic color scheme — every role can set their own.
     { path: '/appearance', name: 'appearance', component: () => import('@/views/AppearanceView.vue'), meta: { roles: [] } },
 

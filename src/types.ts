@@ -364,3 +364,40 @@ export interface CanvasserLeaderboardRow {
   doors_knocked: number
   signatures: number
 }
+
+/** Singleton knobs for the team activity feed (/activity): which per-event
+ * rows show, and where the milestone lines fall. Doors are DISTINCT
+ * households and signatures DISTINCT signed persons (the squad-progress /
+ * door-status semantics, not the leaderboard's every-log count). Managed
+ * from the campaign manager's dashboard. */
+export interface ActivityFeedSettings {
+  id: boolean
+  show_knocks: boolean
+  show_signatures: boolean
+  person_milestones: boolean
+  person_door_step: number
+  squad_milestones: boolean
+  squad_door_step: number
+  squad_signature_step: number
+  team_milestones: boolean
+  team_door_step: number
+  team_signature_step: number
+  updated_at: string
+}
+
+/** Client-side fallback while the settings row loads (or if it can't) —
+ * mirrors the DB defaults in 20260720130000_activity_feed_settings.sql. */
+export const DEFAULT_FEED_SETTINGS: ActivityFeedSettings = {
+  id: true,
+  show_knocks: true,
+  show_signatures: true,
+  person_milestones: true,
+  person_door_step: 5,
+  squad_milestones: true,
+  squad_door_step: 25,
+  squad_signature_step: 10,
+  team_milestones: true,
+  team_door_step: 100,
+  team_signature_step: 25,
+  updated_at: '',
+}
