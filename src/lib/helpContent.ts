@@ -76,7 +76,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body:
           'Door pins wear the same status colors as the Scout map — blue means nobody has ' +
           'knocked yet, green means everyone there signed, yellow means partly signed, red ' +
-          'means a closed no. Doors knocked today also wear the knocker’s animal, so the map ' +
+          'means a closed no. Doors knocked today also wear the knocker’s avatar, so the map ' +
           'doubles as a live picture of who covered what. Tap a door pin to open it in Talk ' +
           'mode. Tap a squadmate’s card to zoom to the last door they knocked. The Our turf / ' +
           'All turf buttons shade turf areas — just your crew’s ground, or the whole ' +
@@ -227,6 +227,13 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
           'in the team roster. Every field is optional; fill in whatever feels right.',
       },
       {
+        heading: 'Display name',
+        body:
+          'The name everyone sees next to you — chat, squad page, leaderboard, all of it. ' +
+          'Handy if you go by a nickname. Leave it blank to show your username; your login ' +
+          'name never changes either way.',
+      },
+      {
         heading: 'Phone number',
         body:
           'Save a number and teammates get a one-tap Call button next to your name on the ' +
@@ -263,9 +270,9 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Avatar & color',
         body:
-          'Your animal shows next to your chat messages and on member lists; your color tints ' +
-          'your card and knock marker on the Squad page. Until you pick a color, one is ' +
-          'assigned automatically.',
+          'Pick any avatar — animals, smileys, food, whatever feels like you. It shows next ' +
+          'to your chat messages and on member lists; your color tints your card and knock ' +
+          'marker on the Squad page. Until you pick a color, one is assigned automatically.',
       },
     ],
   },

@@ -4,7 +4,7 @@ import AppShell from '@/components/AppShell.vue'
 import { supabase } from '@/lib/supabase'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
-import { ANIMAL_AVATARS, avatarUrl } from '@/lib/avatars'
+import { AVATAR_GROUPS, avatarUrl } from '@/lib/avatars'
 import { MEMBER_COLORS, memberColor } from '@/lib/memberColors'
 import { FONT_STACKS, TEXT_SCALES } from '@/lib/themes'
 import type { ThemeGroup } from '@/lib/themes'
@@ -87,7 +87,7 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
   )
 }
 
-// --- Animal avatar (Fluent Emoji, shipped locally in public/avatars/) ---
+// --- Avatar (Fluent Emoji, shipped locally in public/avatars/) ---
 
 const savingAvatar = ref(false)
 
@@ -310,20 +310,23 @@ async function pickColor(hex: string | null) {
 
     <!-- ============ Avatar ============ -->
     <h2 class="section-heading">Your avatar</h2>
-    <div class="avatar-grid" :class="{ busy: savingAvatar }">
-      <button
-        v-for="slug in ANIMAL_AVATARS"
-        :key="slug"
-        class="avatar-cell"
-        :class="{ active: auth.profile?.avatar === slug }"
-        :disabled="savingAvatar"
-        :aria-label="slug.replace(/_/g, ' ')"
-        :title="slug.replace(/_/g, ' ')"
-        @click="pickAvatar(slug)"
-      >
-        <img :src="avatarUrl(slug)" :alt="slug.replace(/_/g, ' ')" loading="lazy" />
-      </button>
-    </div>
+    <section v-for="group in AVATAR_GROUPS" :key="group.label" class="avatar-group">
+      <h3 class="group-heading">{{ group.label }}</h3>
+      <div class="avatar-grid" :class="{ busy: savingAvatar }">
+        <button
+          v-for="slug in group.slugs"
+          :key="slug"
+          class="avatar-cell"
+          :class="{ active: auth.profile?.avatar === slug }"
+          :disabled="savingAvatar"
+          :aria-label="slug.replace(/_/g, ' ')"
+          :title="slug.replace(/_/g, ' ')"
+          @click="pickAvatar(slug)"
+        >
+          <img :src="avatarUrl(slug)" :alt="slug.replace(/_/g, ' ')" loading="lazy" />
+        </button>
+      </div>
+    </section>
     <button
       v-if="auth.profile?.avatar"
       class="btn btn-ghost btn-sm avatar-clear"
@@ -695,6 +698,10 @@ async function pickColor(hex: string | null) {
 }
 
 /* --- Avatar picker --- */
+
+.avatar-group + .avatar-group {
+  margin-top: 1.1rem;
+}
 
 .avatar-grid {
   display: grid;

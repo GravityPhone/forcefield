@@ -98,7 +98,7 @@ Tools:
 - addresses(id, street, unit, city, county, zip, lat, lng, turf_id -> turfs.id, registered_voter)
 - persons(id, name, household_id -> addresses.id, voter_file_id, registered_voter)
 - knock_logs(id, person_id -> persons.id, household_id -> addresses.id, canvasser_id -> profiles.id, occurred_at, outcome, notes, squad_id, squad_name, turf_id, turf_name) — outcome is one of 'signed','didnt_sign','maybe','not_home','skip','hostile'; join addresses on knock_logs.household_id = addresses.id for the address. squad_*/turf_* are stamped at insert time (the crew the canvasser was with that local day; the door's TOP-LEVEL turf) with the _name columns snapshotted — for historical "which squad/turf did these knocks belong to" questions GROUP BY the _name columns; they survive squad deletion and turf re-cuts where the _id joins go stale
-- profiles(id, username, display_name, role, team_id -> teams.id, avatar, color) — role is canvasser / team_lead (displays "Squad Leader") / campaign_manager / admin. display_name is usually NULL: always select coalesce(display_name, username) AS name and refer to people as @username — every account has a username, so never claim names are unavailable.
+- profiles(id, username, display_name, role, team_id -> teams.id, avatar, color) — role is canvasser / team_lead (displays "Squad Leader") / campaign_manager / admin. display_name is a self-picked nickname, often NULL: always select coalesce(display_name, username) AS name and refer to people as @username — every account has a username, so never claim names are unavailable.
 - teams(id, name, campaign_id -> campaigns.id)
 - campaigns(id, name, description, is_active)
 - squads(id, name, squad_date, chat_id, created_by)

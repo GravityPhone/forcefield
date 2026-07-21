@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
@@ -14,6 +14,7 @@ const auth = useAuthStore()
 // offer a dead control.
 const showPhone = auth.profile?.role !== 'admin'
 
+const displayName = ref('')
 const bio = ref('')
 const whyCanvassing = ref('')
 const funFact = ref('')
@@ -30,8 +31,14 @@ const error = ref('')
 // message instead of surfacing a Postgres error.
 const PHONE_RE = /^\+?[0-9() .-]{7,20}$/
 
+/** Live preview in the identity card while typing — what teammates will see. */
+const previewName = computed(
+  () => displayName.value.trim() || auth.profile?.username || '',
+)
+
 onMounted(async () => {
   if (!auth.profile) return
+  displayName.value = auth.profile.display_name ?? ''
   bio.value = auth.profile.bio ?? ''
   whyCanvassing.value = auth.profile.why_canvassing ?? ''
   funFact.value = auth.profile.fun_fact ?? ''
@@ -58,6 +65,9 @@ async function save() {
   saving.value = true
   await supabase.auth.getSession() // refresh-token race guard, same as theme saves
   const patch = {
+    // Blank = go by your username again (every consumer renders
+    // display_name || username).
+    display_name: displayName.value.trim() || null,
     bio: bio.value.trim() || null,
     why_canvassing: whyCanvassing.value.trim() || null,
     fun_fact: funFact.value.trim() || null,
@@ -89,6 +99,7 @@ async function save() {
   // persisted must be reflected even when the phone write failed, or a later
   // save from a stale remount would silently revert it.
   if (!profileError) {
+    auth.profile.display_name = patch.display_name
     auth.profile.bio = patch.bio
     auth.profile.why_canvassing = patch.why_canvassing
     auth.profile.fun_fact = patch.fun_fact
@@ -117,13 +128,28 @@ async function save() {
       <div class="card identity" :style="{ '--member-color': memberColor(auth.profile) }">
         <span class="identity-avatar" :style="!avatarUrl(auth.profile.avatar) ? { background: memberColor(auth.profile) } : {}">
           <img v-if="avatarUrl(auth.profile.avatar)" :src="avatarUrl(auth.profile.avatar)" alt="" />
-          <template v-else>{{ (auth.profile.display_name || auth.profile.username).slice(0, 1).toUpperCase() }}</template>
+          <template v-else>{{ previewName.slice(0, 1).toUpperCase() }}</template>
         </span>
         <span class="identity-text">
-          <span class="identity-name">{{ auth.profile.display_name || auth.profile.username }}</span>
+          <span class="identity-name">{{ previewName }}</span>
           <span class="muted identity-role">{{ ROLE_LABELS[auth.profile.role] }}</span>
         </span>
         <router-link class="btn btn-sm identity-edit" to="/appearance">Avatar &amp; color</router-link>
+      </div>
+
+      <div class="field">
+        <label for="about-name">Display name</label>
+        <input
+          id="about-name"
+          v-model="displayName"
+          maxlength="40"
+          autocomplete="nickname"
+          :placeholder="auth.profile.username"
+        />
+        <p class="muted field-note">
+          What teammates see everywhere — chat, squad page, leaderboard. Leave it
+          blank to go by your username ({{ auth.profile.username }}).
+        </p>
       </div>
 
       <div class="field">
@@ -168,7 +194,7 @@ async function save() {
           autocomplete="tel"
           placeholder="e.g. (937) 555-0123"
         />
-        <p class="muted phone-note">
+        <p class="muted field-note">
           Teammates will see this number and can call you with one tap.
           Leave it blank and no one can call you.
         </p>
@@ -245,7 +271,7 @@ async function save() {
   flex-shrink: 0;
 }
 
-.phone-note {
+.field-note {
   margin: 0.35rem 0 0;
   font-size: 0.85rem;
   line-height: 1.4;
