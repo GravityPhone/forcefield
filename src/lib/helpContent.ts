@@ -338,22 +338,6 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     ],
   },
 
-  '/admin/analytics': {
-    title: 'Analytics',
-    sections: [
-      {
-        body:
-          'The campaign’s numbers room. The filter row up top (date range + area) scopes every ' +
-          'chart below it — it opens on the last 30 days, switch to "Whole campaign" for ' +
-          'everything. Overview shows daily activity and outcome mixes; Areas compares ' +
-          'sign/answer rates by city with confidence whiskers; Probability shows how answer ' +
-          'rates change with repeat visits, time of day, and the door-to-signature funnel; ' +
-          'Canvassers compares individual volume, close rates, and signatures. Every chart ' +
-          'has a Table toggle with the exact numbers.',
-      },
-    ],
-  },
-
   '/admin/roles': {
     title: 'Roles',
     sections: [
@@ -424,4 +408,197 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
 
 export function helpFor(path: string): HelpTopic | null {
   return HELP_TOPICS[path] ?? null
+}
+
+/**
+ * Per-TAB help for /admin/analytics. The Analytics view passes the active
+ * tab's topic into AppShell (helpTopic prop), so the header "?" always
+ * teaches the tab on screen. This is the ONLY place analytics gets explained
+ * — chart subtitles stay at 2–3 word hints, never sentences. Written for
+ * someone with a working-but-not-expert grasp of statistics: whiskers,
+ * averages, and floors get plain-language treatment, and every hidden
+ * interaction (tap a bar, tap a legend, day chips) is called out so the page
+ * can be learned by poking at it.
+ */
+export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
+  overview: {
+    title: 'Overview tab',
+    sections: [
+      {
+        heading: 'The tiles',
+        body:
+          'Campaign totals for the day window picked on the chips. Doors counts each ' +
+          'household once no matter how many visits; knocks counts every attempt. Answer ' +
+          'rate: of all knocks, how often anyone opened. Close rate: of all real ' +
+          'conversations (signed, didn’t sign, or maybe), how many signed.',
+      },
+      {
+        heading: 'The bold dashed line',
+        body:
+          'That’s the 7-day average — each point averages the last week, smoothing out ' +
+          'weekend spikes and rainy Tuesdays so the real direction shows. Rising means the ' +
+          'campaign is speeding up. It needs a week of history before it can start, so it ' +
+          'skips the first six days of any window.',
+      },
+      {
+        heading: 'Learn by poking',
+        body:
+          'The day chips re-cut every number on the tab. Tap a name in a chart’s legend to ' +
+          'hide that line — the chart re-zooms to what’s left, which is the trick for ' +
+          'reading a small line squeezed under a big one. Every chart has a Table button ' +
+          'with the exact numbers behind the picture.',
+      },
+    ],
+  },
+
+  areas: {
+    title: 'Areas tab',
+    sections: [
+      {
+        heading: 'One question',
+        body:
+          'Which parts of the county deserve more knocking? Tap an area chip — or any bar — ' +
+          'to zoom into one area: its own totals, daily trend, outcomes, plus the turfs and ' +
+          'canvassers working it. Inside, tapping a turf or a canvasser jumps straight to ' +
+          'their tab.',
+      },
+      {
+        heading: 'Whiskers, plainly',
+        body:
+          'The thin line through a bar is a 95% confidence range: given how many knocks the ' +
+          'area has, its TRUE rate very likely sits somewhere on that whisker. Short whisker ' +
+          '= lots of data, trust the bar. Long whisker = small sample, could be luck. When ' +
+          'two bars’ whiskers overlap a lot, don’t crown a winner.',
+      },
+      {
+        heading: 'The dashed avg marker',
+        body:
+          'On rate charts, the dashed line is the whole campaign’s average — bars reaching ' +
+          'past it are above-average ground, at a glance.',
+      },
+      {
+        heading: 'Sign rate vs coverage',
+        body:
+          'Sign rate is signatures per conversation — how persuadable an area is. Coverage ' +
+          'is the share of its doors knocked at least once — how much ground is left. High ' +
+          'sign rate plus low coverage is where the next crew should go.',
+      },
+      {
+        heading: 'Missing areas',
+        body:
+          'Areas with too few knocks are left off the rate charts on purpose — a 2-for-3 ' +
+          'afternoon would chart like a jackpot. The Table button shows everything.',
+      },
+    ],
+  },
+
+  turfs: {
+    title: 'Turfs tab',
+    sections: [
+      {
+        heading: 'What counts here',
+        body:
+          'Every knock is stamped with the turf its door sat in at that moment, so history ' +
+          'stays honest even after turf gets re-cut. Knocks at doors that weren’t in any ' +
+          'turf gather in the "No turf" row of the table and stay off the charts — that ' +
+          'bucket would dwarf the real bars.',
+      },
+      {
+        heading: 'Coverage',
+        body:
+          'Doors knocked divided by the doors in the turf as it’s cut today. Whiskers on ' +
+          'the rate chart are 95% confidence ranges — a long whisker means a small sample, ' +
+          'so treat that bar as a rough guess.',
+      },
+      {
+        heading: 'Dig in',
+        body:
+          'Tap any bar or table row to open one turf: its totals, daily signatures, the ' +
+          'crews that worked it, and the canvassers who knocked it. Crews and canvassers in ' +
+          'there are tappable too — the whole page cross-links.',
+      },
+    ],
+  },
+
+  squads: {
+    title: 'Squads tab',
+    sections: [
+      {
+        heading: 'Day crews',
+        body:
+          'A squad lives one day. But a crew that keeps the same name day after day ' +
+          'accumulates here as one row — its whole run, not just today. Solo knocking with ' +
+          'no squad that day lands in the table’s "No squad" row.',
+      },
+      {
+        heading: 'The rates',
+        body:
+          'Close rate is signatures per conversation; answer rate is doors opened per ' +
+          'knock. Whiskers are 95% confidence ranges — a hot-looking crew with a long ' +
+          'whisker may just be a small sample having a good day.',
+      },
+      {
+        heading: 'Dig in',
+        body:
+          'Tap a squad to see its run: signatures across the days it went out, the turf it ' +
+          'worked, and its members ranked. Members and turf are tappable — jump to a ' +
+          'person or a turf from right there.',
+      },
+    ],
+  },
+
+  odds: {
+    title: 'Odds tab',
+    sections: [
+      {
+        heading: 'Attempts',
+        body:
+          'Attempt 2 means a door’s second visit (knocks within ten minutes of each other ' +
+          'count as one visit). Answer odds usually RISE with attempts — the people you ' +
+          'catch on visit three are the ones nobody catches on visit one. That’s the case ' +
+          'for going back. The dashed marker is the overall average, so you can see which ' +
+          'attempts beat it.',
+      },
+      {
+        heading: 'When doors answer',
+        body:
+          'The grid is answer rate by weekday and hour — darker means more doors opened. ' +
+          'Tap a cell for its exact rate and how many knocks it’s based on. Cells with ' +
+          'under 15 knocks stay blank rather than show noise.',
+      },
+      {
+        heading: 'The funnel',
+        body:
+          'Unique doors surviving each stage: knocked → answered → conversation → signed. ' +
+          'Each stage’s percentage is of the stage before it, so it points at exactly ' +
+          'where doors fall out of the pipeline.',
+      },
+    ],
+  },
+
+  canvassers: {
+    title: 'Canvassers tab',
+    sections: [
+      {
+        heading: 'The dots',
+        body:
+          'Each dot is one canvasser: further right = more knocks, higher up = better ' +
+          'close rate. The faint line is the team-wide trend — flat means knocking a lot ' +
+          'doesn’t cost closing quality. Tap a dot (or an earner bar, or a table row) to ' +
+          'open that person.',
+      },
+      {
+        heading: 'Fair floors',
+        body:
+          'Dots only show for people with 20+ conversations — below that, one lucky ' +
+          'afternoon charts like talent. The table has everyone regardless.',
+      },
+      {
+        heading: 'One person’s page',
+        body:
+          'A canvasser’s view shows their daily signatures with the 7-day average, their ' +
+          'outcome mix, and the turf and crews they worked — tap those to keep exploring.',
+      },
+    ],
+  },
 }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// Card frame every analytics chart lives in: title, optional subtitle, and a
+// Card frame every analytics chart lives in: title, optional subtitle (keep it
+// to a 2–3 word hint — teaching copy belongs in the per-tab help sheet), and a
 // chart ⇄ table toggle. The table twin is the accessibility contract — every
 // value a chart or tooltip shows must also be readable as plain text.
 import { ref } from 'vue'
@@ -12,7 +13,11 @@ defineProps<{
   rows?: (string | number)[][]
   /** The table IS the content — no chart slot, no toggle. */
   tableOnly?: boolean
+  /** Rows are tap targets; each tap emits `select-row` with the row index. */
+  selectableRows?: boolean
 }>()
+
+const emit = defineEmits<{ (e: 'select-row', index: number): void }>()
 
 const showTable = ref(false)
 </script>
@@ -46,7 +51,12 @@ const showTable = ref(false)
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(r, i) in rows" :key="i">
+          <tr
+            v-for="(r, i) in rows"
+            :key="i"
+            :class="{ sel: selectableRows }"
+            @click="selectableRows && emit('select-row', i)"
+          >
             <td v-for="(cell, j) in r" :key="j" :class="{ num: j > 0 }">{{ cell }}</td>
           </tr>
         </tbody>
@@ -108,5 +118,11 @@ th {
 }
 td.num {
   font-variant-numeric: tabular-nums;
+}
+tr.sel {
+  cursor: pointer;
+}
+tr.sel:hover td {
+  background: var(--surface-2);
 }
 </style>

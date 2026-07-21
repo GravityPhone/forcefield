@@ -3,23 +3,33 @@
 // knock history once (paged, client-side), then every chart and probability
 // table runs instantly in the browser: Netlify only ever serves static
 // files, so ALL statistics (Wilson CIs, OLS) are computed client-side in
-// src/lib/stats.ts. (A logistic-regression "Predictor" tab existed until
-// 2026-07-14 — removed as more than managers needed; stats.ts keeps the
-// machinery if it ever comes back.)
+// src/lib/stats.ts.
+//
+// UI model (reworked 2026-07-21): NO global filter bar. The top of the page
+// is tabs only; each tab carries its own scope — day chips on every tab, an
+// area chip picker inside Areas, and tap-to-drill everywhere else (bars,
+// dots, and table rows open the thing they name; drill views cross-link
+// between tabs). Teaching copy lives in the per-tab help sheets
+// (ANALYTICS_TAB_HELP → AppShell's "?"), never in chart subtitles — those
+// stay at 2–3 word hints. (A logistic-regression "Predictor" tab existed
+// until 2026-07-14 — removed as more than managers needed; stats.ts keeps
+// the machinery if it ever comes back.)
 import { computed, onMounted, ref, shallowRef } from 'vue'
 import AppShell from '@/components/AppShell.vue'
-import AppSelect from '@/components/ui/AppSelect.vue'
 import ChartCard from '@/components/charts/ChartCard.vue'
 import TimeSeriesChart from '@/components/charts/TimeSeriesChart.vue'
+import type { TimeSeries } from '@/components/charts/TimeSeriesChart.vue'
 import StackedBarChart from '@/components/charts/StackedBarChart.vue'
 import BarChart from '@/components/charts/BarChart.vue'
 import Heatmap from '@/components/charts/Heatmap.vue'
 import ScatterChart from '@/components/charts/ScatterChart.vue'
 import type { BarItem } from '@/components/charts/BarChart.vue'
+import type { ScatterPoint } from '@/components/charts/ScatterChart.vue'
 import { supabase } from '@/lib/supabase'
-import { OUTCOMES, OUTCOME_LABELS } from '@/lib/outcomes'
+import { OUTCOMES } from '@/lib/outcomes'
 import { useChartPalette, ordinalRamp, fmtPct, fmtCount } from '@/lib/chartTheme'
 import { wilson, linearRegression, rollingMean } from '@/lib/stats'
+import { ANALYTICS_TAB_HELP } from '@/lib/helpContent'
 import type { KnockOutcome } from '@/types'
 
 const palette = useChartPalette()
@@ -215,41 +225,23 @@ function enrich(rows: KnockRow[], cityOf: Map<string, string>): Knock[] {
   return parsed
 }
 
-// ---------------------------------------------------------------- filters
+// ---------------------------------------------------------------- time scope
+// The one scope shared by every tab — rendered as chips INSIDE each tab's
+// content (there is no global filter bar anymore).
 
 const rangeDays = ref<number | null>(30) // days back; null = whole campaign
-const cityFilter = ref('')
-const turfFilter = ref('')
+const RANGE_CHIPS: { value: number | null; label: string }[] = [
+  { value: 7, label: '7 days' },
+  { value: 14, label: '14 days' },
+  { value: 30, label: '30 days' },
+  { value: null, label: 'All time' },
+]
 
 const maxTs = computed(() => (knocks.value.length ? knocks.value[knocks.value.length - 1].ts : 0))
 const filtered = computed(() => {
   const cutoff = rangeDays.value == null ? -Infinity : maxTs.value - rangeDays.value * 86_400_000
-  return knocks.value.filter(
-    (k) =>
-      k.ts >= cutoff &&
-      (!cityFilter.value || k.city === cityFilter.value) &&
-      (!turfFilter.value || k.turf === turfFilter.value),
-  )
+  return knocks.value.filter((k) => k.ts >= cutoff)
 })
-
-function filterOptions(key: (k: Knock) => string, allLabel: string) {
-  const counts = new Map<string, number>()
-  for (const k of knocks.value) counts.set(key(k), (counts.get(key(k)) ?? 0) + 1)
-  const opts = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([c]) => ({ value: c, label: c }))
-  return [{ value: '', label: allLabel }, ...opts]
-}
-
-const cityOptions = computed(() => filterOptions((k) => k.city, 'All areas'))
-const turfOptions = computed(() => filterOptions((k) => k.turf, 'All turf'))
-
-const RANGE_PRESETS = [
-  { value: '', label: 'Whole campaign' },
-  { value: '30', label: 'Last 30 days' },
-  { value: '14', label: 'Last 14 days' },
-  { value: '7', label: 'Last 7 days' },
-]
 
 // ---------------------------------------------------------------- tabs
 
@@ -258,14 +250,163 @@ const TABS = [
   { id: 'areas', label: 'Areas' },
   { id: 'turfs', label: 'Turfs' },
   { id: 'squads', label: 'Squads' },
-  { id: 'probability', label: 'Probability' },
+  { id: 'odds', label: 'Odds' },
   { id: 'canvassers', label: 'Canvassers' },
 ] as const
-const tab = ref<(typeof TABS)[number]['id']>('overview')
+type TabId = (typeof TABS)[number]['id']
+const tab = ref<TabId>('overview')
+
+/** The header "?" teaches whichever tab is on screen. */
+const helpTopic = computed(() => ANALYTICS_TAB_HELP[tab.value])
+
+// ---------------------------------------------------------------- drill focus
+// Areas/Turfs/Squads/Canvassers each hold a focused entity; the focus panel
+// (one shared template block) replaces the tab's compare view. Focus sticks
+// per tab, so flipping away and back keeps your place — the back chip clears.
+
+const areaFocus = ref('')
+const turfFocus = ref('')
+const squadFocus = ref('')
+const canvasserFocus = ref('') // profile id
+
+interface Focus {
+  kind: 'area' | 'turf' | 'squad' | 'canvasser'
+  label: string
+  all: string
+}
+
+const focus = computed<Focus | null>(() => {
+  switch (tab.value) {
+    case 'areas':
+      return areaFocus.value ? { kind: 'area', label: areaFocus.value, all: 'All areas' } : null
+    case 'turfs':
+      return turfFocus.value ? { kind: 'turf', label: turfFocus.value, all: 'All turfs' } : null
+    case 'squads':
+      return squadFocus.value ? { kind: 'squad', label: squadFocus.value, all: 'All squads' } : null
+    case 'canvassers':
+      return canvasserFocus.value
+        ? {
+            kind: 'canvasser',
+            label: canvasserNames.value.get(canvasserFocus.value) ?? 'Unknown',
+            all: 'Everyone',
+          }
+        : null
+    default:
+      return null
+  }
+})
+
+function clearFocus() {
+  if (tab.value === 'areas') areaFocus.value = ''
+  else if (tab.value === 'turfs') turfFocus.value = ''
+  else if (tab.value === 'squads') squadFocus.value = ''
+  else if (tab.value === 'canvassers') canvasserFocus.value = ''
+}
+
+const focusKnocks = computed<Knock[]>(() => {
+  const f = focus.value
+  if (!f) return []
+  const src = filtered.value
+  switch (f.kind) {
+    case 'area':
+      return src.filter((k) => k.city === f.label)
+    case 'turf':
+      return src.filter((k) => k.turf === f.label)
+    case 'squad':
+      return src.filter((k) => k.squad === f.label)
+    case 'canvasser':
+      return src.filter((k) => k.canvasser === canvasserFocus.value)
+  }
+})
+
+// Cross-tab jumps: rankings inside a focus panel open THEIR entity's tab.
+function openArea(item: BarItem) {
+  areaFocus.value = item.label
+  tab.value = 'areas'
+}
+function openTurf(item: BarItem) {
+  turfFocus.value = item.label
+  tab.value = 'turfs'
+}
+function openSquad(item: BarItem) {
+  squadFocus.value = item.label
+  tab.value = 'squads'
+}
+function openPerson(item: BarItem | ScatterPoint) {
+  if (!item.id) return
+  canvasserFocus.value = item.id
+  tab.value = 'canvassers'
+}
+function openTurfRow(i: number) {
+  turfFocus.value = turfStats.value[i].label
+}
+function openSquadRow(i: number) {
+  squadFocus.value = squadStats.value[i].label
+}
+function openCanvasserRow(i: number) {
+  canvasserFocus.value = canvasserStats.value[i].id
+}
+
+const scopeCount = computed(() => (focus.value ? focusKnocks.value.length : filtered.value.length))
+const showTapHint = computed(
+  () => !focus.value && tab.value !== 'overview' && tab.value !== 'odds',
+)
+
+// ---------------------------------------------------------------- shared builders
+
+/** Continuous local-day axis spanning a knock subset. */
+function dayAxisFor(sub: Knock[]): string[] {
+  if (!sub.length) return []
+  const first = new Date(sub[0].ts)
+  first.setHours(0, 0, 0, 0)
+  const last = new Date(sub[sub.length - 1].ts)
+  const days: string[] = []
+  for (let t = first.getTime(); t <= last.getTime(); t += 86_400_000) {
+    const d = new Date(t)
+    days.push(
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+    )
+  }
+  return days
+}
+const dayLabel = (iso: string) => `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))}`
+
+function dailyFor(sub: Knock[]) {
+  const axis = dayAxisFor(sub)
+  const idx = new Map(axis.map((d, i) => [d, i]))
+  const knocksPerDay = new Array(axis.length).fill(0)
+  const sigsPerDay = new Array(axis.length).fill(0)
+  for (const k of sub) {
+    const i = idx.get(k.day)
+    if (i == null) continue
+    knocksPerDay[i]++
+    if (k.signed) sigsPerDay[i]++
+  }
+  return { axis, knocksPerDay, sigsPerDay }
+}
+
+function mixFor(sub: Knock[]): BarItem[] {
+  const counts = new Map<KnockOutcome, number>()
+  for (const k of sub) counts.set(k.outcome, (counts.get(k.outcome) ?? 0) + 1)
+  return OUTCOMES.map((o) => ({
+    label: o.label,
+    value: counts.get(o.value) ?? 0,
+    color: o.hex,
+    detail: `${fmtPct((counts.get(o.value) ?? 0) / Math.max(1, sub.length), 1)} of all knocks`,
+  }))
+}
+
+const fmtAvg = (v: number | null): string => (v == null ? '—' : v.toFixed(1))
+
+interface Tile {
+  label: string
+  value: string
+  hint?: string
+}
 
 // ---------------------------------------------------------------- overview
 
-const kpis = computed(() => {
+const kpis = computed<Tile[]>(() => {
   const f = filtered.value
   const doors = new Set(f.map((k) => k.household)).size
   const sigs = f.filter((k) => k.signed).length
@@ -276,77 +417,58 @@ const kpis = computed(() => {
     { label: 'Signatures', value: fmtCount(sigs) },
     { label: 'Doors knocked', value: fmtCount(doors) },
     { label: 'Total knocks', value: fmtCount(f.length) },
-    { label: 'Answer rate', value: f.length ? fmtPct(answered / f.length, 1) : '—' },
+    { label: 'Answer rate', value: f.length ? fmtPct(answered / f.length, 1) : '—', hint: 'answered ÷ knocks' },
     { label: 'Close rate', value: conv ? fmtPct(sigs / conv, 1) : '—', hint: 'signed ÷ conversations' },
     { label: 'Canvassers active', value: fmtCount(people) },
   ]
 })
 
-/** Continuous local-day axis over the filtered window. */
-const dayAxis = computed(() => {
-  const f = filtered.value
-  if (!f.length) return [] as string[]
-  const first = new Date(f[0].ts)
-  first.setHours(0, 0, 0, 0)
-  const last = new Date(f[f.length - 1].ts)
-  const days: string[] = []
-  for (let t = first.getTime(); t <= last.getTime(); t += 86_400_000) {
-    const d = new Date(t)
-    days.push(
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
-    )
-  }
-  return days
-})
-const dayLabel = (iso: string) => `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))}`
+const overviewDaily = computed(() => dailyFor(filtered.value))
+const sigAvg = computed(() => rollingMean(overviewDaily.value.sigsPerDay, 7))
+const knockAvg = computed(() => rollingMean(overviewDaily.value.knocksPerDay, 7))
 
-const daily = computed(() => {
-  const idx = new Map(dayAxis.value.map((d, i) => [d, i]))
-  const knocksPerDay = new Array(dayAxis.value.length).fill(0)
-  const sigsPerDay = new Array(dayAxis.value.length).fill(0)
-  for (const k of filtered.value) {
-    const i = idx.get(k.day)
-    if (i == null) continue
-    knocksPerDay[i]++
-    if (k.signed) sigsPerDay[i]++
-  }
-  return { knocksPerDay, sigsPerDay }
-})
-
-const activitySeries = computed(() => [
-  { name: 'Knocks', color: cat.value[0], values: daily.value.knocksPerDay as (number | null)[], area: true },
-  { name: 'Signatures', color: cat.value[1], values: daily.value.sigsPerDay as (number | null)[], area: true },
-  { name: '7-day avg signatures', color: cat.value[2], values: rollingMean(daily.value.sigsPerDay, 7) },
+// Signatures and knocks each get their OWN chart and scale — on a shared
+// axis the knock line (10× bigger) squashed the signature series and its
+// 7-day average into an unreadable sliver at the bottom.
+const sigSeries = computed<TimeSeries[]>(() => [
+  { name: 'Signatures', color: cat.value[0], values: overviewDaily.value.sigsPerDay, area: true },
+  { name: '7-day average', color: cat.value[1], values: sigAvg.value, width: 3.5, dash: true },
 ])
-const activityRows = computed(() =>
-  dayAxis.value.map((d, i) => [d, daily.value.knocksPerDay[i], daily.value.sigsPerDay[i]]),
+const knockSeries = computed<TimeSeries[]>(() => [
+  { name: 'Knocks', color: cat.value[0], values: overviewDaily.value.knocksPerDay, area: true },
+  { name: '7-day average', color: cat.value[1], values: knockAvg.value, width: 3.5, dash: true },
+])
+const sigRows = computed(() =>
+  overviewDaily.value.axis.map((d, i) => [d, overviewDaily.value.sigsPerDay[i], fmtAvg(sigAvg.value[i])]),
+)
+const knockRows = computed(() =>
+  overviewDaily.value.axis.map((d, i) => [d, overviewDaily.value.knocksPerDay[i], fmtAvg(knockAvg.value[i])]),
 )
 
-const outcomeStack = computed(() =>
-  OUTCOMES.map((o) => {
-    const idx = new Map(dayAxis.value.map((d, i) => [d, i]))
-    const vals = new Array(dayAxis.value.length).fill(0)
+const outcomeStack = computed(() => {
+  const axis = overviewDaily.value.axis
+  const idx = new Map(axis.map((d, i) => [d, i]))
+  return OUTCOMES.map((o) => {
+    const vals = new Array(axis.length).fill(0)
     for (const k of filtered.value) {
       if (k.outcome !== o.value) continue
       const i = idx.get(k.day)
       if (i != null) vals[i]++
     }
     return { name: o.label, color: o.hex, values: vals }
-  }),
-)
-
-const outcomeMix = computed<BarItem[]>(() => {
-  const counts = new Map<KnockOutcome, number>()
-  for (const k of filtered.value) counts.set(k.outcome, (counts.get(k.outcome) ?? 0) + 1)
-  return OUTCOMES.map((o) => ({
-    label: o.label,
-    value: counts.get(o.value) ?? 0,
-    color: o.hex,
-    detail: `${fmtPct((counts.get(o.value) ?? 0) / Math.max(1, filtered.value.length), 1)} of all knocks`,
-  }))
+  })
 })
 
+const outcomeMix = computed(() => mixFor(filtered.value))
+
 // ---------------------------------------------------------------- areas
+
+/** Every area that has knocks, busiest first — the Areas tab's chip picker. */
+const areaNames = computed(() => {
+  const counts = new Map<string, number>()
+  for (const k of knocks.value) counts.set(k.city, (counts.get(k.city) ?? 0) + 1)
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c)
+})
 
 function rateBy(
   key: (k: Knock) => string,
@@ -394,6 +516,19 @@ const coverageByCity = computed<BarItem[]>(() => {
 
 const rateRows = (items: BarItem[]) => items.map((i) => [i.label, fmtPct(i.value, 1), i.detail ?? ''])
 
+/** Campaign-wide rates — the dashed "avg" markers on rate charts. */
+const overallRates = computed(() => {
+  const f = filtered.value
+  const conv = f.filter((k) => k.conversation).length
+  const sigs = f.filter((k) => k.signed).length
+  const answered = f.filter((k) => k.answered).length
+  return { sign: conv ? sigs / conv : 0, answer: f.length ? answered / f.length : 0 }
+})
+
+/** Percent-axis bound with headroom, keeping whiskers AND the avg marker on. */
+const pctMax = (items: BarItem[], refVal = 0) =>
+  Math.min(1, Math.max(...items.map((i) => i.hi ?? i.value), refVal, 0.1) * 1.15)
+
 // ---------------------------------------------------------------- turfs & squads
 // Both group off the names STAMPED on each knock at insert time (see the
 // KnockRow comment) — squads dissolve nightly and turf gets re-cut, so the
@@ -436,12 +571,10 @@ const turfStats = computed(() => statsBy((k) => k.turf))
 const squadStats = computed(() => statsBy((k) => k.squad))
 
 /** Knocks with no stamp would dwarf the real bars (most sim history predates
- * any turf being cut) — charts skip that bucket, the tables keep it. */
+ * any turf being cut) — charts skip that bucket, the tables keep it. The
+ * help sheet tells the story; there's no inline footnote anymore. */
 const chartableTurfs = computed(() => turfStats.value.filter((t) => t.label !== NO_TURF))
 const chartableSquads = computed(() => squadStats.value.filter((s) => s.label !== NO_SQUAD))
-const unstampedTurfKnocks = computed(
-  () => turfStats.value.find((t) => t.label === NO_TURF)?.knocks ?? 0,
-)
 
 const signaturesByTurf = computed<BarItem[]>(() =>
   chartableTurfs.value.map((t) => ({
@@ -491,7 +624,7 @@ const signRateBySquad = computed(() =>
   rateBy((k) => k.squad, (k) => k.signed, (k) => k.conversation && k.squad !== NO_SQUAD, 10),
 )
 
-// ---------------------------------------------------------------- probability
+// ---------------------------------------------------------------- odds
 
 function rateByAttempt(num: (k: Knock) => boolean, den: (k: Knock) => boolean): BarItem[] {
   const per = new Map<number, { n: number; s: number }>()
@@ -578,10 +711,10 @@ const canvasserStats = computed(() => {
     .sort((a, b) => b.sigs - a.sigs)
 })
 
-const scatterPoints = computed(() =>
+const scatterPoints = computed<ScatterPoint[]>(() =>
   canvasserStats.value
     .filter((c) => c.conv >= 20)
-    .map((c) => ({ x: c.knocks, y: c.closeRate, label: c.name })),
+    .map((c) => ({ x: c.knocks, y: c.closeRate, label: c.name, id: c.id })),
 )
 const scatterFit = computed(() => linearRegression(scatterPoints.value.map((p) => ({ x: p.x, y: p.y }))))
 
@@ -589,13 +722,10 @@ const scatterFit = computed(() => linearRegression(scatterPoints.value.map((p) =
  * cut — bars simply grow with the list. Top 12 stays as an option for
  * campaigns with more canvassers than screen. */
 const earnersScope = ref<'12' | 'all'>('all')
-const earnersOptions = computed(() => [
-  { value: 'all', label: `Everyone (${canvasserStats.value.length})` },
-  { value: '12', label: 'Top 12' },
-])
 const signatureEarners = computed<BarItem[]>(() =>
   (earnersScope.value === 'all' ? canvasserStats.value : canvasserStats.value.slice(0, 12)).map(
     (c) => ({
+      id: c.id,
       label: c.name,
       value: c.sigs,
       detail: `${fmtCount(c.knocks)} knocks · close rate ${fmtPct(c.closeRate, 1)}`,
@@ -613,11 +743,142 @@ const canvasserRows = computed(() =>
     fmtPct(c.knocks ? c.answered / c.knocks : 0, 1),
   ]),
 )
+const CANVASSER_COLUMNS = ['Canvasser', 'Knocks', 'Conversations', 'Signatures', 'Close rate', 'Answer rate']
 
+// ---------------------------------------------------------------- focus panel
+// One shared drill-down layout for whichever entity is focused: tiles, the
+// signatures trend with its 7-day average, two cross-linking rankings, and
+// the outcome mix.
+
+const focusDaily = computed(() => dailyFor(focusKnocks.value))
+const focusSigAvg = computed(() => rollingMean(focusDaily.value.sigsPerDay, 7))
+const focusTrend = computed<TimeSeries[]>(() => [
+  { name: 'Signatures', color: cat.value[0], values: focusDaily.value.sigsPerDay, area: true },
+  { name: '7-day average', color: cat.value[1], values: focusSigAvg.value, width: 3.5, dash: true },
+])
+const focusTrendRows = computed(() =>
+  focusDaily.value.axis.map((d, i) => [d, focusDaily.value.sigsPerDay[i], fmtAvg(focusSigAvg.value[i])]),
+)
+const focusMix = computed(() => mixFor(focusKnocks.value))
+
+const focusTiles = computed<Tile[]>(() => {
+  const f = focus.value
+  const sub = focusKnocks.value
+  const doors = new Set(sub.map((k) => k.household)).size
+  const sigs = sub.filter((k) => k.signed).length
+  const answered = sub.filter((k) => k.answered).length
+  const conv = sub.filter((k) => k.conversation).length
+  const days = new Set(sub.map((k) => k.day)).size
+  const people = new Set(sub.map((k) => k.canvasser)).size
+  const tiles: Tile[] = [
+    { label: 'Signatures', value: fmtCount(sigs) },
+    { label: 'Doors knocked', value: fmtCount(doors) },
+    { label: 'Total knocks', value: fmtCount(sub.length) },
+    { label: 'Answer rate', value: sub.length ? fmtPct(answered / sub.length, 1) : '—', hint: 'answered ÷ knocks' },
+    { label: 'Close rate', value: conv ? fmtPct(sigs / conv, 1) : '—', hint: 'signed ÷ conversations' },
+    { label: 'Days active', value: fmtCount(days) },
+  ]
+  if (f && f.kind !== 'canvasser') tiles.push({ label: 'Canvassers', value: fmtCount(people) })
+  const total =
+    f?.kind === 'turf'
+      ? turfAddressTotals.value.get(f.label)
+      : f?.kind === 'area'
+        ? cityAddressTotals.value.get(f.label)
+        : undefined
+  if (total) {
+    tiles.push({
+      label: 'Coverage',
+      value: fmtPct(Math.min(1, doors / total), 1),
+      hint: `${fmtCount(doors)} of ${fmtCount(total)} doors`,
+    })
+  }
+  return tiles
+})
+
+function rankBy(sub: Knock[], key: (k: Knock) => string, exclude?: string): BarItem[] {
+  const per = new Map<string, { knocks: number; sigs: number; conv: number }>()
+  for (const k of sub) {
+    const label = key(k)
+    if (label === exclude) continue
+    let e = per.get(label)
+    if (!e) {
+      e = { knocks: 0, sigs: 0, conv: 0 }
+      per.set(label, e)
+    }
+    e.knocks++
+    if (k.signed) e.sigs++
+    if (k.conversation) e.conv++
+  }
+  return [...per.entries()]
+    .map(([label, e]) => ({
+      label,
+      value: e.sigs,
+      detail: `${fmtCount(e.knocks)} knocks · close rate ${fmtPct(e.conv ? e.sigs / e.conv : 0, 1)}`,
+    }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 10)
+}
+
+function rankPeople(sub: Knock[]): BarItem[] {
+  const per = new Map<string, { knocks: number; sigs: number; conv: number }>()
+  for (const k of sub) {
+    let e = per.get(k.canvasser)
+    if (!e) {
+      e = { knocks: 0, sigs: 0, conv: 0 }
+      per.set(k.canvasser, e)
+    }
+    e.knocks++
+    if (k.signed) e.sigs++
+    if (k.conversation) e.conv++
+  }
+  return [...per.entries()]
+    .map(([id, e]) => ({
+      id,
+      label: canvasserNames.value.get(id) ?? 'Unknown',
+      value: e.sigs,
+      detail: `${fmtCount(e.knocks)} knocks · close rate ${fmtPct(e.conv ? e.sigs / e.conv : 0, 1)}`,
+    }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 10)
+}
+
+interface FocusRank {
+  title: string
+  items: BarItem[]
+  open: (item: BarItem) => void
+}
+
+const focusRanks = computed<FocusRank[]>(() => {
+  const f = focus.value
+  if (!f) return []
+  const sub = focusKnocks.value
+  switch (f.kind) {
+    case 'area':
+      return [
+        { title: 'Turfs here', items: rankBy(sub, (k) => k.turf, NO_TURF), open: openTurf },
+        { title: 'Canvassers here', items: rankPeople(sub), open: openPerson },
+      ]
+    case 'turf':
+      return [
+        { title: 'Crews here', items: rankBy(sub, (k) => k.squad, NO_SQUAD), open: openSquad },
+        { title: 'Canvassers here', items: rankPeople(sub), open: openPerson },
+      ]
+    case 'squad':
+      return [
+        { title: 'Turf worked', items: rankBy(sub, (k) => k.turf, NO_TURF), open: openTurf },
+        { title: 'Members', items: rankPeople(sub), open: openPerson },
+      ]
+    case 'canvasser':
+      return [
+        { title: 'Turf worked', items: rankBy(sub, (k) => k.turf, NO_TURF), open: openTurf },
+        { title: 'Crews joined', items: rankBy(sub, (k) => k.squad, NO_SQUAD), open: openSquad },
+      ]
+  }
+})
 </script>
 
 <template>
-  <AppShell title="Analytics">
+  <AppShell title="Analytics" :help-topic="helpTopic">
     <div v-if="loading" class="card center">
       <p class="muted">{{ loadNote }}</p>
     </div>
@@ -626,29 +887,6 @@ const canvasserRows = computed(() =>
     </div>
 
     <template v-else>
-      <!-- one filter row scoping everything below -->
-      <div class="filters">
-        <AppSelect
-          :model-value="rangeDays == null ? '' : String(rangeDays)"
-          :options="RANGE_PRESETS"
-          aria-label="Date range"
-          @update:model-value="rangeDays = $event === '' ? null : Number($event)"
-        />
-        <AppSelect
-          :model-value="cityFilter"
-          :options="cityOptions"
-          aria-label="Area"
-          @update:model-value="cityFilter = String($event)"
-        />
-        <AppSelect
-          :model-value="turfFilter"
-          :options="turfOptions"
-          aria-label="Turf"
-          @update:model-value="turfFilter = String($event)"
-        />
-        <span class="muted scope-note">{{ fmtCount(filtered.length) }} knocks in view</span>
-      </div>
-
       <div class="tabs" role="tablist">
         <button
           v-for="t in TABS"
@@ -663,236 +901,390 @@ const canvasserRows = computed(() =>
         </button>
       </div>
 
-      <!-- ============================== Overview -->
-      <section v-if="tab === 'overview'" class="stack">
-        <div class="tiles">
-          <div v-for="k in kpis" :key="k.label" class="tile">
-            <span class="tile-label muted">{{ k.label }}</span>
-            <span class="tile-value">{{ k.value }}</span>
-            <span v-if="k.hint" class="tile-hint muted">{{ k.hint }}</span>
+      <section class="stack">
+        <!-- Every tab's own scope row: day chips + live knock count, plus the
+             back chip and entity name once something is focused. -->
+        <div class="scope">
+          <template v-if="focus">
+            <button class="chip back-chip" type="button" @click="clearFocus">
+              ‹ {{ focus.all }}
+            </button>
+            <span class="focus-name">{{ focus.label }}</span>
+          </template>
+          <div class="chip-row" role="group" aria-label="Time window">
+            <button
+              v-for="r in RANGE_CHIPS"
+              :key="r.label"
+              type="button"
+              class="chip"
+              :class="{ on: rangeDays === r.value }"
+              @click="rangeDays = r.value"
+            >
+              {{ r.label }}
+            </button>
           </div>
+          <span class="scope-right muted">
+            {{ fmtCount(scopeCount) }} knocks<span v-if="showTapHint"> · tap to explore</span>
+          </span>
         </div>
 
-        <ChartCard
-          title="Daily activity"
-          subtitle="Knocks and signatures per day, with a 7-day signature average"
-          :columns="['Day', 'Knocks', 'Signatures']"
-          :rows="activityRows"
-        >
-          <TimeSeriesChart :labels="dayAxis.map(dayLabel)" :series="activitySeries" />
-        </ChartCard>
-
-        <div class="two-col">
-          <ChartCard
-            title="What happened at doors"
-            subtitle="Outcome mix per day"
-            :columns="['Day', ...OUTCOMES.map((o) => o.label)]"
-            :rows="dayAxis.map((d, i) => [d, ...outcomeStack.map((s) => s.values[i])])"
+        <!-- The Areas tab's picker lives IN the tab, not above the page. -->
+        <div v-if="tab === 'areas'" class="chip-row" role="group" aria-label="Area">
+          <button type="button" class="chip" :class="{ on: !areaFocus }" @click="areaFocus = ''">
+            All areas
+          </button>
+          <button
+            v-for="a in areaNames"
+            :key="a"
+            type="button"
+            class="chip"
+            :class="{ on: areaFocus === a }"
+            @click="areaFocus = a"
           >
-            <StackedBarChart :labels="dayAxis.map(dayLabel)" :series="outcomeStack" :height="230" />
+            {{ a }}
+          </button>
+        </div>
+
+        <!-- ============================== Focused entity (shared drill panel) -->
+        <template v-if="focus">
+          <div class="tiles">
+            <div v-for="t in focusTiles" :key="t.label" class="tile">
+              <span class="tile-label muted">{{ t.label }}</span>
+              <span class="tile-value">{{ t.value }}</span>
+              <span v-if="t.hint" class="tile-hint muted">{{ t.hint }}</span>
+            </div>
+          </div>
+
+          <ChartCard
+            title="Signatures per day"
+            :columns="['Day', 'Signatures', '7-day avg']"
+            :rows="focusTrendRows"
+          >
+            <TimeSeriesChart :labels="focusDaily.axis.map(dayLabel)" :series="focusTrend" />
           </ChartCard>
+
+          <div class="two-col">
+            <ChartCard
+              v-for="r in focusRanks"
+              :key="r.title"
+              :title="r.title"
+              subtitle="by signatures"
+              :columns="[r.title, 'Signatures', 'Detail']"
+              :rows="r.items.map((i) => [i.label, i.value, i.detail ?? ''])"
+            >
+              <BarChart :items="r.items" :color="cat[0]" selectable @select="r.open" />
+            </ChartCard>
+          </div>
 
           <ChartCard
             title="Outcome totals"
             :columns="['Outcome', 'Knocks', 'Share']"
-            :rows="outcomeMix.map((i) => [i.label, i.value, i.detail ?? ''])"
+            :rows="focusMix.map((i) => [i.label, i.value, i.detail ?? ''])"
           >
-            <BarChart :items="outcomeMix" :color="cat[0]" />
+            <BarChart :items="focusMix" :color="cat[0]" />
           </ChartCard>
-        </div>
-      </section>
+        </template>
 
-      <!-- ============================== Areas -->
-      <section v-else-if="tab === 'areas'" class="stack">
-        <div class="two-col">
-          <ChartCard
-            title="Sign rate by area"
-            subtitle="Signatures per conversation, with 95% confidence whiskers"
-            :columns="['Area', 'Sign rate', 'Detail']"
-            :rows="rateRows(signRateByCity)"
-          >
-            <BarChart :items="signRateByCity" :color="cat[0]" percent :max="Math.min(1, Math.max(...signRateByCity.map((i) => i.hi ?? i.value), 0.1) * 1.15)" />
-          </ChartCard>
+        <!-- ============================== Overview -->
+        <template v-else-if="tab === 'overview'">
+          <div class="tiles">
+            <div v-for="k in kpis" :key="k.label" class="tile">
+              <span class="tile-label muted">{{ k.label }}</span>
+              <span class="tile-value">{{ k.value }}</span>
+              <span v-if="k.hint" class="tile-hint muted">{{ k.hint }}</span>
+            </div>
+          </div>
 
-          <ChartCard
-            title="Answer rate by area"
-            subtitle="Share of knocks where someone came to the door"
-            :columns="['Area', 'Answer rate', 'Detail']"
-            :rows="rateRows(answerRateByCity)"
-          >
-            <BarChart :items="answerRateByCity" :color="cat[0]" percent :max="Math.min(1, Math.max(...answerRateByCity.map((i) => i.hi ?? i.value), 0.1) * 1.15)" />
-          </ChartCard>
-        </div>
+          <div class="two-col">
+            <ChartCard
+              title="Signatures per day"
+              :columns="['Day', 'Signatures', '7-day avg']"
+              :rows="sigRows"
+            >
+              <TimeSeriesChart :labels="overviewDaily.axis.map(dayLabel)" :series="sigSeries" />
+            </ChartCard>
 
-        <ChartCard
-          title="Door coverage by area"
-          subtitle="Unique doors knocked as a share of all addresses on file"
-          :columns="['Area', 'Coverage', 'Detail']"
-          :rows="rateRows(coverageByCity)"
-        >
-          <BarChart :items="coverageByCity" :color="cat[0]" percent :max="1" />
-        </ChartCard>
-      </section>
+            <ChartCard
+              title="Knocks per day"
+              :columns="['Day', 'Knocks', '7-day avg']"
+              :rows="knockRows"
+            >
+              <TimeSeriesChart :labels="overviewDaily.axis.map(dayLabel)" :series="knockSeries" />
+            </ChartCard>
+          </div>
 
-      <!-- ============================== Turfs -->
-      <section v-else-if="tab === 'turfs'" class="stack">
-        <div class="two-col">
-          <ChartCard
-            title="Signatures by turf"
-            subtitle="Each knock counts toward the turf its door was in at the time"
-            :columns="['Turf', 'Signatures', 'Detail']"
-            :rows="signaturesByTurf.map((i) => [i.label, i.value, i.detail ?? ''])"
-          >
-            <BarChart :items="signaturesByTurf" :color="cat[0]" />
-          </ChartCard>
+          <div class="two-col">
+            <ChartCard
+              title="What happened at doors"
+              subtitle="per day"
+              :columns="['Day', ...OUTCOMES.map((o) => o.label)]"
+              :rows="overviewDaily.axis.map((d, i) => [d, ...outcomeStack.map((s) => s.values[i])])"
+            >
+              <StackedBarChart :labels="overviewDaily.axis.map(dayLabel)" :series="outcomeStack" :height="230" />
+            </ChartCard>
 
-          <ChartCard
-            title="Sign rate by turf"
-            subtitle="Signatures per conversation, with 95% confidence whiskers"
-            :columns="['Turf', 'Sign rate', 'Detail']"
-            :rows="rateRows(signRateByTurf)"
-          >
-            <BarChart :items="signRateByTurf" :color="cat[0]" percent :max="Math.min(1, Math.max(...signRateByTurf.map((i) => i.hi ?? i.value), 0.1) * 1.15)" />
-          </ChartCard>
-        </div>
+            <ChartCard
+              title="Outcome totals"
+              :columns="['Outcome', 'Knocks', 'Share']"
+              :rows="outcomeMix.map((i) => [i.label, i.value, i.detail ?? ''])"
+            >
+              <BarChart :items="outcomeMix" :color="cat[0]" />
+            </ChartCard>
+          </div>
+        </template>
 
-        <ChartCard
-          title="Turf coverage"
-          subtitle="Unique doors knocked as a share of the doors currently in each turf"
-          :columns="['Turf', 'Coverage', 'Detail']"
-          :rows="rateRows(coverageByTurf)"
-        >
-          <BarChart :items="coverageByTurf" :color="cat[0]" percent :max="1" />
-        </ChartCard>
+        <!-- ============================== Areas (compare) -->
+        <template v-else-if="tab === 'areas'">
+          <div class="two-col">
+            <ChartCard
+              title="Sign rate by area"
+              subtitle="signed ÷ conversations"
+              :columns="['Area', 'Sign rate', 'Detail']"
+              :rows="rateRows(signRateByCity)"
+            >
+              <BarChart
+                :items="signRateByCity"
+                :color="cat[0]"
+                percent
+                selectable
+                :ref-value="overallRates.sign"
+                :max="pctMax(signRateByCity, overallRates.sign)"
+                @select="openArea"
+              />
+            </ChartCard>
 
-        <ChartCard
-          title="All turf, by the numbers"
-          :columns="['Turf', ...GROUP_COLUMNS.slice(1)]"
-          :rows="groupRows(turfStats)"
-          table-only
-        />
-
-        <p v-if="unstampedTurfKnocks" class="muted scope-note">
-          {{ fmtCount(unstampedTurfKnocks) }} knocks in view happened at doors that weren't in any
-          turf — they're in the table as "No turf" but left off the charts.
-        </p>
-      </section>
-
-      <!-- ============================== Squads -->
-      <section v-else-if="tab === 'squads'" class="stack">
-        <div class="two-col">
-          <ChartCard
-            title="Signatures by squad"
-            subtitle="Squads are day crews — a crew keeping its name across days accumulates here"
-            :columns="['Squad', 'Signatures', 'Detail']"
-            :rows="signaturesBySquad.map((i) => [i.label, i.value, i.detail ?? ''])"
-          >
-            <BarChart :items="signaturesBySquad" :color="cat[0]" />
-          </ChartCard>
+            <ChartCard
+              title="Answer rate by area"
+              subtitle="answered ÷ knocks"
+              :columns="['Area', 'Answer rate', 'Detail']"
+              :rows="rateRows(answerRateByCity)"
+            >
+              <BarChart
+                :items="answerRateByCity"
+                :color="cat[0]"
+                percent
+                selectable
+                :ref-value="overallRates.answer"
+                :max="pctMax(answerRateByCity, overallRates.answer)"
+                @select="openArea"
+              />
+            </ChartCard>
+          </div>
 
           <ChartCard
-            title="Sign rate by squad"
-            subtitle="Signatures per conversation, with 95% confidence whiskers"
-            :columns="['Squad', 'Sign rate', 'Detail']"
-            :rows="rateRows(signRateBySquad)"
+            title="Door coverage by area"
+            subtitle="knocked ÷ on file"
+            :columns="['Area', 'Coverage', 'Detail']"
+            :rows="rateRows(coverageByCity)"
           >
-            <BarChart :items="signRateBySquad" :color="cat[0]" percent :max="Math.min(1, Math.max(...signRateBySquad.map((i) => i.hi ?? i.value), 0.1) * 1.15)" />
+            <BarChart :items="coverageByCity" :color="cat[0]" percent :max="1" selectable @select="openArea" />
           </ChartCard>
-        </div>
+        </template>
 
-        <ChartCard
-          title="All squads, by the numbers"
-          :columns="['Squad', ...GROUP_COLUMNS.slice(1)]"
-          :rows="groupRows(squadStats)"
-          table-only
-        />
-      </section>
+        <!-- ============================== Turfs (compare) -->
+        <template v-else-if="tab === 'turfs'">
+          <div class="two-col">
+            <ChartCard
+              title="Signatures by turf"
+              :columns="['Turf', 'Signatures', 'Detail']"
+              :rows="signaturesByTurf.map((i) => [i.label, i.value, i.detail ?? ''])"
+            >
+              <BarChart :items="signaturesByTurf" :color="cat[0]" selectable @select="openTurf" />
+            </ChartCard>
 
-      <!-- ============================== Probability -->
-      <section v-else-if="tab === 'probability'" class="stack">
-        <div class="two-col">
+            <ChartCard
+              title="Sign rate by turf"
+              subtitle="signed ÷ conversations"
+              :columns="['Turf', 'Sign rate', 'Detail']"
+              :rows="rateRows(signRateByTurf)"
+            >
+              <BarChart
+                :items="signRateByTurf"
+                :color="cat[0]"
+                percent
+                selectable
+                :ref-value="overallRates.sign"
+                :max="pctMax(signRateByTurf, overallRates.sign)"
+                @select="openTurf"
+              />
+            </ChartCard>
+          </div>
+
           <ChartCard
-            title="P(door answers) by attempt"
-            subtitle="Persistence pays: repeat visits reach the hard-to-catch"
-            :columns="['Attempt', 'Answer rate', 'Detail']"
-            :rows="rateRows(answerByAttempt)"
+            title="Turf coverage"
+            subtitle="knocked ÷ doors in turf"
+            :columns="['Turf', 'Coverage', 'Detail']"
+            :rows="rateRows(coverageByTurf)"
           >
-            <BarChart :items="answerByAttempt" :color="cat[0]" percent :max="Math.min(1, Math.max(...answerByAttempt.map((i) => i.hi ?? i.value), 0.1) * 1.2)" />
+            <BarChart :items="coverageByTurf" :color="cat[0]" percent :max="1" selectable @select="openTurf" />
           </ChartCard>
 
           <ChartCard
-            title="P(signs) by attempt"
-            subtitle="Sign rate per conversation, by which visit it took"
-            :columns="['Attempt', 'Sign rate', 'Detail']"
-            :rows="rateRows(signByAttempt)"
-          >
-            <BarChart :items="signByAttempt" :color="cat[0]" percent :max="Math.min(1, Math.max(...signByAttempt.map((i) => i.hi ?? i.value), 0.1) * 1.2)" />
-          </ChartCard>
-        </div>
-
-        <ChartCard
-          title="When doors answer"
-          subtitle="Answer rate by weekday and hour (cells under 15 knocks hidden)"
-          :columns="['Weekday', ...HOURS.map((h) => `${h}:00`)]"
-          :rows="WEEKDAYS.map((w, r) => [w, ...heat.values[r].map((v) => (v == null ? '—' : fmtPct(v)))])"
-        >
-          <Heatmap
-            :row-labels="WEEKDAYS"
-            :col-labels="HOURS.map((h) => (h <= 12 ? `${h}a` : `${h - 12}p`))"
-            :values="heat.values"
-            :counts="heat.counts"
-            :dark="palette.dark.value"
+            title="All turf, by the numbers"
+            :columns="['Turf', ...GROUP_COLUMNS.slice(1)]"
+            :rows="groupRows(turfStats)"
+            table-only
+            selectable-rows
+            @select-row="openTurfRow"
           />
-        </ChartCard>
+        </template>
 
-        <ChartCard
-          title="The funnel"
-          subtitle="Unique doors at each stage of the pipeline"
-          :columns="['Stage', 'Doors', 'Conversion']"
-          :rows="funnel.map((i) => [i.label, i.value, i.detail ?? ''])"
-        >
-          <BarChart :items="funnel" :color="cat[0]" />
-        </ChartCard>
-      </section>
+        <!-- ============================== Squads (compare) -->
+        <template v-else-if="tab === 'squads'">
+          <div class="two-col">
+            <ChartCard
+              title="Signatures by squad"
+              :columns="['Squad', 'Signatures', 'Detail']"
+              :rows="signaturesBySquad.map((i) => [i.label, i.value, i.detail ?? ''])"
+            >
+              <BarChart :items="signaturesBySquad" :color="cat[0]" selectable @select="openSquad" />
+            </ChartCard>
 
-      <!-- ============================== Canvassers -->
-      <section v-else class="stack">
-        <div class="two-col">
+            <ChartCard
+              title="Sign rate by squad"
+              subtitle="signed ÷ conversations"
+              :columns="['Squad', 'Sign rate', 'Detail']"
+              :rows="rateRows(signRateBySquad)"
+            >
+              <BarChart
+                :items="signRateBySquad"
+                :color="cat[0]"
+                percent
+                selectable
+                :ref-value="overallRates.sign"
+                :max="pctMax(signRateBySquad, overallRates.sign)"
+                @select="openSquad"
+              />
+            </ChartCard>
+          </div>
+
           <ChartCard
-            title="Volume vs. close rate"
-            subtitle="Each dot is a canvasser (20+ conversations) — does knocking more trade off against closing?"
-            :columns="['Canvasser', 'Knocks', 'Conversations', 'Signatures', 'Close rate', 'Answer rate']"
-            :rows="canvasserRows"
+            title="All squads, by the numbers"
+            :columns="['Squad', ...GROUP_COLUMNS.slice(1)]"
+            :rows="groupRows(squadStats)"
+            table-only
+            selectable-rows
+            @select-row="openSquadRow"
+          />
+        </template>
+
+        <!-- ============================== Odds -->
+        <template v-else-if="tab === 'odds'">
+          <div class="two-col">
+            <ChartCard
+              title="Answers by attempt"
+              subtitle="answered ÷ knocks"
+              :columns="['Attempt', 'Answer rate', 'Detail']"
+              :rows="rateRows(answerByAttempt)"
+            >
+              <BarChart
+                :items="answerByAttempt"
+                :color="cat[0]"
+                percent
+                :ref-value="overallRates.answer"
+                :max="pctMax(answerByAttempt, overallRates.answer)"
+              />
+            </ChartCard>
+
+            <ChartCard
+              title="Signs by attempt"
+              subtitle="signed ÷ conversations"
+              :columns="['Attempt', 'Sign rate', 'Detail']"
+              :rows="rateRows(signByAttempt)"
+            >
+              <BarChart
+                :items="signByAttempt"
+                :color="cat[0]"
+                percent
+                :ref-value="overallRates.sign"
+                :max="pctMax(signByAttempt, overallRates.sign)"
+              />
+            </ChartCard>
+          </div>
+
+          <ChartCard
+            title="When doors answer"
+            subtitle="answer rate"
+            :columns="['Weekday', ...HOURS.map((h) => `${h}:00`)]"
+            :rows="WEEKDAYS.map((w, r) => [w, ...heat.values[r].map((v) => (v == null ? '—' : fmtPct(v)))])"
           >
-            <ScatterChart
-              :points="scatterPoints"
-              :color="cat[0]"
-              :fit="scatterFit"
-              x-label="knocks"
-              y-label="close rate"
-              y-percent
+            <Heatmap
+              :row-labels="WEEKDAYS"
+              :col-labels="HOURS.map((h) => (h <= 12 ? `${h}a` : `${h - 12}p`))"
+              :values="heat.values"
+              :counts="heat.counts"
+              :dark="palette.dark.value"
             />
           </ChartCard>
 
           <ChartCard
-            title="Signature earners"
-            subtitle="Signatures per canvasser in the current view"
-            :columns="['Canvasser', 'Signatures']"
-            :rows="signatureEarners.map((i) => [i.label, i.value])"
+            title="The funnel"
+            subtitle="unique doors"
+            :columns="['Stage', 'Doors', 'Conversion']"
+            :rows="funnel.map((i) => [i.label, i.value, i.detail ?? ''])"
           >
-            <div class="earners-scope">
-              <AppSelect
-                :model-value="earnersScope"
-                :options="earnersOptions"
-                aria-label="How many canvassers to show"
-                @update:model-value="earnersScope = $event as '12' | 'all'"
-              />
-            </div>
-            <BarChart :items="signatureEarners" :color="cat[0]" />
+            <BarChart :items="funnel" :color="cat[0]" />
           </ChartCard>
-        </div>
-      </section>
+        </template>
 
+        <!-- ============================== Canvassers (compare) -->
+        <template v-else>
+          <div class="two-col">
+            <ChartCard
+              title="Volume vs. close rate"
+              subtitle="one dot per canvasser"
+              :columns="CANVASSER_COLUMNS"
+              :rows="canvasserRows"
+            >
+              <ScatterChart
+                :points="scatterPoints"
+                :color="cat[0]"
+                :fit="scatterFit"
+                x-label="knocks"
+                y-label="close rate"
+                y-percent
+                selectable
+                @select="openPerson"
+              />
+            </ChartCard>
+
+            <ChartCard
+              title="Signature earners"
+              :columns="['Canvasser', 'Signatures']"
+              :rows="signatureEarners.map((i) => [i.label, i.value])"
+            >
+              <div class="chip-row earners">
+                <button
+                  type="button"
+                  class="chip"
+                  :class="{ on: earnersScope === 'all' }"
+                  @click="earnersScope = 'all'"
+                >
+                  Everyone ({{ canvasserStats.length }})
+                </button>
+                <button
+                  type="button"
+                  class="chip"
+                  :class="{ on: earnersScope === '12' }"
+                  @click="earnersScope = '12'"
+                >
+                  Top 12
+                </button>
+              </div>
+              <BarChart :items="signatureEarners" :color="cat[0]" selectable @select="openPerson" />
+            </ChartCard>
+          </div>
+
+          <ChartCard
+            title="Everyone, by the numbers"
+            :columns="CANVASSER_COLUMNS"
+            :rows="canvasserRows"
+            table-only
+            selectable-rows
+            @select-row="openCanvasserRow"
+          />
+        </template>
+      </section>
     </template>
   </AppShell>
 </template>
@@ -904,17 +1296,6 @@ const canvasserRows = computed(() =>
 }
 .error {
   color: var(--danger);
-}
-
-.filters {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-  margin-bottom: 0.8rem;
-}
-.scope-note {
-  font-size: 0.82rem;
 }
 
 .tabs {
@@ -952,6 +1333,61 @@ const canvasserRows = computed(() =>
   gap: 1rem;
 }
 
+/* --- scope row + chips (each tab's own controls) --- */
+
+.scope {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.chip-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+.chip {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.28rem 0.7rem;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+.chip:hover {
+  color: var(--text);
+}
+.chip.on {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border-color: var(--accent);
+  color: var(--text);
+}
+.back-chip {
+  color: var(--accent);
+  font-weight: 700;
+}
+.focus-name {
+  font-weight: 800;
+  font-size: 1.05rem;
+}
+.scope-right {
+  font-size: 0.82rem;
+  margin-left: auto;
+}
+
+/* Everyone / Top 12 chips inside the signature-earners card. */
+.earners {
+  justify-content: flex-end;
+  margin-bottom: 0.5rem;
+}
+
 .tiles {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
@@ -976,12 +1412,5 @@ const canvasserRows = computed(() =>
 }
 .tile-hint {
   font-size: 0.7rem;
-}
-
-/* Everyone / Top 12 picker inside the signature-earners card. */
-.earners-scope {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 0.5rem;
 }
 </style>

@@ -2,6 +2,8 @@
 // Horizontal bars with optional confidence-interval whiskers. Value labels sit
 // OUTSIDE the bar end (never clipped inside), the whole row is the hover
 // target, and bars stay ≤18px thick with square baselines / rounded data-ends.
+// With `selectable`, rows are tap targets (the Analytics drill-down); with
+// `refValue`, a dashed marker shows the campaign-wide average for context.
 import { computed, ref } from 'vue'
 import { fmtCount, fmtPct } from '@/lib/chartTheme'
 import { useChartWidth } from './useChartWidth'
@@ -15,6 +17,8 @@ export interface BarItem {
   color?: string
   /** shown in the tooltip, e.g. "412 knocks" */
   detail?: string
+  /** opaque handle for select handlers (e.g. a profile id behind a name) */
+  id?: string
 }
 
 const props = withDefaults(
@@ -25,9 +29,16 @@ const props = withDefaults(
     color: string
     /** upper bound of the axis; defaults to data max (or 1 for percent) */
     max?: number
+    /** rows become tap targets; each tap emits `select` with its item */
+    selectable?: boolean
+    /** dashed reference marker (campaign average) across the rows */
+    refValue?: number
+    refLabel?: string
   }>(),
-  { percent: false },
+  { percent: false, selectable: false, refLabel: 'avg' },
 )
+
+const emit = defineEmits<{ (e: 'select', item: BarItem): void }>()
 
 const { el, width } = useChartWidth()
 const ROW_H = 30
@@ -36,14 +47,15 @@ const LABEL_W = 130
 const VALUE_W = 52
 
 const axisMax = computed(() => {
-  if (props.max != null) return props.max
+  // the reference marker must stay on-axis even when every bar sits below it
+  if (props.max != null) return Math.max(props.max, props.refValue ?? 0) || 1
   let m = 0
   for (const it of props.items) m = Math.max(m, it.hi ?? it.value)
-  return m || 1
+  return Math.max(m, props.refValue ?? 0) || 1
 })
 const plotW = computed(() => Math.max(40, width.value - LABEL_W - VALUE_W - 8))
 const w = (v: number) => (Math.min(v, axisMax.value) / axisMax.value) * plotW.value
-const height = computed(() => props.items.length * ROW_H + 4)
+const height = computed(() => props.items.length * ROW_H + 4 + (props.refValue != null ? 14 : 0))
 
 const hover = ref<number | null>(null)
 const fmt = (v: number) => (props.percent ? fmtPct(v, 1) : fmtCount(v))
@@ -52,13 +64,27 @@ const fmt = (v: number) => (props.percent ? fmtPct(v, 1) : fmtCount(v))
 <template>
   <div ref="el" class="bars">
     <svg :width="width" :height="height" role="img">
+      <!-- reference marker sits under the rows so it never steals their taps -->
+      <g v-if="refValue != null" class="ref">
+        <line
+          :x1="LABEL_W + w(refValue)"
+          :x2="LABEL_W + w(refValue)"
+          :y1="0"
+          :y2="items.length * ROW_H"
+        />
+        <text class="ref-label" :x="LABEL_W + w(refValue)" :y="items.length * ROW_H + 11" text-anchor="middle">
+          {{ refLabel }}
+        </text>
+      </g>
       <g
         v-for="(it, i) in items"
         :key="it.label"
         class="row"
+        :class="{ sel: selectable }"
         :opacity="hover === null || hover === i ? 1 : 0.55"
         @pointerenter="hover = i"
         @pointerleave="hover = null"
+        @click="selectable && emit('select', it)"
       >
         <!-- full-row hit target -->
         <rect :x="0" :y="i * ROW_H" :width="width" :height="ROW_H" fill="transparent" />
@@ -131,5 +157,18 @@ svg {
 }
 .row {
   transition: opacity 0.1s ease;
+}
+.row.sel {
+  cursor: pointer;
+}
+.ref line {
+  stroke: var(--text-muted);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 4;
+  opacity: 0.8;
+}
+.ref-label {
+  fill: var(--text-muted);
+  font-size: 10px;
 }
 </style>

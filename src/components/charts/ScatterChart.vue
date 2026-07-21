@@ -13,6 +13,8 @@ export interface ScatterPoint {
   y: number
   label: string
   color?: string
+  /** opaque handle for select handlers (e.g. a profile id behind a name) */
+  id?: string
 }
 
 const props = withDefaults(
@@ -24,9 +26,13 @@ const props = withDefaults(
     xLabel: string
     yLabel: string
     yPercent?: boolean
+    /** tapping a dot emits `select` with its point */
+    selectable?: boolean
   }>(),
-  { height: 260, yPercent: false },
+  { height: 260, yPercent: false, selectable: false },
 )
+
+const emit = defineEmits<{ (e: 'select', point: ScatterPoint): void }>()
 
 const { el, width } = useChartWidth()
 const PAD = { top: 12, right: 14, bottom: 34, left: 48 }
@@ -52,7 +58,7 @@ const fitPath = computed(() => {
 })
 
 const hover = ref<number | null>(null)
-function onMove(ev: PointerEvent) {
+function nearestIdx(ev: { clientX: number; clientY: number; currentTarget: EventTarget | null }) {
   const rect = (ev.currentTarget as SVGElement).getBoundingClientRect()
   const mx = ev.clientX - rect.left
   const my = ev.clientY - rect.top
@@ -65,7 +71,15 @@ function onMove(ev: PointerEvent) {
       best = i
     }
   })
-  hover.value = best >= 0 && bestD < 48 ** 2 ? best : null
+  return best >= 0 && bestD < 48 ** 2 ? best : null
+}
+function onMove(ev: PointerEvent) {
+  hover.value = nearestIdx(ev)
+}
+function onClick(ev: MouseEvent) {
+  if (!props.selectable) return
+  const i = nearestIdx(ev)
+  if (i != null) emit('select', props.points[i])
 }
 const fmtY = (v: number) => (props.yPercent ? fmtPct(v, 1) : fmtCount(v))
 const tooltipLeft = computed(() => {
@@ -77,7 +91,15 @@ const tooltipLeft = computed(() => {
 
 <template>
   <div ref="el" class="sc-wrap">
-    <svg :width="width" :height="height" role="img" @pointermove="onMove" @pointerleave="hover = null">
+    <svg
+      :width="width"
+      :height="height"
+      role="img"
+      :class="{ sel: selectable && hover != null }"
+      @pointermove="onMove"
+      @pointerleave="hover = null"
+      @click="onClick"
+    >
       <g v-for="t in yTicks" :key="'y' + t">
         <line class="grid" :x1="PAD.left" :x2="width - PAD.right" :y1="py(t)" :y2="py(t)" />
         <text class="tick" :x="PAD.left - 6" :y="py(t) + 3" text-anchor="end">{{ fmtY(t) }}</text>
@@ -115,10 +137,6 @@ const tooltipLeft = computed(() => {
       <div><strong>{{ fmtCount(points[hover].x) }}</strong> <span class="muted">{{ xLabel }}</span></div>
       <div><strong>{{ fmtY(points[hover].y) }}</strong> <span class="muted">{{ yLabel }}</span></div>
     </div>
-    <p v-if="fit" class="fit-note muted">
-      Fit: {{ yLabel }} ≈ {{ fit.intercept.toFixed(3) }} + {{ fit.slope.toFixed(4) }} × {{ xLabel }} · R²
-      {{ fit.r2.toFixed(2) }} · n {{ fit.n }}
-    </p>
   </div>
 </template>
 
@@ -131,6 +149,9 @@ svg {
   display: block;
   max-width: 100%;
   touch-action: none;
+}
+svg.sel {
+  cursor: pointer;
 }
 .grid {
   stroke: var(--border);
@@ -172,9 +193,5 @@ svg {
 .tt-label {
   color: var(--text-muted);
   margin-bottom: 0.15rem;
-}
-.fit-note {
-  font-size: 0.75rem;
-  margin: 0.3rem 0 0;
 }
 </style>

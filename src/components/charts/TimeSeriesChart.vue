@@ -2,7 +2,9 @@
 // Multi-series line chart with a crosshair tooltip: the hairline snaps to the
 // nearest x position and the tooltip lists EVERY series at that x, so the
 // pointer aims at a date, never at a 2px line. Null values break the line
-// (used by rolling averages that don't exist for the first days).
+// (used by rolling averages that don't exist for the first days). The legend
+// is interactive — tapping a name hides that series and the chart re-scales
+// to what's left, which is how a small series gets a close look.
 import { computed, ref } from 'vue'
 import { niceTicks, fmtCount, fmtPct } from '@/lib/chartTheme'
 import { useChartWidth } from './useChartWidth'
@@ -13,6 +15,10 @@ export interface TimeSeries {
   values: (number | null)[]
   /** draw a ~10% opacity area wash under the line */
   area?: boolean
+  /** stroke width (default 2) — rolling averages run thicker */
+  width?: number
+  /** dashed stroke — the "this is derived, not raw" signal */
+  dash?: boolean
 }
 
 const props = withDefaults(
@@ -31,9 +37,18 @@ const PAD = { top: 12, right: 14, bottom: 26, left: 44 }
 const plotW = computed(() => Math.max(40, width.value - PAD.left - PAD.right))
 const plotH = computed(() => props.height - PAD.top - PAD.bottom)
 
+// Legend-toggled series. Hiding one re-scales the axis to the rest.
+const hidden = ref<Set<string>>(new Set())
+const shown = computed(() => props.series.filter((s) => !hidden.value.has(s.name)))
+function toggle(name: string) {
+  const next = new Set(hidden.value)
+  if (!next.delete(name)) next.add(name)
+  hidden.value = next
+}
+
 const maxVal = computed(() => {
   let m = 0
-  for (const s of props.series) for (const v of s.values) if (v != null && v > m) m = v
+  for (const s of shown.value) for (const v of s.values) if (v != null && v > m) m = v
   return m || 1
 })
 const ticks = computed(() => niceTicks(0, maxVal.value))
@@ -127,7 +142,7 @@ const tooltipLeft = computed(() => {
 
       <!-- area washes under lines -->
       <path
-        v-for="s in series.filter((s) => s.area)"
+        v-for="s in shown.filter((s) => s.area)"
         :key="'a' + s.name"
         :d="areaFor(s.values)"
         :fill="s.color"
@@ -135,18 +150,20 @@ const tooltipLeft = computed(() => {
       />
       <!-- lines -->
       <path
-        v-for="s in series"
+        v-for="s in shown"
         :key="s.name"
         class="line"
         :d="pathFor(s.values)"
         :stroke="s.color"
+        :stroke-width="s.width ?? 2"
+        :stroke-dasharray="s.dash ? '7 5' : undefined"
         fill="none"
       />
 
       <!-- crosshair + markers -->
       <g v-if="hoverIdx != null">
         <line class="crosshair" :x1="x(hoverIdx)" :x2="x(hoverIdx)" :y1="PAD.top" :y2="PAD.top + plotH" />
-        <template v-for="s in series" :key="'m' + s.name">
+        <template v-for="s in shown" :key="'m' + s.name">
           <circle
             v-if="s.values[hoverIdx] != null"
             :cx="x(hoverIdx)"
@@ -161,7 +178,7 @@ const tooltipLeft = computed(() => {
 
     <div v-if="hoverIdx != null" class="tooltip" :style="{ left: tooltipLeft + 'px' }">
       <div class="tt-label">{{ labels[hoverIdx] }}</div>
-      <div v-for="s in series" :key="s.name" class="tt-row">
+      <div v-for="s in shown" :key="s.name" class="tt-row">
         <span class="key" :style="{ background: s.color }" />
         <strong>{{ s.values[hoverIdx] != null ? fmt(s.values[hoverIdx]!) : '—' }}</strong>
         <span class="muted">{{ s.name }}</span>
@@ -169,9 +186,17 @@ const tooltipLeft = computed(() => {
     </div>
 
     <div v-if="series.length > 1" class="legend">
-      <span v-for="s in series" :key="s.name" class="legend-item">
+      <button
+        v-for="s in series"
+        :key="s.name"
+        type="button"
+        class="legend-item"
+        :class="{ off: hidden.has(s.name) }"
+        :aria-pressed="!hidden.has(s.name)"
+        @click="toggle(s.name)"
+      >
         <span class="key" :style="{ background: s.color }" />{{ s.name }}
-      </span>
+      </button>
     </div>
   </div>
 </template>
@@ -196,7 +221,8 @@ svg {
   font-variant-numeric: tabular-nums;
 }
 .line {
-  stroke-width: 2;
+  /* stroke-width comes from the per-series attribute — no class default,
+   * or the CSS would override the thicker rolling-average strokes */
   stroke-linejoin: round;
   stroke-linecap: round;
 }
@@ -250,5 +276,18 @@ svg {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.legend-item.off {
+  opacity: 0.45;
+  text-decoration: line-through;
 }
 </style>

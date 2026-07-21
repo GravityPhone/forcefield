@@ -77,7 +77,7 @@ const legendStops = Array.from({ length: 9 }, (_, i) => i / 8)
         {{ rowLabels[hover.r] }} {{ colLabels[hover.c] }} · {{ counts[hover.r][hover.c] }} knocks</span
       >
     </div>
-    <div v-else class="detail muted">Hover a cell for rate and sample size.</div>
+    <div v-else class="detail muted">Tap any cell</div>
 
     <div class="scale">
       <span class="muted">0%</span>

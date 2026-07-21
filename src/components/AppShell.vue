@@ -9,13 +9,18 @@ import BottomSheet from '@/components/ui/BottomSheet.vue'
 import ChatDrawer from '@/components/chat/ChatDrawer.vue'
 import { hapticTap } from '@/lib/native'
 import { canvassGameOpen } from '@/lib/easterEgg'
-import { helpFor } from '@/lib/helpContent'
+import { helpFor, type HelpTopic } from '@/lib/helpContent'
 
 // Easter-egg mini game (25 rapid taps on the chat handle) — async so the
 // canvas code never ships to anyone who hasn't found it.
 const CanvassGame = defineAsyncComponent(() => import('@/components/game/CanvassGame.vue'))
 
-defineProps<{ title?: string }>()
+const props = defineProps<{
+  title?: string
+  /** Override the route-keyed help topic — screens with internal tabs
+   * (Analytics) pass the active tab's topic so "?" always matches the view. */
+  helpTopic?: HelpTopic | null
+}>()
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -155,7 +160,7 @@ async function demoSwitchRole(role: AppRole) {
 
 // --- Per-screen help: explanatory copy lives in helpContent.ts, one tap
 // away behind the header's "?" — not in paragraphs crowding the pages. ---
-const helpTopic = computed(() => helpFor(route.path))
+const activeHelp = computed(() => props.helpTopic ?? helpFor(route.path))
 const helpOpen = ref(false)
 
 function goFromSheet(to: string) {
@@ -229,9 +234,9 @@ onUnmounted(() => {
         </div>
         <div class="user-area" v-if="auth.profile">
           <button
-            v-if="helpTopic"
+            v-if="activeHelp"
             class="help-btn"
-            :aria-label="`About this screen: ${helpTopic.title}`"
+            :aria-label="`About this screen: ${activeHelp.title}`"
             @click="helpOpen = true"
           >
             ?
@@ -388,13 +393,13 @@ onUnmounted(() => {
 
     <!-- Per-screen help sheet ("?" in the header) -->
     <BottomSheet
-      v-if="helpTopic"
+      v-if="activeHelp"
       v-model:open="helpOpen"
-      :title="helpTopic.title"
+      :title="activeHelp.title"
       aria-label="Screen help"
     >
       <div class="help-body">
-        <template v-for="(s, i) in helpTopic.sections" :key="i">
+        <template v-for="(s, i) in activeHelp.sections" :key="i">
           <h3 v-if="s.heading" class="help-heading">{{ s.heading }}</h3>
           <p class="help-text">{{ s.body }}</p>
         </template>
