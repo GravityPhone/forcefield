@@ -16,6 +16,7 @@ interface CampaignStats {
   doors_7d: number
   signatures_7d: number
   canvassers: number
+  signature_goal: number | null
 }
 
 const stats = ref<CampaignStats | null>(null)
@@ -26,6 +27,13 @@ const loading = ref(true)
 const signRate = computed(() => {
   if (!stats.value || !stats.value.doors) return null
   return Math.round((stats.value.signatures / stats.value.doors) * 100)
+})
+
+/** Progress toward the campaign's signature goal, when one is set. */
+const goalPct = computed(() => {
+  const s = stats.value
+  if (!s?.signature_goal) return null
+  return Math.min(100, (s.signatures / s.signature_goal) * 100)
 })
 
 const campaignOptions = computed(() =>
@@ -45,6 +53,7 @@ async function loadStats(cid: string | null) {
         doors_7d: Number(row.doors_7d),
         signatures_7d: Number(row.signatures_7d),
         canvassers: Number(row.canvassers),
+        signature_goal: row.signature_goal == null ? null : Number(row.signature_goal),
       }
     : null
 }
@@ -90,6 +99,25 @@ onMounted(async () => {
     </p>
     <template v-else>
       <p class="campaign-name">{{ stats.campaign_name }}</p>
+      <div v-if="goalPct !== null && stats.signature_goal" class="goal">
+        <div class="goal-labels">
+          <span class="goal-line">
+            <strong>{{ stats.signatures.toLocaleString() }}</strong>
+            of {{ stats.signature_goal.toLocaleString() }} signatures
+          </span>
+          <span class="goal-pct">{{ Math.floor(goalPct) }}%</span>
+        </div>
+        <div
+          class="goal-track"
+          role="progressbar"
+          :aria-valuenow="stats.signatures"
+          :aria-valuemin="0"
+          :aria-valuemax="stats.signature_goal"
+          aria-label="Signature goal progress"
+        >
+          <div class="goal-fill" :style="{ width: `${goalPct}%` }" />
+        </div>
+      </div>
       <div class="tiles">
         <div class="tile">
           <span class="num">{{ stats.signatures.toLocaleString() }}</span>
@@ -137,6 +165,40 @@ onMounted(async () => {
   margin: 0 0 0.6rem;
   font-weight: 700;
   color: var(--accent);
+}
+
+/* Goal progress bar — only renders when the campaign has a target set. */
+.goal {
+  margin: 0 0 0.8rem;
+}
+
+.goal-labels {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.3rem;
+  font-size: 0.9rem;
+}
+
+.goal-pct {
+  font-weight: 800;
+  color: var(--accent);
+}
+
+.goal-track {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.goal-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.4s ease;
 }
 
 .tiles {

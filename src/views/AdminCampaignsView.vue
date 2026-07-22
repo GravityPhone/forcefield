@@ -99,6 +99,37 @@ async function assignTeam(team: Team, campaignId: string) {
   team.campaign_id = campaignId || null
 }
 
+// Signature-goal editor state, keyed by campaign id (string so the input
+// can be emptied to clear the goal).
+const goalDrafts = ref<Record<string, string>>({})
+const goalSaving = ref<string | null>(null)
+
+function goalDraftFor(c: Campaign): string {
+  return goalDrafts.value[c.id] ?? (c.signature_goal == null ? '' : String(c.signature_goal))
+}
+
+async function saveGoal(c: Campaign) {
+  const raw = goalDraftFor(c).trim()
+  const goal = raw === '' ? null : Math.floor(Number(raw))
+  if (goal !== null && (!Number.isFinite(goal) || goal <= 0)) {
+    error.value = 'Signature goal must be a positive number (or blank for no goal).'
+    return
+  }
+  goalSaving.value = c.id
+  error.value = ''
+  const { error: err } = await supabase
+    .from('campaigns')
+    .update({ signature_goal: goal })
+    .eq('id', c.id)
+  goalSaving.value = null
+  if (err) {
+    error.value = 'Could not save the goal — try again.'
+    return
+  }
+  c.signature_goal = goal
+  delete goalDrafts.value[c.id]
+}
+
 function campaignName(id: string | null): string {
   return campaigns.value.find((c) => c.id === id)?.name ?? '(no campaign)'
 }
@@ -155,6 +186,26 @@ const campaignOptions = computed(() => [
                   ? `Teams: ${teamsIn(c.id).map((t) => t.name).join(', ')}`
                   : 'No teams assigned yet.' }}
               </p>
+              <div class="goal-row">
+                <label :for="`goal-${c.id}`" class="goal-label">Signature goal</label>
+                <input
+                  :id="`goal-${c.id}`"
+                  class="goal-input"
+                  type="number"
+                  min="1"
+                  step="100"
+                  placeholder="none"
+                  :value="goalDraftFor(c)"
+                  @input="goalDrafts[c.id] = ($event.target as HTMLInputElement).value"
+                />
+                <button
+                  class="btn btn-sm"
+                  :disabled="goalSaving === c.id || goalDraftFor(c).trim() === (c.signature_goal == null ? '' : String(c.signature_goal))"
+                  @click="saveGoal(c)"
+                >
+                  {{ goalSaving === c.id ? 'Saving…' : 'Save' }}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -249,6 +300,28 @@ const campaignOptions = computed(() => [
 
 .campaign-row:last-child {
   border-bottom: none;
+}
+
+.goal-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+
+.goal-label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.goal-input {
+  width: 7rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: 0.9rem;
 }
 
 .error {

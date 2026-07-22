@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
 import InfographicCard from '@/components/chat/InfographicCard.vue'
+import { extractFollowups } from '@/lib/followups'
 import { splitSegments, type InfographicSpec } from '@/lib/infographic'
 import { renderMarkdownLite } from '@/lib/markdownLite'
 import { apiBase } from '@/lib/native'
@@ -15,6 +16,9 @@ interface ChatMessage {
   error?: boolean
   /** What tools the assistant used to build this answer (from the server). */
   activity?: string[]
+  /** Suggested next questions (parsed off the reply's ```followups trailer).
+   * Rendered as tappable buttons under the LATEST reply only. */
+  suggestions?: string[]
 }
 
 type RenderSegment = { kind: 'text'; html: string } | { kind: 'infographic'; spec: InfographicSpec }
@@ -43,12 +47,35 @@ const messages = ref<ChatMessage[]>([
     id: 0,
     role: 'assistant',
     text:
-      "Hi! I'm the Forcefield assistant. I can query your live canvassing data, use Google Maps, " +
-      'search the web, and draw quick charts. Try "how many doors signed today", "compare ' +
-      'outcomes this week as a chart", or "any rain expected in Marysville tomorrow?". ' +
-      'Tap ✎ on one of your messages to edit it and re-run from that point.',
+      "Hi! I'm the Forcefield assistant. I can query the live canvassing data, use Google Maps, " +
+      'search the web, and draw charts. Tap a question below to see what I can do — or ask ' +
+      'anything in your own words. (Tap ✎ on one of your messages to edit it and re-run.)',
   },
 ])
+
+/** Conversation openers, shown until the first question is sent. After that,
+ * the assistant supplies its own three follow-ups with every reply. */
+const STARTERS = [
+  'How are we doing against the signature goal?',
+  'Where should we send crews next?',
+  'Compare this week’s outcomes as a chart',
+  'Which areas are our strongest and weakest?',
+]
+
+/** Suggestion buttons live under the newest reply only — older ones are stale. */
+const activeSuggestions = computed<string[]>(() => {
+  if (loading.value) return []
+  const last = messages.value[messages.value.length - 1]
+  if (!last || last.role !== 'assistant' || last.error) return []
+  if (last.id === 0) return STARTERS
+  return last.suggestions ?? []
+})
+
+function sendSuggestion(q: string) {
+  if (loading.value) return
+  draft.value = q
+  void send()
+}
 
 const draft = ref('')
 const loading = ref(false)
@@ -171,11 +198,15 @@ async function send() {
         continue
       }
       const activity = Array.isArray(data.activity) ? (data.activity as string[]) : []
+      // The reply ends with a ```followups trailer (3 suggested next
+      // questions) — strip it from the shown/stored text, keep as buttons.
+      const { text: replyText, suggestions } = extractFollowups(String(data.text ?? ''))
       messages.value.push({
         id: nextId++,
         role: 'assistant',
-        text: data.text ?? '(empty response)',
+        text: replyText || '(empty response)',
         activity: activity.length ? activity : undefined,
+        suggestions: suggestions.length ? suggestions : undefined,
       })
       return
     }
@@ -234,6 +265,19 @@ async function send() {
             {{ liveStatus || 'Thinking'
             }}<span class="dots"><span>.</span><span>.</span><span>.</span></span>
           </div>
+        </div>
+        <!-- Tappable next questions: curated starters on a fresh chat, then
+             the assistant's own three follow-ups after every reply. -->
+        <div v-if="activeSuggestions.length" class="suggestions" aria-label="Suggested questions">
+          <button
+            v-for="(q, i) in activeSuggestions"
+            :key="`${q}-${i}`"
+            class="suggestion"
+            type="button"
+            @click="sendSuggestion(q)"
+          >
+            {{ q }}
+          </button>
         </div>
       </div>
       <form class="chat-input" @submit.prevent="send">
@@ -381,6 +425,33 @@ async function send() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Suggested-question buttons — pills under the newest reply. */
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding-left: 0.25rem;
+}
+
+.suggestion {
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.4rem 0.75rem;
+  border-radius: 999px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.suggestion:hover {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
 }
 
 .dots span {

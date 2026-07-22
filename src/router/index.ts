@@ -91,6 +91,10 @@ const router = createRouter({
     // splitting lives on the Squad page. Kept only for stale bookmarks.
     { path: '/team', redirect: '/canvass' },
 
+    // The click-through app tour (More → Tutorial) — one linear retro deck
+    // from canvasser basics to campaign-manager tools, open to every role.
+    { path: '/tutorial', name: 'tutorial', component: () => import('@/views/TutorialView.vue'), meta: { roles: [] } },
+
     // Turf cutting/assignment — a campaign-manager job. Squad leaders get
     // the same page as a scoped sub-cutter (sub-turfs inside turf assigned to
     // them). A plain canvasser can reach it too, but only cuts when their
