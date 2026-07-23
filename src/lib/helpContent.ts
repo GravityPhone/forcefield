@@ -313,11 +313,13 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body:
           'Tap two doors to take the whole walk between them — even around a corner. If both ' +
           'taps land on doors already in the draft, the stretch between them is erased instead. ' +
-          'Hold a pin to add or remove just that door; double-tap a street name to take or drop ' +
-          'the entire street. Undo steps back one gesture at a time.',
+          'Hold a door to add or remove just it; double-tap a street to take or drop the ' +
+          'entire street. The Lasso button freezes the map so you can drag a loop — every ' +
+          'door inside joins the draft at once. Undo steps back one gesture at a time. ' +
+          'Zoomed way out, a tap just zooms you in closer.',
       },
       {
-        heading: 'Reading the pins',
+        heading: 'Reading the dots',
         body:
           'The fill color is the door’s knock status (blue = never knocked); the ring ' +
           'around it shows which turf it belongs to. No ring means unclaimed.',

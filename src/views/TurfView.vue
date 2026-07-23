@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Turf cutter: the same Google map as Hunt, but pins are paint targets
+// Turf cutter: the same Google map as Hunt, but doors are paint targets
 // instead of knock targets. Cutting works like a highlighter — tap one door
 // to anchor a sweep, tap another door down the same street to close it, and
 // every door in that house-number range lights up under a colored stroke.
@@ -8,12 +8,21 @@
 // stamps addresses.turf_id server-side via the set_turf_segments RPC, which
 // is what Hunt reads to show "your turf".
 //
+// EVERYTHING before Save is client-side and synchronous (2026-07-23): the
+// full address table (~23k rows, ungeocoded included) loads once at init
+// into in-memory street indexes, doors render as dots on ONE canvas overlay
+// (src/lib/doorCanvas.ts — no DOM markers, no pin cap), and every gesture —
+// tap-sweep, lasso, street toggle, hold, undo — mutates the draft purely in
+// memory and repaints in a frame. The only network after init: Save (turf
+// insert + set_turf_segments RPC), geocoding drips, and the post-save
+// refetch.
+//
 // Roles: campaign managers (and admins) cut anywhere. Squad leaders only
 // cut SUB-turfs — cuts inside a turf assigned to them (directly or via
 // their squad) that carve doors out of the parent, for splitting the crew's
 // assignment. RLS + the RPC enforce this server-side; the scoping here just
 // keeps the UI honest.
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import AppShell from '@/components/AppShell.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import type { SelectOption } from '@/components/ui/AppSelect.vue'
@@ -22,14 +31,15 @@ import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
   CityLimitsLayer,
   TurfAreasLayer,
-  corridorFor,
-  densityDotElement,
   readMapPref,
   readTurfShadeMode,
+  turfAreaFor,
   writeMapPref,
   writeTurfShadeMode,
 } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
+import { DoorCanvasLayer } from '@/lib/doorCanvas'
+import type { DoorPaintState } from '@/lib/doorCanvas'
 import { walkRanges } from '@/lib/doorPath'
 import { geocodeAndCache, geocodeMissing } from '@/lib/geocode'
 import { localToday } from '@/lib/day'
@@ -76,7 +86,7 @@ interface AssignmentLog {
 }
 
 /** A sweep in the draft tray. memberIds/doorCount come from the full address
- * table (not just geocoded pins), so the door count is exact. */
+ * table (ungeocoded doors included), so the door count is exact. */
 interface DraftSegment {
   key: string
   street_name: string
@@ -110,7 +120,7 @@ const turfs = ref<TurfWithMeta[]>([])
 /** turf id -> its dispatch history, oldest first (trigger-written). */
 const historyByTurf = ref<Map<string, AssignmentLog[]>>(new Map())
 const people = ref<ChatProfile[]>([])
-/** Latest outcome per door — pins wear the same status colors as Hunt, so
+/** Latest outcome per door — dots wear the same status colors as Hunt, so
  * knocked/unknocked history reads the same while cutting. */
 const statusByAddress = ref<Map<string, KnockOutcome>>(new Map())
 
@@ -119,6 +129,12 @@ type PinMode = 'dots' | 'numbers'
 /** Below this zoom, numbers mode falls back to plain dots — house numbers
  * only mean something when you're close enough to be looking at one street. */
 const NUMBERS_MIN_ZOOM = 16
+/** Below this zoom doors draw as tiny density dots and a tap means "zoom me
+ * in", not "anchor a sweep". */
+const PINS_MIN_ZOOM = 15
+/** How close (screen px) a tap must land to a door to count as tapping it. */
+const TAP_RADIUS_PX = 22
+
 function readStoredPinMode(): PinMode {
   try {
     return localStorage.getItem('turf-pin-mode') === 'numbers' ? 'numbers' : 'dots'
@@ -127,9 +143,6 @@ function readStoredPinMode(): PinMode {
   }
 }
 const pinMode = ref<PinMode>(readStoredPinMode())
-/** Tracked so numbers mode can fall back to dots when zoomed out; only
- * threshold crossings trigger a restyle. */
-let mapZoom = 14
 
 function setPinMode(mode: PinMode) {
   pinMode.value = mode
@@ -138,7 +151,7 @@ function setPinMode(mode: PinMode) {
   } catch {
     /* private mode — the toggle still works this session */
   }
-  restyleAll()
+  doorLayer?.requestRepaint()
 }
 
 // --- Draft turf state ---
@@ -158,35 +171,67 @@ const editingTurfId = ref<string | null>(null)
 const draftParentId = ref<string | null>(null)
 // 'none' | 'squad:<id>' | 'user:<id>' — Reka's SelectItem forbids '' values.
 const assignChoice = ref('none')
-const sweepBusy = ref(false)
 
 let map: google.maps.Map | null = null
 let areasLayer: TurfAreasLayer | null = null
 let cityLayer: CityLimitsLayer | null = null
-/** Draft-sweep shading lives on its own Data layer so it can restyle and
- * clear independently of the saved-turf areas. */
+let doorLayer: DoorCanvasLayer | null = null
+/** Draft shading lives on its own Data layer so it can rebuild and clear
+ * independently of the saved-turf areas. */
 let draftData: google.maps.Data | null = null
-const draftFeaturesBySeg = new Map<string, google.maps.Data.Feature[]>()
 let initStarted = false
-const markersByAddress = new Map<string, google.maps.marker.AdvancedMarkerElement>()
+
+// --- In-memory address data: the whole county, indexed by street ---
 const addressById = new Map<string, AddressLite>()
-/** Below this zoom there are no individual pins at all — just density dots
- * (same virtualization as Scout: a DOM marker per county door made phones
- * crawl in the cutter too). */
-const PINS_MIN_ZOOM = 15
-/** Hard cap on live pin elements even inside the padded viewport. */
-const MAX_VISIBLE_PINS = 2000
-let densityMarkers: google.maps.marker.AdvancedMarkerElement[] = []
-let densityZoom = -1
+/** `NAME|CITY` -> rows (same objects as addressById). */
+const streetsByKey = new Map<string, AddressLite[]>()
+/** `NAME` -> rows across all cities, for city-less segment lookups. */
+const streetsByName = new Map<string, AddressLite[]>()
+/** Prebuilt search list: one row per street+city with count and span. */
+let streetSummaries: { street_name: string; city: string; count: number; lo: number; hi: number }[] = []
+
 const segPolylines = new Map<string, google.maps.Polyline>()
-/** Street rows already pulled for a sweep, so range tweaks don't re-query. */
-const streetCache = new Map<string, AddressLite[]>()
 let segKeyCounter = 0
-/** Set on teardown so a background geocode sweep stops dropping pins onto a
+/** Set on teardown so a background geocode sweep stops writing to a
  * disposed map. */
 let unmounted = false
 
 const turfColorById = computed(() => new Map(turfs.value.map((t) => [t.id, t.color])))
+
+function indexAddresses(rows: AddressLite[]) {
+  addressById.clear()
+  streetsByKey.clear()
+  streetsByName.clear()
+  const summaries = new Map<string, { street_name: string; city: string; count: number; lo: number; hi: number }>()
+  for (const a of rows) {
+    addressById.set(a.id, a)
+    const name = streetNameOf(a.street)
+    if (!name) continue
+    const key = `${name}|${a.city.toUpperCase()}`
+    const byKey = streetsByKey.get(key)
+    if (byKey) byKey.push(a)
+    else streetsByKey.set(key, [a])
+    const byName = streetsByName.get(name)
+    if (byName) byName.push(a)
+    else streetsByName.set(name, [a])
+    const n = houseNumber(a.street)
+    const sum = summaries.get(key)
+    if (!sum) summaries.set(key, { street_name: name, city: a.city, count: 1, lo: n, hi: n })
+    else {
+      sum.count++
+      if (n < sum.lo) sum.lo = n
+      if (n > sum.hi) sum.hi = n
+    }
+  }
+  streetSummaries = [...summaries.values()]
+}
+
+/** Every row on a street — from memory, never the network. City given =
+ * that city only; null = any city (segments store null when unknown). */
+function streetRows(streetName: string, city: string | null): AddressLite[] {
+  if (city) return streetsByKey.get(`${streetName}|${city.toUpperCase()}`) ?? []
+  return streetsByName.get(streetName) ?? []
+}
 
 // --- Role scoping ---
 // Managers (and admins) get the full cutter; squad leaders — and, when their
@@ -360,8 +405,10 @@ function flash(msg: string) {
 }
 
 const hint = computed(() => {
-  if (sweepBusy.value) return 'Sweeping…'
   if (flashMsg.value) return flashMsg.value
+  if (lassoActive.value) {
+    return 'Lasso armed — drag a loop around doors to sweep them all in at once. Tap Lasso again to go back to panning.'
+  }
   if (anchor.value) {
     const a = anchor.value
     return anchorInTurf.value
@@ -369,7 +416,7 @@ const hint = computed(() => {
       : `Anchor down at ${a.street} — tap another door to sweep the walk between them, even onto another street (tap the anchor again to cancel).`
   }
   const base =
-    'Tap two doors to sweep the walk between them — an existing pin plus a new one extends the turf; two existing pins erase the stretch between. Hold a door to take just it (connects to the rest of the turf); double-tap a street to add or remove it whole.'
+    'Tap two doors to sweep the walk between them — an existing dot plus a new one extends the turf; two existing dots erase the stretch between. Hold a door to take just it; double-tap a street to add or remove it whole; or use Lasso to circle a whole patch.'
   return isSubcutter.value
     ? `${base} Only doors inside your assigned turf count toward a sub-turf.`
     : base
@@ -470,234 +517,54 @@ function segmentLabel(s: { street_name: string; range_start: number; range_end: 
   return `${s.street_name} ${s.range_start}–${s.range_end}${side}`
 }
 
-// --- Map + pins ---
+// --- Door canvas paint state ---
 
-function styleMarker(marker: google.maps.marker.AdvancedMarkerElement, a: AddressLite) {
-  const el = marker.content as HTMLElement
-  const s = el.style
-  const isAnchor = anchor.value?.id === a.id
-  const inDraft = draftMemberIds.value.has(a.id)
+function paintForDoor(id: string): DoorPaintState {
+  const a = addressById.get(id)
+  const inDraft = draftMemberIds.value.has(id)
   // While editing, doors still stamped to the turf but swept OUT of the
-  // draft show as ringless — the map previews the save.
-  const stampedColor =
-    a.turf_id && !(editingTurfId.value && a.turf_id === editingTurfId.value)
+  // draft show ringless — the map previews the save.
+  const stamped =
+    a?.turf_id && !(editingTurfId.value && a.turf_id === editingTurfId.value)
       ? turfColorById.value.get(a.turf_id)
       : undefined
-
-  // Fill = knock status, same colors as Hunt (blue = never knocked), so the
-  // door's history reads identically while cutting. Ring = turf membership:
-  // the draft's color while swept into the cut being drawn, otherwise the
-  // saved turf's color, no ring for unclaimed doors.
-  const outcome = statusByAddress.value.get(a.id)
-  const ring = inDraft ? draftColor.value : stampedColor
-  const showNumber = pinMode.value === 'numbers' && mapZoom >= NUMBERS_MIN_ZOOM && !!el.dataset.house
-  el.textContent = showNumber ? el.dataset.house! : ''
-  s.boxSizing = 'border-box'
-  s.cursor = 'pointer'
-  s.display = 'flex'
-  s.alignItems = 'center'
-  s.justifyContent = 'center'
-  s.color = '#fff'
-  s.fontWeight = '700'
-  s.lineHeight = '1'
-  if (showNumber) {
-    const h = isAnchor ? 24 : inDraft ? 20 : 19
-    s.width = 'auto'
-    s.height = `${h}px`
-    s.minWidth = `${h}px`
-    s.padding = '0 5px'
-    s.borderRadius = '7px'
-    s.fontSize = isAnchor ? '13px' : '11px'
-  } else {
-    const size = isAnchor ? 24 : inDraft ? 17 : 13
-    s.width = `${size}px`
-    s.height = `${size}px`
-    s.minWidth = ''
-    s.padding = ''
-    s.borderRadius = '50%'
-    s.fontSize = ''
-  }
-  s.background = outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
-  s.border = isAnchor ? '3px solid #111' : '1.5px solid #ffffff'
-  s.boxShadow = ring
-    ? `0 0 0 2.5px ${ring}, 0 0 3px rgba(0, 0, 0, 0.45)`
-    : '0 0 3px rgba(0, 0, 0, 0.45)'
-  s.animation = isAnchor ? 'turf-anchor-pulse 1.1s ease-in-out infinite' : ''
-  marker.zIndex = isAnchor ? 1000 : inDraft ? 500 : 1
-}
-
-function restyleAll() {
-  for (const [id, marker] of markersByAddress) {
-    const a = addressById.get(id)
-    if (a) styleMarker(marker, a)
+  const outcome = statusByAddress.value.get(id)
+  return {
+    fill: outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX,
+    ring: inDraft ? draftColor.value : (stamped ?? null),
+    inDraft,
+    anchor: anchor.value?.id === id,
   }
 }
 
-function createMarker(a: AddressLite): google.maps.marker.AdvancedMarkerElement {
-  const content = document.createElement('div')
-  const num = houseNumber(a.street)
-  if (num > 0) content.dataset.house = String(num)
-  attachHoldGesture(content, a.id)
-  const marker = new google.maps.marker.AdvancedMarkerElement({
-    position: { lat: a.lat!, lng: a.lng! },
-    title: `${a.street}${a.unit ? ' ' + a.unit : ''}`,
-    content,
-    gmpClickable: true,
-    map,
-  })
-  marker.addListener('gmp-click', () => void onPinTap(a.id))
-  markersByAddress.set(a.id, marker)
-  return marker
+// Any paint-relevant state change repaints the one canvas (rAF-coalesced in
+// the layer). This replaces the old restyle-every-marker pass entirely.
+watch(
+  [draftMemberIds, anchor, statusByAddress, turfs, editingTurfId, pinMode],
+  () => doorLayer?.requestRepaint(),
+)
+
+function canvasDoorOf(a: AddressLite) {
+  const n = houseNumber(a.street)
+  return { id: a.id, lat: a.lat!, lng: a.lng!, house: n > 0 ? String(n) : '' }
 }
 
-/** Whether a door deserves a live pin element right now: zoomed in enough
- * for pins at all, inside the padded (±half-view) viewport, and under the
- * pin cap. renderVisibleDoors builds/culls the rest on every settled
- * pan/zoom — this gate just keeps ad-hoc upserts (geocode drips, street
- * sweeps) from creating off-screen markers in between. */
-function pinShouldShow(a: AddressLite): boolean {
-  if (!map || (map.getZoom() ?? mapZoom) < PINS_MIN_ZOOM) return false
-  if (markersByAddress.size >= MAX_VISIBLE_PINS) return false
-  const b = map.getBounds()
-  if (!b) return false
-  const ne = b.getNorthEast()
-  const sw = b.getSouthWest()
-  const padLat = (ne.lat() - sw.lat()) / 2
-  const padLng = (ne.lng() - sw.lng()) / 2
-  return (
-    a.lat! >= sw.lat() - padLat &&
-    a.lat! <= ne.lat() + padLat &&
-    a.lng! >= sw.lng() - padLng &&
-    a.lng! <= ne.lng() + padLng
-  )
-}
-
-function upsertMarker(a: AddressLite) {
-  addressById.set(a.id, a)
-  if (a.lat == null || a.lng == null || !map) return
-  let marker = markersByAddress.get(a.id)
-  if (!marker) {
-    if (!pinShouldShow(a)) return
-    marker = createMarker(a)
-  } else {
-    marker.position = { lat: a.lat, lng: a.lng }
-  }
-  styleMarker(marker, a)
-}
-
-// --- Viewport-scoped pins ---
-// Ported from Scout (2026-07-14): runs on every map 'idle' (settled
-// pan/zoom, never per zoom tick). Zoomed out: individual pins are torn down
-// and replaced by clickable density dots — tap one to zoom into that patch.
-// Zoomed in: real pins, but only for doors inside the padded viewport;
-// everything that left the view is destroyed. A sweep anchor's pin always
-// survives, so a two-tap sweep can pan/zoom between its taps.
-
-function renderVisibleDoors() {
-  if (!map) return
-  const zoom = map.getZoom() ?? mapZoom
-  if (zoom < PINS_MIN_ZOOM) {
-    for (const [id, marker] of markersByAddress) {
-      if (id === anchor.value?.id) continue
-      marker.map = null
-      markersByAddress.delete(id)
-    }
-    renderDensityDots(zoom)
-    return
-  }
-  clearDensityDots()
-  const b = map.getBounds()
-  if (!b) return
-  const ne = b.getNorthEast()
-  const sw = b.getSouthWest()
-  const padLat = (ne.lat() - sw.lat()) / 2
-  const padLng = (ne.lng() - sw.lng()) / 2
-  const minLat = sw.lat() - padLat
-  const maxLat = ne.lat() + padLat
-  const minLng = sw.lng() - padLng
-  const maxLng = ne.lng() + padLng
-  let inView: AddressLite[] = []
+function* locatedCanvasDoors() {
   for (const a of addressById.values()) {
-    if (a.lat == null || a.lng == null) continue
-    if (a.lat >= minLat && a.lat <= maxLat && a.lng >= minLng && a.lng <= maxLng) inView.push(a)
-  }
-  if (inView.length > MAX_VISIBLE_PINS) {
-    const c = map.getCenter()
-    const oLat = c?.lat() ?? FALLBACK_CENTER.lat
-    const oLng = c?.lng() ?? FALLBACK_CENTER.lng
-    const latScale = Math.cos((oLat * Math.PI) / 180)
-    const d2 = (a: AddressLite) => {
-      const dLat = a.lat! - oLat
-      const dLng = (a.lng! - oLng) * latScale
-      return dLat * dLat + dLng * dLng
-    }
-    inView = inView
-      .map((a) => [d2(a), a] as const)
-      .sort((x, y) => x[0] - y[0])
-      .slice(0, MAX_VISIBLE_PINS)
-      .map((x) => x[1])
-  }
-  const keepIds = new Set(inView.map((a) => a.id))
-  for (const [id, marker] of markersByAddress) {
-    if (!keepIds.has(id) && id !== anchor.value?.id) {
-      marker.map = null
-      markersByAddress.delete(id)
-    }
-  }
-  for (const a of inView) {
-    if (!markersByAddress.has(a.id)) styleMarker(createMarker(a), a)
+    if (a.lat != null && a.lng != null) yield canvasDoorOf(a)
   }
 }
 
-/** Grid-bucket every known door into ~72px cells and draw one clickable
- * density dot per cell (same look as the old cluster bubbles). Buckets are
- * global, not viewport-dependent — panning at the same zoom reuses the
- * existing dots; only a zoom change re-bins. */
-function renderDensityDots(zoom: number) {
-  if (zoom === densityZoom && densityMarkers.length) return
-  clearDensityDots()
-  if (!map) return
-  densityZoom = zoom
-  const worldPx = 256 * 2 ** zoom
-  const cellLng = (360 * 72) / worldPx
-  const cellLat = cellLng * 0.77 // ≈cos(40°N): keeps cells visually squarish here
-  type Bucket = { n: number; sumLat: number; sumLng: number; b: google.maps.LatLngBounds }
-  const buckets = new Map<string, Bucket>()
-  for (const a of addressById.values()) {
-    if (a.lat == null || a.lng == null) continue
-    const key = `${Math.floor(a.lat / cellLat)}:${Math.floor(a.lng / cellLng)}`
-    let bkt = buckets.get(key)
-    if (!bkt) buckets.set(key, (bkt = { n: 0, sumLat: 0, sumLng: 0, b: new google.maps.LatLngBounds() }))
-    bkt.n++
-    bkt.sumLat += a.lat
-    bkt.sumLng += a.lng
-    bkt.b.extend({ lat: a.lat, lng: a.lng })
-  }
-  for (const bkt of buckets.values()) {
-    const marker = new google.maps.marker.AdvancedMarkerElement({
-      position: { lat: bkt.sumLat / bkt.n, lng: bkt.sumLng / bkt.n },
-      content: densityDotElement(bkt.n),
-      zIndex: 300,
-      gmpClickable: true,
-      map,
-    })
-    marker.addListener('gmp-click', () => map?.fitBounds(bkt.b, 48))
-    densityMarkers.push(marker)
-  }
-}
+// --- Data fetches ---
 
-function clearDensityDots() {
-  for (const marker of densityMarkers) marker.map = null
-  densityMarkers = []
-  densityZoom = -1
-}
-
+/** The WHOLE address table, ungeocoded rows included — street sweeps, door
+ * counts, and search all run from memory so no gesture ever waits on the
+ * network. ~23k slim rows ≈ a small map tile's worth of JSON. */
 async function fetchAddresses(): Promise<AddressLite[]> {
   return fetchAllRows<AddressLite>((from, to) =>
     supabase
       .from('addresses')
       .select('id, street, unit, city, zip, lat, lng, turf_id')
-      .not('lat', 'is', null)
       .order('id')
       .range(from, to),
   )
@@ -728,7 +595,7 @@ async function fetchTurfs() {
   historyByTurf.value = hist
 }
 
-/** Latest outcome per door, for the status-colored pin fills. Best-effort:
+/** Latest outcome per door, for the status-colored dot fills. Best-effort:
  * a failed fetch keeps whatever colors we already had. */
 async function fetchKnockStatuses() {
   try {
@@ -824,17 +691,22 @@ async function initialize() {
     disableDoubleClickZoom: true,
   })
   map.addListener('dblclick', (e: google.maps.MapMouseEvent) => {
-    if (e.latLng) void onMapDoubleClick(e.latLng)
+    if (e.latLng) onMapDoubleClick(e.latLng)
   })
-  mapZoom = map.getZoom() ?? mapZoom
-  map.addListener('zoom_changed', () => {
-    const wasClose = mapZoom >= NUMBERS_MIN_ZOOM
-    mapZoom = map?.getZoom() ?? mapZoom
-    if (pinMode.value === 'numbers' && wasClose !== mapZoom >= NUMBERS_MIN_ZOOM) restyleAll()
+  map.addListener('click', (e: google.maps.MapMouseEvent) => onMapClick(e))
+  attachHoldGesture(mapEl.value)
+
+  indexAddresses(rows)
+
+  doorLayer = new DoorCanvasLayer(map, {
+    minPinZoom: PINS_MIN_ZOOM,
+    numbersMinZoom: NUMBERS_MIN_ZOOM,
+    paintFor: paintForDoor,
+    showNumbers: () => pinMode.value === 'numbers',
   })
-  // Pins and density dots are (re)built on every settled pan/zoom — never
-  // per zoom tick, and never for doors outside the padded viewport.
-  map.addListener('idle', renderVisibleDoors)
+  doorLayer.setDoors(locatedCanvasDoors())
+  // Settled pan/zoom: repaint only if the view outgrew the painted canvas.
+  map.addListener('idle', () => doorLayer?.checkView())
 
   areasLayer = new TurfAreasLayer(map)
   areasLayer.setVisible(showAreas.value)
@@ -849,13 +721,8 @@ async function initialize() {
     zIndex: 0,
   }))
 
-  // Register every door's DATA (sweeps, snapping, shading, and search need
-  // the full set) but build zero markers here — the first 'idle' after
-  // fitBounds draws whatever the opening view calls for (county-wide, that's
-  // density dots, not 10k pin elements).
   const bounds = new google.maps.LatLngBounds()
-  for (const a of rows) {
-    addressById.set(a.id, a)
+  for (const a of addressById.values()) {
     if (a.lat != null && a.lng != null) bounds.extend({ lat: a.lat, lng: a.lng })
   }
   if (!bounds.isEmpty()) map.fitBounds(bounds, 48)
@@ -876,7 +743,7 @@ function buildSavedAreas() {
     if (list) list.push(door)
     else doorsByTurf.set(a.turf_id, [door])
   }
-  void areasLayer.setTurfs(
+  areasLayer.setTurfs(
     turfs.value
       .filter((t) => doorsByTurf.has(t.id))
       .map((t) => ({ id: t.id, color: t.color, doors: doorsByTurf.get(t.id)! })),
@@ -887,19 +754,18 @@ function buildSavedAreas() {
  * server-side) and repaint. */
 async function reloadAll() {
   const [rows] = await Promise.all([fetchAddresses(), fetchTurfs(), fetchKnockStatuses()])
-  for (const a of rows) upsertMarker(a)
-  streetCache.clear()
+  indexAddresses(rows)
+  doorLayer?.setDoors(locatedCanvasDoors())
   defaultDraftParent()
-  restyleAll()
   buildSavedAreas()
 }
 
 /** After a turf is cut, geocode every door in it that has no coordinates yet
- * (fetchAddresses only pulls already-located rows, so these never showed a
- * pin). Runs in the background one door at a time — the Geocoder rate-limits
- * on bursts — dropping each pin as it resolves and refining the shaded area
- * at the end. Every result caches to the DB, so this is a one-time cost per
- * door: the whole turf ends up pinned everywhere it's shown (Squad, Hunt). */
+ * (they can't paint on the canvas until located). Runs in the background one
+ * door at a time — the Geocoder rate-limits on bursts — dropping each dot as
+ * it resolves and refining the shaded area at the end. Every result caches
+ * to the DB, so this is a one-time cost per door: the whole turf ends up
+ * pinned everywhere it's shown (Squad, Hunt). */
 async function geocodeTurfDoors(turfId: string) {
   const { data } = await supabase
     .from('addresses')
@@ -911,11 +777,12 @@ async function geocodeTurfDoors(turfId: string) {
   await geocodeMissing(
     missing,
     (id, loc) => {
-      const a = missing.find((m) => m.id === id)
+      const a = addressById.get(id)
       if (a) {
         a.lat = loc.lat
         a.lng = loc.lng
-        upsertMarker(a)
+        doorLayer?.upsertDoor(canvasDoorOf(a))
+        doorLayer?.requestRepaint()
       }
     },
     () => unmounted,
@@ -923,27 +790,66 @@ async function geocodeTurfDoors(turfId: string) {
   if (!unmounted) buildSavedAreas()
 }
 
-// --- Sweeping ---
+// --- Draft shading: one angular area for the whole draft, rebuilt in the
+// next frame after any change (rAF-coalesced — gestures never wait on it).
 
-/** Set when a hold gesture fires so the click the browser sends right after
- * releasing the finger doesn't ALSO drop an anchor on the same pin. */
-let suppressTapId: string | null = null
+let shadeQueued = false
+function scheduleDraftShade() {
+  if (shadeQueued) return
+  shadeQueued = true
+  requestAnimationFrame(() => {
+    shadeQueued = false
+    rebuildDraftShade()
+  })
+}
 
-async function onPinTap(addressId: string) {
-  if (suppressTapId === addressId) {
-    suppressTapId = null
+function rebuildDraftShade() {
+  if (!draftData) return
+  draftData.forEach((f) => draftData!.remove(f))
+  const doors: DoorPoint[] = []
+  for (const id of draftMemberIds.value) {
+    const a = addressById.get(id)
+    if (a && a.lat != null && a.lng != null) doors.push({ lat: a.lat, lng: a.lng, street: a.street })
+  }
+  const shape = turfAreaFor(doors)
+  if (shape) {
+    draftData.addGeoJson({
+      type: 'Feature',
+      geometry: shape.geometry,
+      properties: { color: draftColor.value },
+    })
+  }
+}
+
+// --- Sweeping (all synchronous — the draft lives entirely in memory) ---
+
+/** Set while a hold gesture just fired so the click the browser sends right
+ * after releasing the finger doesn't ALSO drop an anchor. */
+let holdSuppressUntil = 0
+
+function onMapClick(e: google.maps.MapMouseEvent) {
+  if (!e.latLng || !map) return
+  if (Date.now() < holdSuppressUntil) return
+  const zoom = map.getZoom() ?? 14
+  if (zoom < PINS_MIN_ZOOM) {
+    // Too far out to pick doors — a tap means "take me closer".
+    map.panTo(e.latLng)
+    map.setZoom(Math.min(zoom + 2, PINS_MIN_ZOOM + 1))
     return
   }
+  const id = doorLayer?.doorAt(e.latLng, TAP_RADIUS_PX)
+  if (id) onPinTap(id)
+}
+
+function onPinTap(addressId: string) {
   const a = addressById.get(addressId)
-  if (!a || sweepBusy.value) return
+  if (!a) return
   if (!anchor.value) {
     anchor.value = a
-    restyleAll()
     return
   }
   if (anchor.value.id === a.id) {
     anchor.value = null
-    restyleAll()
     return
   }
   const from = anchor.value
@@ -959,12 +865,12 @@ async function onPinTap(addressId: string) {
   const erasing = draftMemberIds.value.has(from.id) && draftMemberIds.value.has(a.id)
   snapshotDraft()
   if (erasing) {
-    for (const r of ranges) await subtractRange(r.street_name, r.city, r.lo, r.hi)
+    for (const r of ranges) subtractRange(r.street_name, r.city, r.lo, r.hi)
     flash(`Erased ${ranges.map((r) => `${r.street_name} ${r.lo}–${r.hi}`).join(' + ')}.`)
     return
   }
   for (const r of ranges) {
-    await addSegment(r.street_name, r.city, r.lo, r.hi, parityChoice.value)
+    addSegment(r.street_name, r.city, r.lo, r.hi, parityChoice.value)
   }
   if (ranges.length > 1) {
     flash(`Swept the walk: ${ranges.map((r) => `${r.street_name} ${r.lo}–${r.hi}`).join(' + ')}.`)
@@ -989,78 +895,71 @@ function nearestDraftDoor(a: AddressLite): AddressLite | null {
   return best
 }
 
-/** Holding a pin (~half a second) is contextual, same as the two-tap sweep:
+/** Holding a door (~half a second) is contextual, same as the two-tap sweep:
  * a door already in the turf comes back OUT; a fresh door goes IN, walked in
  * from whichever drafted door sits closest so it joins the turf connected
  * rather than floating as an isolated single-door island. */
-async function onPinHold(addressId: string) {
+function onPinHold(addressId: string) {
   const a = addressById.get(addressId)
-  if (!a || sweepBusy.value) return
+  if (!a) return
   anchor.value = null
   const name = streetNameOf(a.street)
   const n = houseNumber(a.street)
   snapshotDraft()
   if (draftMemberIds.value.has(addressId)) {
-    await subtractRange(name, a.city, n, n)
+    subtractRange(name, a.city, n, n)
     flash(`Removed ${a.street} from the turf.`)
   } else {
     const nearest = nearestDraftDoor(a)
     if (nearest) {
       const ranges = walkRanges(nearest, a, addressById.values())
-      for (const r of ranges) await addSegment(r.street_name, r.city, r.lo, r.hi, 'both')
+      for (const r of ranges) addSegment(r.street_name, r.city, r.lo, r.hi, 'both')
       flash(`Connected ${a.street} to the turf.`)
     } else {
-      await addSegment(name, a.city, n, n, 'both')
+      addSegment(name, a.city, n, n, 'both')
       flash(`Added just ${a.street}.`)
     }
   }
-  restyleAll()
 }
 
-/** Long-press detection on a pin's DOM content (AdvancedMarker has no native
- * hold event). Movement past a thumb-jitter threshold cancels, so panning
- * the map over a pin never fires it. */
-function attachHoldGesture(el: HTMLElement, addressId: string) {
+/** Long-press detection on the map container (doors are canvas paint, not
+ * DOM, so the press is resolved to a door by hit-testing the touch point).
+ * Movement past a thumb-jitter threshold cancels, so panning never fires
+ * it. */
+function attachHoldGesture(el: HTMLElement) {
   let timer: ReturnType<typeof setTimeout> | undefined
   let startX = 0
   let startY = 0
   const cancel = () => clearTimeout(timer)
-  el.addEventListener('pointerdown', (e) => {
-    startX = e.clientX
-    startY = e.clientY
-    clearTimeout(timer)
-    timer = setTimeout(() => {
-      suppressTapId = addressId
-      // If the browser swallows the follow-up click, don't leave the pin
-      // permanently deaf to its next real tap.
-      setTimeout(() => {
-        if (suppressTapId === addressId) suppressTapId = null
-      }, 700)
-      void onPinHold(addressId)
-    }, 450)
-  })
-  el.addEventListener('pointermove', (e) => {
-    if (Math.hypot(e.clientX - startX, e.clientY - startY) > 8) cancel()
-  })
-  el.addEventListener('pointerup', cancel)
-  el.addEventListener('pointercancel', cancel)
-  el.addEventListener('pointerleave', cancel)
-}
-
-async function fetchStreetRows(streetName: string, city: string | null): Promise<AddressLite[]> {
-  const cacheKey = `${streetName}|${city ?? ''}`
-  const cached = streetCache.get(cacheKey)
-  if (cached) return cached
-  // Suffix match ("%WALNUT ST") like Hunt's locate, then exact-name filter —
-  // this pulls EVERY row on the street (geocoded or not), so counts are real.
-  const { data } = await supabase
-    .from('addresses')
-    .select('id, street, unit, city, zip, lat, lng, turf_id')
-    .ilike('street', `%${streetName}`)
-  let rows = ((data ?? []) as AddressLite[]).filter((r) => streetNameOf(r.street) === streetName)
-  if (city) rows = rows.filter((r) => r.city.toUpperCase() === city.toUpperCase())
-  streetCache.set(cacheKey, rows)
-  return rows
+  el.addEventListener(
+    'pointerdown',
+    (e: PointerEvent) => {
+      if (lassoActive.value) return
+      if ((map?.getZoom() ?? 0) < PINS_MIN_ZOOM) return
+      startX = e.clientX
+      startY = e.clientY
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        const rect = el.getBoundingClientRect()
+        const ll = doorLayer?.containerToLatLng(startX - rect.left, startY - rect.top)
+        const id = ll ? doorLayer?.doorAt(ll, TAP_RADIUS_PX) : null
+        if (id) {
+          holdSuppressUntil = Date.now() + 700
+          onPinHold(id)
+        }
+      }, 450)
+    },
+    true,
+  )
+  el.addEventListener(
+    'pointermove',
+    (e: PointerEvent) => {
+      if (Math.hypot(e.clientX - startX, e.clientY - startY) > 8) cancel()
+    },
+    true,
+  )
+  el.addEventListener('pointerup', cancel, true)
+  el.addEventListener('pointercancel', cancel, true)
 }
 
 function matchesSegment(a: AddressLite, seg: Pick<DraftSegment, 'range_start' | 'range_end' | 'parity'>): boolean {
@@ -1069,10 +968,10 @@ function matchesSegment(a: AddressLite, seg: Pick<DraftSegment, 'range_start' | 
   return seg.parity === 'both' || (n % 2 === 0) === (seg.parity === 'even')
 }
 
-/** (Re)derive a segment's members from its street rows, refresh its
- * highlighter stroke, and repaint pins. */
-async function computeSegment(seg: DraftSegment) {
-  const rows = await fetchStreetRows(seg.street_name, seg.city)
+/** (Re)derive a segment's members from the street index, refresh its
+ * highlighter stroke, and queue the shading rebuild. Pure memory — instant. */
+function computeSegment(seg: DraftSegment) {
+  const rows = streetRows(seg.street_name, seg.city)
   const members = rows.filter((a) => matchesSegment(a, seg))
   // Claimable mirrors set_turf_segments(): doors already in this turf, plus
   // the pool it draws from — the parent's doors for a sub-turf, unassigned
@@ -1086,10 +985,6 @@ async function computeSegment(seg: DraftSegment) {
   seg.memberIds = free.map((a) => a.id)
   seg.doorCount = free.length
   seg.takenCount = members.length - free.length
-
-  // Newly-discovered geocoded doors on this street get pins too, so the
-  // stroke never floats over empty map.
-  for (const a of members) if (!markersByAddress.has(a.id)) upsertMarker(a)
 
   segPolylines.get(seg.key)?.setMap(null)
   segPolylines.delete(seg.key)
@@ -1109,33 +1004,10 @@ async function computeSegment(seg: DraftSegment) {
       }),
     )
   }
-
-  // Shaded swath under the stroke — the "color over the area" preview.
-  if (draftData) {
-    for (const f of draftFeaturesBySeg.get(seg.key) ?? []) draftData.remove(f)
-    draftFeaturesBySeg.delete(seg.key)
-    const corridor = await corridorFor(
-      located.map((a) => ({ lat: a.lat!, lng: a.lng!, street: a.street })),
-    )
-    if (corridor) {
-      const added = draftData.addGeoJson({
-        type: 'Feature',
-        geometry: corridor.geometry,
-        properties: { color: draftColor.value },
-      })
-      draftFeaturesBySeg.set(seg.key, added)
-    }
-  }
-  restyleAll()
+  scheduleDraftShade()
 }
 
-function removeDraftShading(segKey: string) {
-  if (!draftData) return
-  for (const f of draftFeaturesBySeg.get(segKey) ?? []) draftData.remove(f)
-  draftFeaturesBySeg.delete(segKey)
-}
-
-async function addSegment(
+function addSegment(
   streetName: string,
   city: string | null,
   lo: number,
@@ -1154,50 +1026,39 @@ async function addSegment(
       hi >= s.range_start,
   )
   if (existing) {
-    sweepBusy.value = true
-    try {
-      existing.range_start = Math.min(existing.range_start, lo)
-      existing.range_end = Math.max(existing.range_end, hi)
-      await computeSegment(existing)
-    } finally {
-      sweepBusy.value = false
-    }
+    existing.range_start = Math.min(existing.range_start, lo)
+    existing.range_end = Math.max(existing.range_end, hi)
+    computeSegment(existing)
     return
   }
-  sweepBusy.value = true
-  try {
-    // reactive(): computeSegment fills memberIds/doorCount in AFTER the push,
-    // and those writes must invalidate draftMemberIds/draftDoorCount.
-    const seg: DraftSegment = reactive({
-      key: `seg-${++segKeyCounter}`,
-      street_name: streetName,
-      city,
-      range_start: lo,
-      range_end: hi,
-      parity,
-      memberIds: [],
-      doorCount: 0,
-      takenCount: 0,
-    })
-    segments.value.push(seg)
-    await computeSegment(seg)
-  } finally {
-    sweepBusy.value = false
-  }
+  // reactive(): computeSegment fills memberIds/doorCount in AFTER the push,
+  // and those writes must invalidate draftMemberIds/draftDoorCount.
+  const seg: DraftSegment = reactive({
+    key: `seg-${++segKeyCounter}`,
+    street_name: streetName,
+    city,
+    range_start: lo,
+    range_end: hi,
+    parity,
+    memberIds: [],
+    doorCount: 0,
+    takenCount: 0,
+  })
+  segments.value.push(seg)
+  computeSegment(seg)
 }
 
 function removeSegment(seg: DraftSegment) {
   segments.value = segments.value.filter((s) => s.key !== seg.key)
   segPolylines.get(seg.key)?.setMap(null)
   segPolylines.delete(seg.key)
-  removeDraftShading(seg.key)
   if (expandedSegKey.value === seg.key) expandedSegKey.value = null
-  restyleAll()
+  scheduleDraftShade()
 }
 
 /** Take a range OUT of the draft: segments covering it shrink (or split in
  * two around the hole); pieces left with no doors at all just disappear. */
-async function subtractRange(streetName: string, city: string | null, lo: number, hi: number) {
+function subtractRange(streetName: string, city: string | null, lo: number, hi: number) {
   const affected = segments.value.filter(
     (s) =>
       s.street_name === streetName &&
@@ -1210,21 +1071,21 @@ async function subtractRange(streetName: string, city: string | null, lo: number
     if (seg.range_start < lo) pieces.push({ lo: seg.range_start, hi: lo - 1 })
     if (seg.range_end > hi) pieces.push({ lo: hi + 1, hi: seg.range_end })
     removeSegment(seg)
-    const rows = pieces.length ? await fetchStreetRows(seg.street_name, seg.city) : []
+    const rows = pieces.length ? streetRows(seg.street_name, seg.city) : []
     for (const p of pieces) {
       const hasDoors = rows.some((a) => {
         const n = houseNumber(a.street)
         return n >= p.lo && n <= p.hi
       })
-      if (hasDoors) await addSegment(seg.street_name, seg.city, p.lo, p.hi, seg.parity)
+      if (hasDoors) addSegment(seg.street_name, seg.city, p.lo, p.hi, seg.parity)
     }
   }
 }
 
 // --- Undo ---
 // Every gesture that changes the draft's street list (sweep, erase, street
-// toggle, hold, tray ✕, Clear) files a snapshot first; Undo rebuilds the
-// draft from the latest one. Range/side tweaks in the pill editor are
+// toggle, hold, lasso, tray ✕, Clear) files a snapshot first; Undo rebuilds
+// the draft from the latest one. Range/side tweaks in the pill editor are
 // hand-reversible, so they don't clutter the stack.
 
 type SegSnapshot = Pick<DraftSegment, 'street_name' | 'city' | 'range_start' | 'range_end' | 'parity'>
@@ -1250,31 +1111,25 @@ function snapshotDraft() {
 function wipeDraftDrawing() {
   for (const line of segPolylines.values()) line.setMap(null)
   segPolylines.clear()
-  for (const key of [...draftFeaturesBySeg.keys()]) removeDraftShading(key)
+  draftData?.forEach((f) => draftData!.remove(f))
 }
 
-async function undoDraft() {
+function undoDraft() {
   const snap = undoStack.value.pop()
-  if (!snap || sweepBusy.value) return
-  sweepBusy.value = true
-  try {
-    wipeDraftDrawing()
-    segments.value = []
-    expandedSegKey.value = null
-    for (const s of snap) {
-      const seg: DraftSegment = reactive({
-        key: `seg-${++segKeyCounter}`,
-        ...s,
-        memberIds: [],
-        doorCount: 0,
-        takenCount: 0,
-      })
-      segments.value.push(seg)
-      await computeSegment(seg)
-    }
-    restyleAll()
-  } finally {
-    sweepBusy.value = false
+  if (!snap) return
+  wipeDraftDrawing()
+  segments.value = []
+  expandedSegKey.value = null
+  for (const s of snap) {
+    const seg: DraftSegment = reactive({
+      key: `seg-${++segKeyCounter}`,
+      ...s,
+      memberIds: [],
+      doorCount: 0,
+      takenCount: 0,
+    })
+    segments.value.push(seg)
+    computeSegment(seg)
   }
 }
 
@@ -1300,20 +1155,19 @@ function startOverDraft() {
   anchor.value = null
   saveError.value = ''
   defaultDraftParent()
-  restyleAll()
   buildSavedAreas()
 }
 
-async function onSegmentRangeChange(seg: DraftSegment) {
+function onSegmentRangeChange(seg: DraftSegment) {
   if (seg.range_end < seg.range_start) {
     ;[seg.range_start, seg.range_end] = [seg.range_end, seg.range_start]
   }
-  await computeSegment(seg)
+  computeSegment(seg)
 }
 
-async function onSegmentParityChange(seg: DraftSegment, parity: string) {
+function onSegmentParityChange(seg: DraftSegment, parity: string) {
   seg.parity = parity as TurfParity
-  await computeSegment(seg)
+  computeSegment(seg)
 }
 
 function clearDraft() {
@@ -1326,22 +1180,22 @@ function clearDraft() {
   assignChoice.value = 'none'
   saveError.value = ''
   defaultDraftParent()
-  restyleAll()
   // Restore the saved shading of whatever turf was being edited.
   buildSavedAreas()
 }
 
 // A different parent = a different claim pool: recompute every sweep so door
 // counts and shading track the pick.
-watch(draftParentId, async () => {
-  for (const seg of segments.value) await computeSegment(seg)
+watch(draftParentId, () => {
+  for (const seg of segments.value) computeSegment(seg)
 })
 
-// --- Street toggling: double-click/tap anywhere on the map snaps to the
-// closest pinned door and toggles that door's ENTIRE street in or out of the
-// draft. That makes multi-street turf painting fast: double-tap street after
-// street to add them, double-tap an added street again to drop it. The
-// two-tap anchor sweep above stays for partial-street ranges. ---
+// --- Street toggling: double-click/tap on the street (not on a door — that
+// reads as two anchor taps, same as before) snaps to the closest door and
+// toggles that door's ENTIRE street in or out of the draft. That makes
+// multi-street turf painting fast: double-tap street after street to add
+// them, double-tap an added street again to drop it. The two-tap anchor
+// sweep above stays for partial-street ranges. ---
 
 /** Farthest a double-tap can be from any pinned door and still count —
  * beyond this the tap was probably a stray zoom attempt, not a selection. */
@@ -1382,8 +1236,11 @@ function matchingSegments(streetName: string, city: string | null) {
   )
 }
 
-async function onMapDoubleClick(latLng: google.maps.LatLng) {
-  if (sweepBusy.value) return
+function onMapDoubleClick(latLng: google.maps.LatLng) {
+  if (!map || (map.getZoom() ?? 0) < PINS_MIN_ZOOM) return
+  // A double-tap ON a door already read as two anchor taps (arm + cancel) in
+  // the click handler — only a tap on open street asphalt toggles a street.
+  if (doorLayer?.doorAt(latLng, TAP_RADIUS_PX)) return
   const hit = nearestDoor(latLng.lat(), latLng.lng())
   if (!hit || hit.meters > SNAP_RADIUS_M) {
     flash('No mapped door near that spot — try closer to a street with pins, or search below.')
@@ -1398,51 +1255,39 @@ async function onMapDoubleClick(latLng: google.maps.LatLng) {
     flash(`Removed ${name} from the draft.`)
     return
   }
-  await sweepWholeStreet(name, hit.door.city)
+  sweepWholeStreet(name, hit.door.city)
 }
 
 /** Add an entire street (its full house-number span) as one draft segment,
  * then pin down its unmapped doors. Both the double-tap toggle and the
  * street search land here. Guards against adding a street that's already in
- * the draft — the map path pre-checks, but rapid search-result taps would
- * otherwise stack duplicate segments. */
-async function sweepWholeStreet(streetName: string, city: string | null, zoomTo = false) {
-  // Bail if another sweep is mid-flight: a second rapid tap would otherwise
-  // clear the duplicate check below before the first one's addSegment lands.
-  if (sweepBusy.value) return
+ * the draft. */
+function sweepWholeStreet(streetName: string, city: string | null, zoomTo = false) {
   if (matchingSegments(streetName, city).length) {
     flash(`${streetName} is already in the draft — double-tap it on the map to remove it.`)
-    if (zoomTo) await materializeStreetPins(streetName, city, true)
+    if (zoomTo) void materializeStreetPins(streetName, city, true)
     return
   }
-  let rows: AddressLite[]
-  // Hold the busy flag across the door fetch — addSegment only raises it once
-  // it starts, leaving the fetch window open to concurrent taps otherwise.
-  sweepBusy.value = true
-  try {
-    rows = await fetchStreetRows(streetName, city)
-  } finally {
-    sweepBusy.value = false
-  }
+  const rows = streetRows(streetName, city)
   if (!rows.length) {
     flash(`No doors found on ${streetName}.`)
     return
   }
   const nums = rows.map((r) => houseNumber(r.street))
   snapshotDraft()
-  await addSegment(streetName, city, Math.min(...nums), Math.max(...nums), parityChoice.value)
+  addSegment(streetName, city, Math.min(...nums), Math.max(...nums), parityChoice.value)
   flash(`Added ${streetName} — ${rows.length} doors. Double-tap it again to remove it.`)
-  await materializeStreetPins(streetName, city, zoomTo)
+  void materializeStreetPins(streetName, city, zoomTo)
 }
 
 /** Streets pulled in by search (or a double-tap near a sparsely-pinned
  * street) can hold doors that were never geocoded, so the sweep would float
- * over empty map. Geocode a capped batch of them, drop their pins, refresh
+ * over empty map. Geocode a capped batch of them, drop their dots, refresh
  * the segment's stroke, and optionally zoom the map to the street. */
 const GEOCODE_BATCH_CAP = 25
 
 async function materializeStreetPins(streetName: string, city: string | null, zoomTo: boolean) {
-  const rows = await fetchStreetRows(streetName, city)
+  const rows = streetRows(streetName, city)
   const fitToStreet = () => {
     if (!map) return
     const bounds = new google.maps.LatLngBounds()
@@ -1458,84 +1303,218 @@ async function materializeStreetPins(streetName: string, city: string | null, zo
   const missing = rows.filter((a) => a.lat == null || a.lng == null).slice(0, GEOCODE_BATCH_CAP)
   let added = 0
   for (const a of missing) {
+    if (unmounted) return
     const loc = await geocodeAndCache(a)
     if (loc) {
       a.lat = loc.lat
       a.lng = loc.lng
-      upsertMarker(a)
+      doorLayer?.upsertDoor(canvasDoorOf(a))
+      doorLayer?.requestRepaint()
       added++
     }
   }
   if (added) {
     const seg = segments.value.find((s) => s.street_name === streetName && s.city === city)
-    if (seg) await computeSegment(seg)
+    if (seg) computeSegment(seg)
     if (zoomTo) fitToStreet()
   }
 }
 
-// --- Street search: the non-map way in. Typing "walnut" lists matching
-// streets with their door counts and number spans; tapping one sweeps the
-// whole street, zooms the map to it, and pins down its unmapped doors
-// (trim the range in the tray afterwards). ---
+// --- Street search: the non-map way in. Typing "walnut" instantly lists
+// matching streets (from the in-memory index — no query, no debounce) with
+// door counts and number spans; tapping one shows its doors, "Entire street"
+// sweeps it. ---
 
 const streetQuery = ref('')
 const streetMatches = ref<{ street_name: string; city: string; count: number; lo: number; hi: number }[]>([])
-const streetSearching = ref(false)
-let streetTimer: ReturnType<typeof setTimeout> | undefined
 
 function onStreetInput(value: string) {
   streetQuery.value = value
-  clearTimeout(streetTimer)
-  const q = value.trim()
+  const q = value.trim().toUpperCase()
   if (q.length < 2) {
     streetMatches.value = []
-    streetSearching.value = false
     return
   }
-  streetSearching.value = true
-  streetTimer = setTimeout(async () => {
-    const { data } = await supabase
-      .from('addresses')
-      .select('street, city')
-      .ilike('street', `%${q}%`)
-      .limit(600)
-    if (streetQuery.value.trim() !== q) return
-    const groups = new Map<string, { street_name: string; city: string; count: number; lo: number; hi: number }>()
-    for (const r of (data ?? []) as { street: string; city: string }[]) {
-      const name = streetNameOf(r.street)
-      if (!name) continue
-      const key = `${name}|${r.city.toUpperCase()}`
-      const n = houseNumber(r.street)
-      const g = groups.get(key)
-      if (!g) groups.set(key, { street_name: name, city: r.city, count: 1, lo: n, hi: n })
-      else {
-        g.count++
-        g.lo = Math.min(g.lo, n)
-        g.hi = Math.max(g.hi, n)
-      }
-    }
-    streetMatches.value = [...groups.values()].sort((a, b) => b.count - a.count).slice(0, 8)
-    streetSearching.value = false
-  }, 250)
+  streetMatches.value = streetSummaries
+    .filter((s) => s.street_name.includes(q))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8)
 }
 
 /** Tapping a search result just SHOWS the street — zooms to it and drops
- * pins for its doors (geocoding a capped batch of unmapped ones) without
+ * dots for its doors (geocoding a capped batch of unmapped ones) without
  * adding anything to the draft. Sweeping it is the separate, explicit
  * "Entire street" button. */
-async function locateStreet(m: { street_name: string; city: string }) {
+function locateStreet(m: { street_name: string; city: string }) {
   mapEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-  flash(`Showing ${m.street_name} — pins only. Tap doors to sweep, or use "Entire street".`)
-  await materializeStreetPins(m.street_name, m.city, true)
+  flash(`Showing ${m.street_name} — doors only. Tap doors to sweep, or use "Entire street".`)
+  void materializeStreetPins(m.street_name, m.city, true)
 }
 
-async function addWholeStreet(m: { street_name: string; city: string }) {
+function addWholeStreet(m: { street_name: string; city: string }) {
   streetQuery.value = ''
   streetMatches.value = []
   // Bring the map back on screen — the payoff of picking a search result is
   // watching the street light up, not a new row in the tray below.
   mapEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-  await sweepWholeStreet(m.street_name, m.city, true)
+  sweepWholeStreet(m.street_name, m.city, true)
+}
+
+// --- Lasso: VAN-style region selection. Arm it, drag a loop, and every door
+// inside joins the draft as street segments (split around doors you didn't
+// circle). The map freezes while armed so the drag draws instead of pans;
+// everything is hit-tested in memory, so the capture is instant. ---
+
+const lassoActive = ref(false)
+const lassoCanvasEl = ref<HTMLCanvasElement | null>(null)
+let lassoPath: { x: number; y: number }[] = []
+let lassoDrawing = false
+
+function toggleLasso() {
+  lassoActive.value = !lassoActive.value
+  map?.setOptions({ gestureHandling: lassoActive.value ? 'none' : 'greedy' })
+  lassoPath = []
+  lassoDrawing = false
+  if (lassoActive.value) {
+    void nextTick(() => sizeLassoCanvas())
+  }
+}
+
+function sizeLassoCanvas() {
+  const c = lassoCanvasEl.value
+  const host = mapEl.value
+  if (!c || !host) return
+  const dpr = Math.min(window.devicePixelRatio || 1, 2)
+  c.width = Math.round(host.clientWidth * dpr)
+  c.height = Math.round(host.clientHeight * dpr)
+  c.getContext('2d')?.setTransform(dpr, 0, 0, dpr, 0, 0)
+}
+
+function lassoPoint(e: PointerEvent): { x: number; y: number } {
+  const rect = (lassoCanvasEl.value ?? mapEl.value)!.getBoundingClientRect()
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+}
+
+function drawLassoTrail() {
+  const c = lassoCanvasEl.value
+  const ctx = c?.getContext('2d')
+  if (!c || !ctx) return
+  ctx.clearRect(0, 0, c.width, c.height)
+  if (lassoPath.length < 2) return
+  ctx.beginPath()
+  ctx.moveTo(lassoPath[0].x, lassoPath[0].y)
+  for (let i = 1; i < lassoPath.length; i++) ctx.lineTo(lassoPath[i].x, lassoPath[i].y)
+  ctx.strokeStyle = draftColor.value
+  ctx.lineWidth = 3
+  ctx.lineJoin = 'round'
+  ctx.stroke()
+  ctx.setLineDash([6, 6])
+  ctx.beginPath()
+  ctx.moveTo(lassoPath[lassoPath.length - 1].x, lassoPath[lassoPath.length - 1].y)
+  ctx.lineTo(lassoPath[0].x, lassoPath[0].y)
+  ctx.stroke()
+  ctx.setLineDash([])
+}
+
+function onLassoDown(e: PointerEvent) {
+  sizeLassoCanvas()
+  lassoDrawing = true
+  lassoPath = [lassoPoint(e)]
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+}
+
+function onLassoMove(e: PointerEvent) {
+  if (!lassoDrawing) return
+  const p = lassoPoint(e)
+  const last = lassoPath[lassoPath.length - 1]
+  if (Math.hypot(p.x - last.x, p.y - last.y) < 4) return
+  lassoPath.push(p)
+  drawLassoTrail()
+}
+
+function onLassoUp() {
+  if (!lassoDrawing) return
+  lassoDrawing = false
+  const path = lassoPath
+  lassoPath = []
+  const c = lassoCanvasEl.value
+  c?.getContext('2d')?.clearRect(0, 0, c.width, c.height)
+  if (path.length < 3) return
+  const ids = doorLayer?.doorsInPolygon(path) ?? []
+  const doors = ids
+    .map((id) => addressById.get(id))
+    .filter((a): a is AddressLite => !!a)
+  if (!doors.length) {
+    flash('No doors inside that loop — zoom in or circle closer around the dots.')
+    return
+  }
+  snapshotDraft()
+  const { doorCount, streetCount } = addDoorsAsSegments(doors)
+  if (!doorCount) {
+    undoStack.value.pop()
+    flash('Those doors are filtered out by the side (even/odd) setting.')
+    return
+  }
+  flash(
+    `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
+  )
+}
+
+function onLassoCancel() {
+  lassoDrawing = false
+  lassoPath = []
+  const c = lassoCanvasEl.value
+  c?.getContext('2d')?.clearRect(0, 0, c.width, c.height)
+}
+
+/** Turn a geometric door selection into street segments. Runs are split
+ * around doors that were NOT selected, and a single-side selection (all-even
+ * or all-odd while the other side exists) becomes a parity segment — the
+ * lasso takes what you circled, not the whole number range. */
+function addDoorsAsSegments(doors: AddressLite[]): { doorCount: number; streetCount: number } {
+  const groups = new Map<string, { name: string; city: string; nums: Set<number> }>()
+  let doorCount = 0
+  for (const a of doors) {
+    const name = streetNameOf(a.street)
+    if (!name) continue
+    const n = houseNumber(a.street)
+    // The side filter applies to the lasso like every other gesture.
+    if (parityChoice.value !== 'both' && (n % 2 === 0) !== (parityChoice.value === 'even')) continue
+    doorCount++
+    const key = `${name}|${a.city.toUpperCase()}`
+    let g = groups.get(key)
+    if (!g) groups.set(key, (g = { name, city: a.city, nums: new Set() }))
+    g.nums.add(n)
+  }
+  let streetCount = 0
+  for (const g of groups.values()) {
+    const rows = streetRows(g.name, g.city)
+    const allNums = [...new Set(rows.map((r) => houseNumber(r.street)))].sort((a, b) => a - b)
+    const selEven = [...g.nums].some((n) => n % 2 === 0)
+    const selOdd = [...g.nums].some((n) => n % 2 !== 0)
+    const lane: TurfParity = selEven && selOdd ? 'both' : selEven ? 'even' : 'odd'
+    const laneNums =
+      lane === 'both' ? allNums : allNums.filter((n) => (n % 2 === 0) === (lane === 'even'))
+    // If the street only HAS one side, 'both' describes the cut better.
+    const segParity: TurfParity = lane !== 'both' && laneNums.length !== allNums.length ? lane : 'both'
+    const runs: [number, number][] = []
+    let lo: number | null = null
+    let hi = 0
+    for (const n of laneNums) {
+      if (g.nums.has(n)) {
+        if (lo == null) lo = n
+        hi = n
+      } else if (lo != null) {
+        runs.push([lo, hi])
+        lo = null
+      }
+    }
+    if (lo != null) runs.push([lo, hi])
+    if (!runs.length) continue
+    streetCount++
+    for (const [rLo, rHi] of runs) addSegment(g.name, g.city, rLo, rHi, segParity)
+  }
+  return { doorCount, streetCount }
 }
 
 // --- Save / edit / delete ---
@@ -1601,7 +1580,7 @@ async function saveTurf() {
     clearDraft()
     undoStack.value = []
     await reloadAll()
-    // Fill in pins for every door now in this turf, in the background —
+    // Fill in dots for every door now in this turf, in the background —
     // never blocks the save.
     void geocodeTurfDoors(turfId)
   } catch {
@@ -1611,7 +1590,7 @@ async function saveTurf() {
   }
 }
 
-async function editTurf(t: TurfWithMeta) {
+function editTurf(t: TurfWithMeta) {
   clearDraft()
   undoStack.value = []
   editingTurfId.value = t.id
@@ -1620,7 +1599,7 @@ async function editTurf(t: TurfWithMeta) {
   // Hide this turf's saved shading — the draft redraws it live.
   buildSavedAreas()
   for (const s of t.turf_segments) {
-    await addSegment(s.street_name, s.city, s.range_start, s.range_end, s.parity)
+    addSegment(s.street_name, s.city, s.range_start, s.range_end, s.parity)
   }
   focusTurf(t.id)
   focusDraft()
@@ -1662,15 +1641,12 @@ onMounted(() => {
 
 onUnmounted(() => {
   unmounted = true
-  for (const marker of markersByAddress.values()) marker.map = null
-  markersByAddress.clear()
-  clearDensityDots()
+  doorLayer?.dispose()
   for (const line of segPolylines.values()) line.setMap(null)
   segPolylines.clear()
   areasLayer?.dispose()
   cityLayer?.dispose()
   draftData?.setMap(null)
-  draftFeaturesBySeg.clear()
 })
 </script>
 
@@ -1712,11 +1688,22 @@ onUnmounted(() => {
 
       <div class="map-wrap">
         <div ref="mapEl" class="map"></div>
+        <!-- Freehand selection surface — only exists while Lasso is armed. -->
+        <div
+          v-if="lassoActive"
+          class="lasso-layer"
+          @pointerdown.prevent="onLassoDown"
+          @pointermove.prevent="onLassoMove"
+          @pointerup.prevent="onLassoUp"
+          @pointercancel="onLassoCancel"
+        >
+          <canvas ref="lassoCanvasEl" class="lasso-canvas"></canvas>
+        </div>
         <div v-if="pinsLoading" class="pins-loading" role="status" aria-live="polite">
           <span class="pins-loading-spinner" aria-hidden="true"></span>
-          Loading pins…
+          Loading doors…
         </div>
-        <!-- Flip every pin between a colored dot and its house number, same
+        <!-- Flip every door between a colored dot and its house number, same
              toggle as Hunt. Sits top-left, above the layer toggle. -->
         <div class="pin-mode-toggle" role="group" aria-label="Pin style">
           <button
@@ -1724,7 +1711,7 @@ onUnmounted(() => {
             class="pin-mode-btn"
             :class="{ active: pinMode === 'dots' }"
             :aria-pressed="pinMode === 'dots'"
-            aria-label="Show pins as dots"
+            aria-label="Show doors as dots"
             title="Dots"
             @click="setPinMode('dots')"
           >
@@ -1737,7 +1724,7 @@ onUnmounted(() => {
             class="pin-mode-btn"
             :class="{ active: pinMode === 'numbers' }"
             :aria-pressed="pinMode === 'numbers'"
-            aria-label="Show pins as house numbers"
+            aria-label="Show doors as house numbers"
             title="House numbers"
             @click="setPinMode('numbers')"
           >
@@ -1767,6 +1754,20 @@ onUnmounted(() => {
             City
           </button>
         </div>
+        <!-- Lasso toggle, top-right: freezes the map and turns drags into a
+             selection loop. -->
+        <div class="lasso-toggle">
+          <button
+            type="button"
+            class="layer-btn"
+            :class="{ active: lassoActive }"
+            :aria-pressed="lassoActive"
+            title="Draw a loop to sweep every door inside it"
+            @click="toggleLasso"
+          >
+            ◯ Lasso
+          </button>
+        </div>
       </div>
       <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
       <p v-if="mapsAuthError" class="muted map-error">
@@ -1775,7 +1776,7 @@ onUnmounted(() => {
       </p>
 
       <!-- Non-map entry point: find a street by name. Tapping a match shows
-           its pins; "Entire street" is the explicit add-to-draft action. -->
+           its doors; "Entire street" is the explicit add-to-draft action. -->
       <input
         :value="streetQuery"
         class="street-search"
@@ -1784,8 +1785,7 @@ onUnmounted(() => {
         aria-label="Search streets"
         @input="onStreetInput(($event.target as HTMLInputElement).value)"
       />
-      <div v-if="streetSearching" class="muted search-note">Searching…</div>
-      <div v-else-if="streetMatches.length" class="street-matches">
+      <div v-if="streetMatches.length" class="street-matches">
         <div v-for="m in streetMatches" :key="m.street_name + m.city" class="street-match">
           <button class="street-match-main" @click="locateStreet(m)">
             <span class="street-match-name">{{ m.street_name }}</span>
@@ -1908,7 +1908,7 @@ onUnmounted(() => {
         </template>
         <p v-else class="muted empty-note">
           Nothing swept yet — tap two doors to take the walk between them, double-tap a street to
-          take it whole, hold a single door, or search below.
+          take it whole, hold a single door, circle a patch with Lasso, or search below.
         </p>
 
         <div class="draft-form">
@@ -1925,7 +1925,7 @@ onUnmounted(() => {
             <button class="btn btn-primary" :disabled="saving" @click="saveTurf">
               {{ saving ? 'Saving…' : editingTurfId ? 'Save changes' : 'Create turf' }}
             </button>
-            <button v-if="canUndo" class="btn btn-ghost" :disabled="saving || sweepBusy" @click="undoDraft">
+            <button v-if="canUndo" class="btn btn-ghost" :disabled="saving" @click="undoDraft">
               Undo
             </button>
             <button v-if="segments.length" class="btn btn-ghost" :disabled="saving" @click="startOverDraft">
@@ -2082,6 +2082,23 @@ onUnmounted(() => {
   background: var(--surface-2);
 }
 
+/* The lasso capture surface sits over the whole map while armed. */
+.lasso-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  touch-action: none;
+  cursor: crosshair;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.lasso-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 .pins-loading {
   position: absolute;
   top: 0.6rem;
@@ -2099,6 +2116,7 @@ onUnmounted(() => {
   border-radius: 6px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
   pointer-events: none;
+  z-index: 6;
 }
 
 /* Pin style toggle, top-left on the map — same chrome/position as Hunt's. */
@@ -2111,6 +2129,7 @@ onUnmounted(() => {
   border-radius: 6px;
   overflow: hidden;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
 }
 
 .pin-mode-btn {
@@ -2151,6 +2170,20 @@ onUnmounted(() => {
   border-radius: 6px;
   overflow: hidden;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+}
+
+/* Lasso toggle, top-right — same chrome as the layer buttons. */
+.lasso-toggle {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
 }
 
 .layer-btn {
@@ -2207,10 +2240,6 @@ onUnmounted(() => {
 .street-search:focus {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
-}
-
-.search-note {
-  font-size: 0.88rem;
 }
 
 .street-matches {
@@ -2596,8 +2625,9 @@ onUnmounted(() => {
 }
 </style>
 
-<!-- Unscoped: marker content divs live in Google's map DOM, outside this
-     component's subtree, so the anchor pulse keyframes must be global. -->
+<!-- Unscoped: the sweep-bar dot pulses with these keyframes, and scoped
+     keyframes wouldn't survive being referenced from the map's DOM if a
+     future overlay wants them too. -->
 <style>
 @keyframes turf-anchor-pulse {
   0%,
