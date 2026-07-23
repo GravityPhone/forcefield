@@ -304,25 +304,27 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'What cutting does',
         body:
-          'Sweep street ranges on the map into a turf, then assign it to a squad or a single ' +
-          'canvasser. Squads last one day but turf is durable — re-point it at today’s ' +
-          'crew each morning ("Not out today" flags turf still aimed at a past day’s squad).',
+          'Take whole streets into a turf, then assign it to a squad or a single canvasser. ' +
+          'Squads last one day but turf is durable — re-point it at today’s crew each ' +
+          'morning ("Not out today" flags turf still aimed at a past day’s squad).',
       },
       {
-        heading: 'Map gestures',
+        heading: 'Streets, not dots',
         body:
-          'Tap two doors to take the whole walk between them — even around a corner. If both ' +
-          'taps land on doors already in the draft, the stretch between them is erased instead. ' +
-          'Hold a door to add or remove just it; double-tap a street to take or drop the ' +
-          'entire street. The Lasso button freezes the map so you can drag a loop — every ' +
-          'door inside joins the draft at once. Undo steps back one gesture at a time. ' +
-          'Zoomed way out, a tap just zooms you in closer.',
+          'The map draws one line per street. Search a street name and tap a match to zoom ' +
+          'to it, then tap the street’s line to take every door on it. Tap a street ' +
+          'already in the turf to trim it: its doors appear as dots (house numbers up ' +
+          'close) and each tap drops or restores that one house. The Lasso button freezes ' +
+          'the map so you can drag a loop — every door inside joins at once. Undo steps ' +
+          'back one gesture at a time; zoomed way out, a tap just zooms you in closer.',
       },
       {
-        heading: 'Reading the dots',
+        heading: 'Reading the lines',
         body:
-          'The fill color is the door’s knock status (blue = never knocked); the ring ' +
-          'around it shows which turf it belongs to. No ring means unclaimed.',
+          'Gray streets are unclaimed; a street wearing a turf’s color already belongs to ' +
+          'that turf, and your draft’s streets wear its color as a thick stroke. While ' +
+          'trimming, a door’s fill is its knock status (blue = never knocked) and its ring ' +
+          'is who holds it.',
       },
       {
         heading: 'Sub-turfs',
