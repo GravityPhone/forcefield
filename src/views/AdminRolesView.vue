@@ -6,7 +6,7 @@ import { fadeUp, popIn } from '@/lib/motion'
 import { supabase } from '@/lib/supabase'
 import { localToday } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
-import { ROLE_LABELS } from '@/types'
+import { ROLE_LABELS, ROLE_LABELS_SHORT } from '@/types'
 import type { AppRole, Profile, Squad, Team } from '@/types'
 
 const auth = useAuthStore()
@@ -261,7 +261,10 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
               <template v-if="squadOf(u.id)"> · 👥 {{ squadOf(u.id)!.name }}</template>
             </span>
           </span>
-          <span class="role-pill" :class="`role-${u.role}`">{{ ROLE_LABELS[u.role] }}</span>
+          <span class="role-pill" :class="`role-${u.role}`">
+            <span class="role-label-full">{{ ROLE_LABELS[u.role] }}</span>
+            <span class="role-label-short">{{ ROLE_LABELS_SHORT[u.role] }}</span>
+          </span>
           <span class="chevron" aria-hidden="true">›</span>
         </button>
       </div>
@@ -555,6 +558,22 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
   border-radius: 999px;
   color: #fff;
   flex-shrink: 0;
+}
+
+/* On narrow phones the full "CAMPAIGN MANAGER" pill eats most of the row —
+ * the compact role name leaves the (ellipsizing) name real room. */
+.role-label-short {
+  display: none;
+}
+
+@media (max-width: 539px) {
+  .role-label-full {
+    display: none;
+  }
+
+  .role-label-short {
+    display: inline;
+  }
 }
 
 .role-admin {

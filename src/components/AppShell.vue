@@ -2,7 +2,7 @@
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore, roleHome } from '@/stores/auth'
-import { ROLE_LABELS, type AppRole } from '@/types'
+import { ROLE_LABELS, ROLE_LABELS_SHORT, type AppRole } from '@/types'
 import { supabase } from '@/lib/supabase'
 import AppLogo from '@/components/AppLogo.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
@@ -259,10 +259,14 @@ onUnmounted(() => {
             title="Try another role (demo)"
             @click="roleSwitchOpen = true"
           >
-            {{ ROLE_LABELS[auth.profile.role] }}
+            <span class="role-label-full">{{ ROLE_LABELS[auth.profile.role] }}</span>
+            <span class="role-label-short">{{ ROLE_LABELS_SHORT[auth.profile.role] }}</span>
             <span aria-hidden="true" class="badge-caret">▾</span>
           </button>
-          <span v-else class="badge">{{ ROLE_LABELS[auth.profile.role] }}</span>
+          <span v-else class="badge">
+            <span class="role-label-full">{{ ROLE_LABELS[auth.profile.role] }}</span>
+            <span class="role-label-short">{{ ROLE_LABELS_SHORT[auth.profile.role] }}</span>
+          </span>
           <span class="username">{{ auth.profile.username }}</span>
           <button class="btn btn-ghost btn-sm logout-top" @click="handleLogout">Log out</button>
         </div>
@@ -539,6 +543,27 @@ onUnmounted(() => {
 .badge-caret {
   font-size: 0.7em;
   opacity: 0.8;
+}
+
+/* Below ~540px the full "Campaign Manager" badge plus a username can't share
+ * the header row — swap in the compact role name and shorten the username's
+ * ellipsis leash so the name never spills off the screen edge. */
+.role-label-short {
+  display: none;
+}
+
+@media (max-width: 539px) {
+  .role-label-full {
+    display: none;
+  }
+
+  .role-label-short {
+    display: inline;
+  }
+
+  .username {
+    max-width: 6.5rem;
+  }
 }
 
 .role-demo-note {

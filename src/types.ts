@@ -137,6 +137,16 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   admin: 'Admin',
 }
 
+/** Compact role names for tight layouts (phone header badge, roles-page
+ * pill) — "Campaign Manager" next to a long username overflows a narrow
+ * screen. */
+export const ROLE_LABELS_SHORT: Record<AppRole, string> = {
+  canvasser: 'Canvasser',
+  team_lead: 'Squad Lead',
+  campaign_manager: 'Manager',
+  admin: 'Admin',
+}
+
 export type KnockOutcome =
   | 'signed'
   | 'didnt_sign'
