@@ -4,9 +4,11 @@
 // door geocodes never sat on the real roads, so nothing street-shaped is
 // drawn at all. The flow: type a street name, tap a match (the map zooms to
 // it and its doors appear as dots), then tap "Add to turf" on the match to
-// take every door. A street already in the draft trims from its pill: the
-// open pill editor paints that street's doors and each map tap drops or
-// restores one house. The Lasso still circles a whole patch at once.
+// take every door. Drafted streets live in a compact TABLE (2026-07-24,
+// replaced the pill bubbles): one dense row per street with inline range /
+// side / count / remove controls; tapping a row focuses TRIM mode — that
+// street's doors paint and each map tap drops or restores one house. The
+// Lasso still circles a whole patch at once.
 // Existing turfs live behind ONE dropdown — picking a turf zooms to it and
 // shows a single compact management card (edit / delete / reassign), not a
 // long list.
@@ -62,8 +64,9 @@ import {
   stripLeadingDirectional,
 } from '@/lib/geocode'
 import type { StreetAtPoint } from '@/lib/geocode'
+import { avatarUrl } from '@/lib/avatars'
 import { localToday } from '@/lib/day'
-import { OUTCOME_HEX, OUTCOME_LABELS, PIN_DEFAULT_HEX, doorStatusOutcome } from '@/lib/outcomes'
+import { OUTCOME_HEX, OUTCOME_LABELS, doorStatusOutcome } from '@/lib/outcomes'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import { useAuthStore } from '@/stores/auth'
@@ -144,9 +147,12 @@ const turfs = ref<TurfWithMeta[]>([])
 /** turf id -> its dispatch history, oldest first (trigger-written). */
 const historyByTurf = ref<Map<string, AssignmentLog[]>>(new Map())
 const people = ref<ChatProfile[]>([])
-/** Latest outcome per door — dots wear the same status colors as Hunt, so
- * knocked/unknocked history reads the same while cutting. */
+/** Effective latest status per door (doorStatusOutcome applied at fetch). */
 const statusByAddress = ref<Map<string, KnockOutcome>>(new Map())
+/** Doors where SOMEBODY signed but not everybody — these render as a green
+ * fill with a yellow ring (project-wide partly-signed rule), distinct from
+ * a genuine latest-outcome 'maybe'. */
+const partlySignedDoors = ref<Set<string>>(new Set())
 
 // --- Zoom thresholds ---
 /** Trim-mode doors show house-number pills from this zoom (dots below). */
@@ -162,12 +168,11 @@ const LASSO_BRUSH_PX = 16
 // --- Draft turf state ---
 const draftName = ref('')
 const segments = ref<DraftSegment[]>([])
-/** Which draft segment's inline editor is open (pill tap toggles it). The
- * open editor's street is also the map's TRIM target: its doors paint as
- * tappable dots. */
+/** Which draft segment (table row) is open/focused. The open row's street
+ * is also the map's TRIM target: its doors paint as tappable dots. */
 const expandedSegKey = ref<string | null>(null)
 const expandedSeg = computed(() => segments.value.find((s) => s.key === expandedSegKey.value) ?? null)
-/** The street being trimmed door-by-door — follows the open pill editor. */
+/** The street being trimmed door-by-door — follows the open table row. */
 const focusedStreet = computed(() =>
   expandedSeg.value
     ? { name: expandedSeg.value.street_name, city: expandedSeg.value.city }
@@ -225,7 +230,7 @@ let segKeyCounter = 0
  * disposed map. */
 let unmounted = false
 
-const turfColorById = computed(() => new Map(turfs.value.map((t) => [t.id, t.color])))
+const turfById = computed(() => new Map(turfs.value.map((t) => [t.id, t])))
 
 function indexAddresses(rows: AddressLite[]) {
   addressById.clear()
@@ -456,10 +461,10 @@ const hint = computed(() => {
       : 'Street tap armed — tap any street right on the map, dots or no dots, and every door on it joins the turf. Tap Streets again when done.'
   }
   if (focusedStreet.value) {
-    return `Trimming ${focusedStreet.value.name} — tap its doors on the map to drop or restore each house. Tap open map (or the pill) when you're done.`
+    return `Trimming ${focusedStreet.value.name} — tap its doors on the map to drop or restore each house. Tap open map (or its row) when you're done.`
   }
   const base =
-    'Type a street name below and tap a match to see it on the map. Add takes the house range you set (the whole street unless you narrow it). Tap a pill to trim house by house, or circle a patch with Lasso.'
+    'Type a street name below and tap a match to see it on the map. Add takes the house range you set (the whole street unless you narrow it). Tap a street in the list below to trim house by house, or circle a patch with Lasso.'
   return isSubcutter.value
     ? `${base} Only streets inside your assigned turf count toward a sub-turf.`
     : base
@@ -563,8 +568,42 @@ function segmentLabel(s: { street_name: string; range_start: number; range_end: 
 // --- Door canvas paint state ---
 // The map stays blank except for: every door in the DRAFT (they accumulate
 // as streets are added, so the turf builds up visibly), the located street
-// (picked from search), and the street being trimmed (open pill editor).
-// Fill = knock status, ring = membership.
+// (picked from search), the street being trimmed (the open table row), and
+// — with the Turf layer on at pin zoom — every door another turf owns.
+//
+// Cutter-local pin palette (2026-07-24, replaced the per-turf rainbow): a
+// dot answers ONE question — how does this door stand? Green = everyone
+// signed, green with a yellow ring = partly signed (project-wide rule),
+// red = closed (didn't sign / skip / hostile), white = anything else
+// (untouched, not-home, maybe). Turf membership is not a color anymore:
+// every draft door wears ONE uniform dark ring ("this door is going into
+// the turf I'm editing"), and doors another turf owns draw as the hollow
+// red "taken" symbol carrying the owner-assignee's avatar/initial. The
+// hexes reuse outcomes.ts literals — never change those there.
+const FILL_SIGNED = OUTCOME_HEX.signed
+const FILL_CLOSED = OUTCOME_HEX.didnt_sign
+const RING_PARTLY = OUTCOME_HEX.maybe
+const FILL_OPEN = '#ffffff'
+const OPEN_OUTLINE = '#8a90a5'
+const OPEN_INK = '#1d2433'
+const DRAFT_RING = '#1d2433'
+
+/** Avatar bitmaps for the taken-door badge, by slug. Images decode async —
+ * the layer repaints when one lands; until then the canvas shows the
+ * initial. */
+const badgeImgCache = new Map<string, HTMLImageElement>()
+function badgeImage(slug: string | null | undefined): HTMLImageElement | null {
+  const url = avatarUrl(slug)
+  if (!slug || !url) return null
+  let img = badgeImgCache.get(slug)
+  if (!img) {
+    img = new Image()
+    img.onload = () => doorLayer?.requestRepaint()
+    img.src = url
+    badgeImgCache.set(slug, img)
+  }
+  return img
+}
 
 function doorOnStreet(a: AddressLite, s: { name: string; city: string | null }): boolean {
   if (streetNameOf(a.street) !== s.name) return false
@@ -575,29 +614,57 @@ function paintForDoor(id: string): DoorPaintState | null {
   const a = addressById.get(id)
   if (!a) return null
   const inDraft = draftMemberIds.value.has(id)
+  const ownedElsewhere =
+    !!a.turf_id && !(editingTurfId.value && a.turf_id === editingTurfId.value)
   if (!inDraft && !draftCoveredIds.value.has(id)) {
     const f = focusedStreet.value
     const l = locatedStreet.value
-    if (!(f && doorOnStreet(a, f)) && !(l && doorOnStreet(a, l))) return null
+    const onShownStreet = (f && doorOnStreet(a, f)) || (l && doorOnStreet(a, l))
+    // Turf layer on + zoomed to pin range: every door another turf owns
+    // paints as a taken symbol, so someone else's ground reads door-level
+    // just by having the toggle on. Toggle off = only the draft's coverage.
+    const shownAsTaken =
+      ownedElsewhere && showAreas.value && (map?.getZoom() ?? 0) >= PINS_MIN_ZOOM
+    if (!onShownStreet && !shownAsTaken) return null
   }
-  // While editing, doors still stamped to the turf but swept OUT of the
-  // draft show ringless — the map previews the save.
-  const stamped =
-    a.turf_id && !(editingTurfId.value && a.turf_id === editingTurfId.value)
-      ? turfColorById.value.get(a.turf_id)
-      : undefined
-  const outcome = statusByAddress.value.get(id)
+  // Draft members can still carry another turf's stamp (a sub-cut claims
+  // from its parent) — membership wins over the taken symbol.
+  if (ownedElsewhere && !inDraft) {
+    const who = turfById.value.get(a.turf_id!)?.assignee ?? null
+    return {
+      fill: FILL_OPEN,
+      ring: null,
+      inDraft: false,
+      taken: {
+        initial: who ? (who.display_name || who.username).charAt(0).toUpperCase() : '',
+        img: who ? badgeImage(who.avatar) : null,
+      },
+    }
+  }
+  const eff = statusByAddress.value.get(id)
+  let fill = FILL_OPEN
+  let innerRing: string | null = null
+  if (eff === 'signed') fill = FILL_SIGNED
+  else if (partlySignedDoors.value.has(id)) {
+    fill = FILL_SIGNED
+    innerRing = RING_PARTLY
+  } else if (eff === 'didnt_sign' || eff === 'skip' || eff === 'hostile') fill = FILL_CLOSED
   return {
-    fill: outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX,
-    ring: inDraft ? draftColor.value : (stamped ?? null),
+    fill,
+    ring: inDraft ? DRAFT_RING : null,
+    innerRing,
+    outline: fill === FILL_OPEN ? OPEN_OUTLINE : null,
+    ink: fill === FILL_OPEN ? OPEN_INK : '#fff',
     inDraft,
   }
 }
 
 // Any paint-relevant state change repaints the one canvas (rAF-coalesced in
-// the layer).
+// the layer). showAreas is here because the Turf layer toggle now also
+// governs the door-level taken symbols; zoom crossings repaint via the
+// layer's own idle check.
 watch(
-  [draftMemberIds, draftCoveredIds, statusByAddress, expandedSegKey, locatedStreet, turfColorById, editingTurfId],
+  [draftMemberIds, draftCoveredIds, statusByAddress, partlySignedDoors, expandedSegKey, locatedStreet, turfs, editingTurfId, showAreas],
   () => doorLayer?.requestRepaint(),
 )
 
@@ -636,7 +703,7 @@ async function fetchTurfs() {
     supabase
       .from('turfs')
       .select(
-        '*, turf_segments(*), assignee:profiles!turfs_assignee_id_fkey(id, username, display_name), squad:squads!turfs_squad_id_fkey(id, name, squad_date)',
+        '*, turf_segments(*), assignee:profiles!turfs_assignee_id_fkey(id, username, display_name, avatar), squad:squads!turfs_squad_id_fkey(id, name, squad_date)',
       )
       .order('created_at'),
     supabase
@@ -673,16 +740,21 @@ async function fetchKnockStatuses() {
     const rows = await fetchAllRows<HouseholdLatestKnock>((from, to) =>
       supabase.from('household_latest_knock').select('*').order('household_id').range(from, to),
     )
-    // Effective status, not the raw latest outcome — green only when the
-    // whole roster signed, yellow while partly signed (doorStatusOutcome),
-    // so the cutter's fills match Scout exactly. No realtime feed here, so
-    // computing once at fetch time is enough.
-    statusByAddress.value = new Map(
-      rows.map((r) => [
-        r.household_id,
-        doorStatusOutcome(r.outcome, r.signed_count, r.person_count) ?? r.outcome,
-      ]),
-    )
+    // Effective status, not the raw latest outcome (doorStatusOutcome —
+    // green only when the whole roster signed). Partly-signed doors are
+    // tracked separately: doorStatusOutcome folds them into 'maybe', but
+    // the cutter paints them green-with-yellow-ring while a genuine latest
+    // 'maybe' stays white. No realtime feed here, so computing once at
+    // fetch time is enough.
+    const status = new Map<string, KnockOutcome>()
+    const partly = new Set<string>()
+    for (const r of rows) {
+      const eff = doorStatusOutcome(r.outcome, r.signed_count, r.person_count) ?? r.outcome
+      status.set(r.household_id, eff)
+      if (eff === 'maybe' && (r.signed_count ?? 0) > 0) partly.add(r.household_id)
+    }
+    statusByAddress.value = status
+    partlySignedDoors.value = partly
   } catch {
     /* keep previous statuses */
   }
@@ -1037,6 +1109,34 @@ function knockWho(k: DoorKnock): string {
   const by = k.canvasser ? k.canvasser.display_name || k.canvasser.username : ''
   if (k.person?.name && by) return `${k.person.name} · by ${by}`
   return k.person?.name || (by ? `by ${by}` : '')
+}
+
+/** The turf that owns the bubbled door, when it's not the one being edited —
+ * the bubble names it and offers the deliberate "Edit this turf" hop. */
+const doorOwner = computed(() => {
+  const tid = doorInfo.value?.address.turf_id
+  if (!tid || editingTurfId.value === tid) return null
+  return turfById.value.get(tid) ?? null
+})
+
+function ownerAssignment(t: TurfWithMeta): string {
+  if (t.squad) return `squad ${t.squad.name}`
+  if (t.assignee) return `assigned to ${t.assignee.display_name || t.assignee.username}`
+  return 'unassigned'
+}
+
+/** Deliberate switch into editing the tapped door's turf — never a silent
+ * tap-to-switch, and a non-empty draft asks before it's discarded. */
+function editOwnerTurf(t: TurfWithMeta) {
+  if (
+    segments.value.length &&
+    editingTurfId.value !== t.id &&
+    !window.confirm(`Discard the current draft and edit "${t.name}" instead?`)
+  ) {
+    return
+  }
+  doorInfo.value = null
+  editTurf(t)
 }
 
 /** Trim-mode door tap: drop the house from the draft, or restore it. The
@@ -1427,7 +1527,7 @@ function addLocatedStreet(m: { street_name: string; city: string }) {
   snapshotDraft()
   addSegment(m.street_name, m.city, lo, hi, 'both')
   flash(
-    `Added ${m.street_name} ${lo}–${hi} — ${locatedRangeCount.value} doors. Trim it from its pill below, or Undo.`,
+    `Added ${m.street_name} ${lo}–${hi} — ${locatedRangeCount.value} doors. Trim it in the street list below, or Undo.`,
   )
   void materializeStreetPins(m.street_name, m.city, false, true)
 }
@@ -2236,6 +2336,21 @@ onUnmounted(() => {
             <span class="muted">{{ doorInfo.address.city }}</span>
             <button class="door-card-x" aria-label="Close house history" @click="doorInfo = null">✕</button>
           </div>
+          <!-- Which turf owns this door + the deliberate hop into editing
+               it — a taken symbol on the map should always explain itself. -->
+          <div v-if="doorOwner" class="door-card-owner">
+            <span class="door-card-owner-text">
+              In <strong>{{ doorOwner.name }}</strong>
+              <span class="muted"> — {{ ownerAssignment(doorOwner) }}</span>
+            </span>
+            <button
+              v-if="canManage(doorOwner)"
+              class="btn btn-ghost btn-sm door-card-owner-edit"
+              @click="editOwnerTurf(doorOwner)"
+            >
+              Edit this turf
+            </button>
+          </div>
           <!-- Who's registered here, ✓ = has signed — two names with one
                check is exactly why a door paints yellow instead of green. -->
           <div v-if="!doorInfo.loading && doorInfo.roster.length" class="door-card-roster">
@@ -2305,76 +2420,76 @@ onUnmounted(() => {
         </p>
 
         <template v-if="segments.length">
-          <!-- One pill per swept stretch — tap it to fine-tune, ✕ to drop it. -->
-          <div class="seg-pills">
+          <!-- Streets table: one dense row per swept stretch. Range and side
+               edit inline; tapping the row (street name) focuses TRIM mode
+               on that street exactly like the old pill tap. -->
+          <div class="seg-table" role="table" aria-label="Streets in this turf">
+            <div class="seg-thead" role="row">
+              <span role="columnheader">Street</span>
+              <span role="columnheader">Numbers</span>
+              <span role="columnheader">Side</span>
+              <span role="columnheader" class="seg-col-num">Doors</span>
+              <span role="columnheader" aria-label="Remove"></span>
+            </div>
             <div
               v-for="seg in segments"
               :key="seg.key"
-              class="seg-pill"
+              class="seg-row"
               :class="{ open: expandedSegKey === seg.key, empty: !seg.doorCount }"
+              role="row"
+              @click="toggleSegEditor(seg.key)"
             >
-              <button class="seg-pill-main" @click="toggleSegEditor(seg.key)">
-                <span class="seg-pill-street">{{ seg.street_name }}</span>
-                <span class="seg-pill-range">
-                  {{ seg.range_start }}–{{ seg.range_end }}<template v-if="seg.parity !== 'both'"> · {{ seg.parity }}</template>
+              <span class="seg-street" role="cell">
+                <span class="seg-street-name">{{ seg.street_name }}</span>
+                <span v-if="seg.takenCount" class="seg-street-taken">
+                  {{ seg.takenCount }} stay with another turf
                 </span>
-                <span class="seg-pill-count">{{ seg.doorCount }}</span>
-              </button>
+              </span>
+              <span class="seg-range" role="cell" @click.stop>
+                <input
+                  type="number"
+                  class="seg-cell-num"
+                  :value="seg.range_start"
+                  min="0"
+                  :aria-label="`${seg.street_name} range start`"
+                  @change="seg.range_start = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(seg)"
+                />
+                <span class="muted seg-dash">–</span>
+                <input
+                  type="number"
+                  class="seg-cell-num"
+                  :value="seg.range_end"
+                  min="0"
+                  :aria-label="`${seg.street_name} range end`"
+                  @change="seg.range_end = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(seg)"
+                />
+              </span>
+              <span class="seg-side" role="cell" @click.stop>
+                <select
+                  class="seg-side-select"
+                  :value="seg.parity"
+                  :aria-label="`${seg.street_name} — which side of the street`"
+                  @change="onSegmentParityChange(seg, ($event.target as HTMLSelectElement).value)"
+                >
+                  <option value="both">Both</option>
+                  <option value="even">Even</option>
+                  <option value="odd">Odd</option>
+                </select>
+              </span>
+              <span class="seg-count" role="cell">{{ seg.doorCount }}</span>
               <button
-                class="seg-pill-x"
+                class="seg-x"
                 :aria-label="`Remove ${seg.street_name} ${seg.range_start}–${seg.range_end}`"
-                @click="removeSegmentWithUndo(seg)"
+                @click.stop="removeSegmentWithUndo(seg)"
               >
                 ✕
               </button>
             </div>
           </div>
-          <div v-if="expandedSeg" class="seg-editor">
-            <div class="seg-editor-title">
-              <strong>{{ expandedSeg.street_name }}</strong>
-              <span class="muted">{{ expandedSeg.city ?? 'any city' }}</span>
-            </div>
-            <div class="seg-editor-controls">
-              <input
-                type="number"
-                class="seg-num"
-                :value="expandedSeg.range_start"
-                min="0"
-                aria-label="Range start"
-                @change="expandedSeg.range_start = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(expandedSeg)"
-              />
-              <span class="muted">–</span>
-              <input
-                type="number"
-                class="seg-num"
-                :value="expandedSeg.range_end"
-                min="0"
-                aria-label="Range end"
-                @change="expandedSeg.range_end = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(expandedSeg)"
-              />
-              <AppSelect
-                class="seg-parity"
-                small
-                :options="[
-                  { value: 'both', label: 'Both sides' },
-                  { value: 'even', label: 'Even side' },
-                  { value: 'odd', label: 'Odd side' },
-                ]"
-                :model-value="expandedSeg.parity"
-                aria-label="Which side of the street"
-                @update:model-value="onSegmentParityChange(expandedSeg, $event)"
-              />
-              <span class="seg-doors" :class="{ 'seg-doors-empty': !expandedSeg.doorCount }">
-                {{ expandedSeg.doorCount }} doors
-              </span>
-            </div>
-            <p class="muted seg-taken">
-              Tap this street's doors on the map to drop or restore individual houses.
-            </p>
-            <p v-if="expandedSeg.takenCount" class="muted seg-taken">
-              {{ expandedSeg.takenCount }} of these doors already belong to another turf and stay there.
-            </p>
-          </div>
+          <p v-if="expandedSeg" class="muted seg-trim-hint">
+            Trimming {{ expandedSeg.street_name }} — tap its doors on the map to drop or restore
+            each house. Tap the row again when you're done.
+          </p>
         </template>
         <p v-else class="muted empty-note">
           Nothing here yet — type a street name above, tap the match, then Add. Narrow the
@@ -2669,6 +2784,25 @@ onUnmounted(() => {
   font-size: 0.85rem;
 }
 
+/* Ownership line for doors another turf holds — names the turf and offers
+   the deliberate hop into editing it. */
+.door-card-owner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.3rem;
+}
+
+.door-card-owner-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.82rem;
+}
+
+.door-card-owner-edit {
+  flex-shrink: 0;
+}
+
 /* Registered voters at the door; ✓ = signed. The green matches the Signed
    outcome hex on purpose — same meaning as the pin colors. */
 .door-card-roster {
@@ -2872,118 +3006,167 @@ onUnmounted(() => {
   color: var(--draft-color);
 }
 
-/* --- Draft pills: one compact chip per swept stretch --- */
+/* --- Streets table: one dense row per swept stretch (2026-07-24, replaced
+   the pill bubbles — long drafts were a wall of padding). Tuned for phone
+   widths: tight rows, small type, fixed narrow control columns, the street
+   name takes what's left and truncates. --- */
 
-.seg-pills {
+.seg-table {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
+  flex-direction: column;
   margin-bottom: 0.6rem;
-}
-
-.seg-pill {
-  display: inline-flex;
-  align-items: center;
-  border: 1.5px solid color-mix(in srgb, var(--draft-color) 55%, var(--border));
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--draft-color) 10%, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   overflow: hidden;
 }
 
-.seg-pill.open {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--draft-color) 40%, transparent);
+.seg-thead,
+.seg-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 3.4rem 2.1rem 1.9rem;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0 0.25rem 0 0.55rem;
 }
 
-.seg-pill.empty {
-  border-color: var(--danger);
+.seg-thead {
+  min-height: 26px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
 }
 
-.seg-pill-main {
+.seg-row {
+  min-height: 42px;
+  padding-top: 0.2rem;
+  padding-bottom: 0.2rem;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.seg-row + .seg-row {
+  border-top: 1px solid var(--border);
+}
+
+/* The open row is the map's trim target — draft-color accent, like the old
+   open pill. */
+.seg-row.open {
+  background: color-mix(in srgb, var(--draft-color) 10%, var(--surface));
+  box-shadow: inset 3px 0 0 var(--draft-color);
+}
+
+.seg-street {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.seg-street-name {
+  font-weight: 700;
+  font-size: 0.82rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seg-street-taken {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seg-range {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  min-height: 40px;
-  padding: 0 0.15rem 0 0.7rem;
-  border: none;
-  background: transparent;
+  gap: 0.15rem;
+}
+
+.seg-dash {
+  font-size: 0.78rem;
+}
+
+.seg-cell-num {
+  width: 2.9rem;
+  min-height: 34px;
+  padding: 0.15rem 0.25rem;
   font: inherit;
-  color: inherit;
-  cursor: pointer;
-}
-
-.seg-pill-street {
-  font-weight: 700;
-  font-size: 0.85rem;
-  white-space: nowrap;
-}
-
-.seg-pill-range {
   font-size: 0.8rem;
-  color: var(--text-muted);
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.seg-pill-count {
-  min-width: 1.7em;
-  padding: 0.12rem 0.4rem;
-  border-radius: 999px;
-  background: var(--draft-color);
-  color: #fff;
-  font-size: 0.75rem;
-  font-weight: 800;
   text-align: center;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
 
-.seg-pill.empty .seg-pill-count {
-  background: var(--danger);
+.seg-cell-num:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 
-.seg-pill-x {
-  min-height: 40px;
-  padding: 0 0.6rem 0 0.35rem;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
+/* Chrome/Safari draw spinners inside number inputs — dead weight at this
+   width. */
+.seg-cell-num::-webkit-outer-spin-button,
+.seg-cell-num::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.seg-side-select {
+  width: 100%;
+  min-height: 34px;
+  padding: 0.15rem 0.2rem;
   font: inherit;
-  font-size: 0.85rem;
-  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
 
-.seg-pill-x:hover {
+.seg-count {
+  font-size: 0.82rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--draft-color);
+}
+
+.seg-col-num {
+  text-align: right;
+}
+
+.seg-row.empty .seg-count {
   color: var(--danger);
 }
 
-/* Inline editor for whichever pill is open. */
-.seg-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  padding: 0.55rem 0.65rem;
-  margin-bottom: 0.6rem;
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--draft-color);
-  border-radius: var(--radius);
-  background: var(--surface);
+.seg-x {
+  min-height: 38px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0;
 }
 
-.seg-editor-title {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
+.seg-x:hover {
+  color: var(--danger);
 }
 
-.seg-editor-title .muted {
-  font-size: 0.82rem;
+.seg-trim-hint {
+  margin: -0.2rem 0 0.6rem;
+  font-size: 0.8rem;
 }
 
-.seg-editor-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-wrap: wrap;
-}
-
+/* Base number-input style shared with the located search row. */
 .seg-num {
   width: 5.2rem;
   min-height: 40px;
@@ -2999,26 +3182,6 @@ onUnmounted(() => {
 .seg-num:focus {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
-}
-
-.seg-parity {
-  width: auto;
-  min-width: 8.5rem;
-}
-
-.seg-doors {
-  font-size: 0.85rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.seg-doors-empty {
-  color: var(--danger);
-}
-
-.seg-taken {
-  margin: 0.35rem 0 0;
-  font-size: 0.8rem;
 }
 
 .draft-form {

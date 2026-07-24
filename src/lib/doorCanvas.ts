@@ -4,9 +4,10 @@
 // the doors of the street being located/trimmed).
 //
 // Doors paint ONLY when the view's paintFor returns a state for them (the
-// located street and the street being trimmed); everything else is
-// invisible AND untappable. The lasso still hit-tests every door — it
-// selects data, not pixels.
+// draft's covered doors, the located street, the street being trimmed, and
+// — with the Turf layer on at pin zoom — other turfs' doors as "taken"
+// symbols); everything else is invisible AND untappable. The lasso still
+// hit-tests every door — it selects data, not pixels.
 //
 // Rendering stays the VAN/Felt/Mapbox-class approach: everything paints on
 // ONE canvas sized ~2× the viewport, positioned in an OverlayView pane so it
@@ -25,6 +26,13 @@
 // the TARGET zoom while getBounds() still animates, so a mid-zoom repaint
 // computes a misregistered box.
 
+/** Fixed red accent for the taken-door symbol — matches the outcomes' "no"
+ * red, but only ever drawn as a ring/glyph, never a fill. */
+const TAKEN_ACCENT = '#d64545'
+/** The one canvas font (house-number pills) — restored after any glyph draw
+ * that changes it, since repaint() sets it once up front. */
+const PILL_FONT = '700 11px system-ui, sans-serif'
+
 export interface CanvasDoor {
   id: string
   lat: number
@@ -34,12 +42,25 @@ export interface CanvasDoor {
 }
 
 export interface DoorPaintState {
-  /** Dot fill — knock status color. */
+  /** Dot fill — cutter status color (white when there's nothing to say). */
   fill: string
-  /** Turf-membership ring color (draft or saved turf), null for none. */
+  /** Outer membership ring — ONE uniform color for draft doors (2026-07-24;
+   * the per-turf palette rings are gone), null for none. */
   ring: string | null
+  /** Thin status ring tight around the fill — the partly-signed yellow
+   * around a green center. */
+  innerRing?: string | null
+  /** Hairline outline so light (white) fills stay visible on the basemap. */
+  outline?: string | null
+  /** House-number pill text color (defaults to white). */
+  ink?: string
   /** Door is in the current draft — drawn bigger, above plain doors. */
   inDraft: boolean
+  /** Door belongs to a DIFFERENT turf: draw the uniform "taken" symbol — a
+   * hollow red-ringed disc carrying the owner-assignee's avatar/initial (or
+   * a slash when unassigned) — instead of a status dot. Deliberately a
+   * symbol, never a solid red fill, so it can't be read as a closed door. */
+  taken?: { initial: string; img: HTMLImageElement | null } | null
 }
 
 export interface DoorCanvasOptions {
@@ -322,25 +343,38 @@ export class DoorCanvasLayer {
       ctx.fillStyle = fill
       ctx.fill()
     }
-    const pill = (x: number, y: number, text: string, h: number, fill: string, ring: string | null, ringW: number) => {
+    const pill = (x: number, y: number, text: string, h: number, paint: DoorPaintState) => {
       const w = Math.max(h, 10 + text.length * 7)
-      if (ring) {
+      const ringW = 2.5
+      if (paint.ring) {
         rounded(ctx, x - w / 2 - ringW, y - h / 2 - ringW, w + ringW * 2, h + ringW * 2, 9)
-        ctx.fillStyle = ring
+        ctx.fillStyle = paint.ring
         ctx.fill()
       }
       rounded(ctx, x - w / 2 - 1.5, y - h / 2 - 1.5, w + 3, h + 3, 8)
       ctx.fillStyle = '#fff'
       ctx.fill()
       rounded(ctx, x - w / 2, y - h / 2, w, h, 7)
-      ctx.fillStyle = fill
+      ctx.fillStyle = paint.fill
       ctx.fill()
-      ctx.fillStyle = '#fff'
+      if (paint.outline) {
+        rounded(ctx, x - w / 2, y - h / 2, w, h, 7)
+        ctx.strokeStyle = paint.outline
+        ctx.lineWidth = 1
+        ctx.stroke()
+      }
+      if (paint.innerRing) {
+        rounded(ctx, x - w / 2 + 1, y - h / 2 + 1, w - 2, h - 2, 6)
+        ctx.strokeStyle = paint.innerRing
+        ctx.lineWidth = 2
+        ctx.stroke()
+      }
+      ctx.fillStyle = paint.ink ?? '#fff'
       ctx.fillText(text, x, y + 0.5)
     }
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.font = '700 11px system-ui, sans-serif'
+    ctx.font = PILL_FONT
 
     // Painter's order: excluded doors first, draft members above them.
     const late: InternalDoor[] = []
@@ -369,22 +403,84 @@ export class DoorCanvasLayer {
     tiny: boolean,
     numbers: boolean,
     dot: (x: number, y: number, r: number, fill: string) => void,
-    pill: (x: number, y: number, text: string, h: number, fill: string, ring: string | null, ringW: number) => void,
+    pill: (x: number, y: number, text: string, h: number, paint: DoorPaintState) => void,
   ) {
+    if (paint.taken) {
+      // Taken doors stay a symbol at every zoom — their house number matters
+      // less than "not yours", so no number pill.
+      this.paintTaken(ctx, x, y, paint.taken, tiny)
+      return
+    }
     if (tiny) {
-      if (paint.ring) dot(x, y, 4, paint.ring)
-      dot(x, y, 2.5, paint.fill)
+      if (paint.ring) dot(x, y, 4.5, paint.ring)
+      if (paint.innerRing) dot(x, y, 3.2, paint.innerRing)
+      dot(x, y, 2.2, paint.fill)
+      if (paint.outline) strokeCircle(ctx, x, y, 2.2, paint.outline, 1)
       return
     }
     if (numbers && d.house) {
       const h = paint.inDraft ? 20 : 19
-      pill(x, y, d.house, h, paint.fill, paint.ring, 2.5)
+      pill(x, y, d.house, h, paint)
       return
     }
     const r = paint.inDraft ? 8.5 : 6.5
     if (paint.ring) dot(x, y, r + 4, paint.ring)
     dot(x, y, r + 1.5, '#fff')
-    dot(x, y, r, paint.fill)
+    if (paint.innerRing) {
+      // Partly signed: yellow band around the green center.
+      dot(x, y, r, paint.innerRing)
+      dot(x, y, r - 2.5, paint.fill)
+    } else {
+      dot(x, y, r, paint.fill)
+      if (paint.outline) strokeCircle(ctx, x, y, r, paint.outline, 1.2)
+    }
+  }
+
+  /** The "someone else's turf" symbol: a white disc in a red ring — clearly
+   * a marker, never confusable with the solid red closed-door fill. Center:
+   * the owning assignee's avatar (clipped round) or initial, else a slash. */
+  private paintTaken(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    badge: { initial: string; img: HTMLImageElement | null },
+    tiny: boolean,
+  ) {
+    if (tiny) {
+      ctx.beginPath()
+      ctx.arc(x, y, 3.2, 0, Math.PI * 2)
+      ctx.fillStyle = '#fff'
+      ctx.fill()
+      strokeCircle(ctx, x, y, 3.2, TAKEN_ACCENT, 1.6)
+      return
+    }
+    const r = 7.5
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.fillStyle = '#fff'
+    ctx.fill()
+    const img = badge.img
+    if (img && img.complete && img.naturalWidth > 0) {
+      ctx.save()
+      ctx.beginPath()
+      ctx.arc(x, y, r - 1, 0, Math.PI * 2)
+      ctx.clip()
+      ctx.drawImage(img, x - r + 1, y - r + 1, (r - 1) * 2, (r - 1) * 2)
+      ctx.restore()
+    } else if (badge.initial) {
+      ctx.fillStyle = TAKEN_ACCENT
+      ctx.font = '800 9px system-ui, sans-serif'
+      ctx.fillText(badge.initial, x, y + 0.5)
+      ctx.font = PILL_FONT
+    } else {
+      ctx.beginPath()
+      ctx.moveTo(x - r * 0.55, y + r * 0.55)
+      ctx.lineTo(x + r * 0.55, y - r * 0.55)
+      ctx.strokeStyle = TAKEN_ACCENT
+      ctx.lineWidth = 2
+      ctx.stroke()
+    }
+    strokeCircle(ctx, x, y, r, TAKEN_ACCENT, 2)
   }
 
   dispose() {
@@ -392,6 +488,21 @@ export class DoorCanvasLayer {
     if (this.raf) cancelAnimationFrame(this.raf)
     this.overlay.setMap(null)
   }
+}
+
+function strokeCircle(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  color: string,
+  width: number,
+) {
+  ctx.beginPath()
+  ctx.arc(x, y, r, 0, Math.PI * 2)
+  ctx.strokeStyle = color
+  ctx.lineWidth = width
+  ctx.stroke()
 }
 
 function rounded(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
