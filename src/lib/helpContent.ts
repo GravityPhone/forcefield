@@ -309,22 +309,22 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
           'morning ("Not out today" flags turf still aimed at a past day’s squad).',
       },
       {
-        heading: 'Streets, not dots',
+        heading: 'Search, then add',
         body:
-          'The map draws one line per street. Search a street name and tap a match to zoom ' +
-          'to it, then tap the street’s line to take every door on it. Tap a street ' +
-          'already in the turf to trim it: its doors appear as dots (house numbers up ' +
-          'close) and each tap drops or restores that one house. The Lasso button freezes ' +
-          'the map so you can drag a loop — every door inside joins at once. Undo steps ' +
-          'back one gesture at a time; zoomed way out, a tap just zooms you in closer.',
+          'The map starts blank. Type a street name, tap a match to zoom to it (its doors ' +
+          'appear as dots), then "Add to turf" takes every door on it. A street already in ' +
+          'the turf trims from its pill below the map: open the pill and each map tap ' +
+          'drops or restores one house. The Lasso button freezes the map so you can drag ' +
+          'a loop — every door inside joins at once. Undo steps back one gesture at a time.',
       },
       {
-        heading: 'Reading the lines',
+        heading: 'Reading the map',
         body:
-          'Gray streets are unclaimed; a street wearing a turf’s color already belongs to ' +
-          'that turf, and your draft’s streets wear its color as a thick stroke. While ' +
-          'trimming, a door’s fill is its knock status (blue = never knocked) and its ring ' +
-          'is who holds it.',
+          'The Shade button colors each saved turf’s area, and your draft shades in its ' +
+          'own color as you build. While a street is showing, a door’s fill is its knock ' +
+          'status (blue = never knocked) and its ring is who holds it. Existing turfs live ' +
+          'in the dropdown at the bottom — picking one zooms to it and opens its ' +
+          'management card (edit, delete, reassign).',
       },
       {
         heading: 'Sub-turfs',

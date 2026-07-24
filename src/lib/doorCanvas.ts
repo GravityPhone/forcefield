@@ -1,19 +1,19 @@
-// One-canvas street/door renderer for the turf cutter (street-first rework
-// 2026-07-23; canvas architecture from earlier the same day).
+// One-canvas door renderer for the turf cutter (2026-07-23; slimmed to
+// doors-only 2026-07-24 when the derived street lines came out as squiggles
+// that didn't sit on the real roads — the map now stays blank except for
+// the doors of the street being located/trimmed).
 //
-// STREETS are the primary objects now, not doors: each street draws as one
-// smoothed line through its geocoded doors (colored by turf ownership), and
-// tapping is hit-tested against street lines. Individual door dots paint
-// ONLY for the street being trimmed (the view's paintFor returns null for
-// everything else), so the map reads as a street network instead of a
-// 10k-dot cloud.
+// Doors paint ONLY when the view's paintFor returns a state for them (the
+// located street and the street being trimmed); everything else is
+// invisible AND untappable. The lasso still hit-tests every door — it
+// selects data, not pixels.
 //
 // Rendering stays the VAN/Felt/Mapbox-class approach: everything paints on
 // ONE canvas sized ~2× the viewport, positioned in an OverlayView pane so it
 // rides map pans for free. A full repaint is a few milliseconds, so state
 // changes just repaint (rAF-coalesced). Hit testing runs in Web-Mercator
-// "world" coordinates (precomputed per door / per street point) off the
-// map's own click events — the canvas never intercepts pointer events.
+// "world" coordinates (precomputed per door) off the map's own click events
+// — the canvas never intercepts pointer events.
 //
 // Zoom fix (the "dots drift while zooming" bug): during a zoom animation the
 // painted bitmap is at the OLD scale, and repositioning only its top-left
@@ -42,48 +42,20 @@ export interface DoorPaintState {
   inDraft: boolean
 }
 
-export interface WorldPt {
-  wx: number
-  wy: number
-}
-
-/** One colored stretch of a street line (streets split into runs where turf
- * ownership changes; draft strokes are runs too). */
-export interface StreetRun {
-  color: string
-  /** Stroke width in CSS px at full zoom — the layer thins it when zoomed
-   * out. */
-  width: number
-  pts: WorldPt[]
-}
-
-export interface CanvasStreet {
-  /** `NAME|CITY` — what streetAt() returns. */
-  key: string
-  runs: StreetRun[]
-}
-
 export interface DoorCanvasOptions {
-  /** Below this zoom trimmed-street doors draw as tiny dots (no numbers). */
+  /** Below this zoom painted doors draw as tiny dots (no numbers). */
   minPinZoom: number
   /** House-number pills need at least this zoom. */
   numbersMinZoom: number
   /** Paint state for a door, or null to skip it entirely — unpainted doors
-   * are also invisible to doorAt(), so only the focused street is tappable
-   * door-by-door. */
+   * are also invisible to doorAt(), so only the located/trimmed street is
+   * tappable door-by-door. */
   paintFor(id: string): DoorPaintState | null
 }
 
 interface InternalDoor extends CanvasDoor {
   wx: number
   wy: number
-}
-
-interface InternalStreet extends CanvasStreet {
-  wxMin: number
-  wxMax: number
-  wyMin: number
-  wyMax: number
 }
 
 /** Web-Mercator world coords, 256-unit world (Google's tile space, zoom 0). */
@@ -93,30 +65,6 @@ function worldX(lng: number): number {
 function worldY(lat: number): number {
   const s = Math.min(Math.max(Math.sin((lat * Math.PI) / 180), -0.9999), 0.9999)
   return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * 256
-}
-
-export function worldPoint(lat: number, lng: number): WorldPt {
-  return { wx: worldX(lng), wy: worldY(lat) }
-}
-
-/** Moving-average smoothing for street paths — doors alternate sides of the
- * street, so the raw house-number-ordered polyline zig-zags; averaging pulls
- * it onto a centerline while still following curves. Endpoints stay exact so
- * the line spans the full street (the window shrinks near the ends). */
-export function smoothWorldPath(pts: WorldPt[], halfWindow = 2): WorldPt[] {
-  if (pts.length <= 2) return pts
-  const out: WorldPt[] = []
-  for (let i = 0; i < pts.length; i++) {
-    const k = Math.min(halfWindow, i, pts.length - 1 - i)
-    let sx = 0
-    let sy = 0
-    for (let j = i - k; j <= i + k; j++) {
-      sx += pts[j].wx
-      sy += pts[j].wy
-    }
-    out.push({ wx: sx / (2 * k + 1), wy: sy / (2 * k + 1) })
-  }
-  return out
 }
 
 /** How far past the viewport the canvas paints, as a fraction of the view
@@ -129,8 +77,6 @@ export class DoorCanvasLayer {
   private opts: DoorCanvasOptions
   private canvas: HTMLCanvasElement | null = null
   private doors = new Map<string, InternalDoor>()
-  private streets: InternalStreet[] = []
-  private draftRuns: StreetRun[] = []
   private raf = 0
   private disposed = false
   // Painted-region state: reposition is valid while the view stays inside
@@ -179,32 +125,6 @@ export class DoorCanvasLayer {
 
   upsertDoor(d: CanvasDoor) {
     this.doors.set(d.id, { ...d, wx: worldX(d.lng), wy: worldY(d.lat) })
-  }
-
-  /** Replace the street network (base lines, colored by ownership). */
-  setStreets(list: CanvasStreet[]) {
-    this.streets = list.map((s) => {
-      let wxMin = Infinity
-      let wxMax = -Infinity
-      let wyMin = Infinity
-      let wyMax = -Infinity
-      for (const run of s.runs) {
-        for (const p of run.pts) {
-          if (p.wx < wxMin) wxMin = p.wx
-          if (p.wx > wxMax) wxMax = p.wx
-          if (p.wy < wyMin) wyMin = p.wy
-          if (p.wy > wyMax) wyMax = p.wy
-        }
-      }
-      return { ...s, wxMin, wxMax, wyMin, wyMax }
-    })
-    this.requestRepaint()
-  }
-
-  /** Replace the draft strokes (drawn above the base street lines). */
-  setDraftRuns(runs: StreetRun[]) {
-    this.draftRuns = runs
-    this.requestRepaint()
   }
 
   /** Re-anchor (and mid-zoom, re-scale) the canvas to the live projection.
@@ -257,7 +177,7 @@ export class DoorCanvasLayer {
   }
 
   /** Nearest PAINTED door within `pxRadius` screen pixels, or null. Doors
-   * whose paintFor is null (everything off the focused street) don't count. */
+   * whose paintFor is null don't count. */
   doorAt(latLng: google.maps.LatLng, pxRadius: number): string | null {
     const zoom = this.map.getZoom()
     if (zoom == null) return null
@@ -277,49 +197,6 @@ export class DoorCanvasLayer {
       if (dist <= bestD) {
         bestD = dist
         best = d.id
-      }
-    }
-    return best
-  }
-
-  /** The street whose line passes within `pxRadius` screen pixels of the
-   * point (nearest wins), or null. */
-  streetAt(latLng: google.maps.LatLng, pxRadius: number): string | null {
-    const zoom = this.map.getZoom()
-    if (zoom == null) return null
-    const scale = 2 ** zoom
-    const rw = pxRadius / scale
-    const tx = worldX(latLng.lng())
-    const ty = worldY(latLng.lat())
-    let best: string | null = null
-    let bestD = rw * rw
-    for (const s of this.streets) {
-      if (
-        tx < s.wxMin - rw ||
-        tx > s.wxMax + rw ||
-        ty < s.wyMin - rw ||
-        ty > s.wyMax + rw
-      )
-        continue
-      for (const run of s.runs) {
-        const pts = run.pts
-        if (pts.length === 1) {
-          const dx = pts[0].wx - tx
-          const dy = pts[0].wy - ty
-          const dist = dx * dx + dy * dy
-          if (dist <= bestD) {
-            bestD = dist
-            best = s.key
-          }
-          continue
-        }
-        for (let i = 1; i < pts.length; i++) {
-          const dist = segDistSq(tx, ty, pts[i - 1], pts[i])
-          if (dist <= bestD) {
-            bestD = dist
-            best = s.key
-          }
-        }
       }
     }
     return best
@@ -423,34 +300,6 @@ export class DoorCanvasLayer {
       ctx.fillStyle = fill
       ctx.fill()
     }
-
-    // --- Street lines: base network first, then draft strokes on top. ---
-    // Far out the lines thin so the county reads as a road web, not spaghetti.
-    const widthScale = zoom >= 16 ? 1 : zoom >= 14 ? 0.75 : zoom >= 12 ? 0.5 : 0.35
-    ctx.lineCap = 'round'
-    ctx.lineJoin = 'round'
-    const drawRun = (run: StreetRun) => {
-      const w = Math.max(1.25, run.width * widthScale)
-      const pts = run.pts
-      if (!pts.length) return
-      if (pts.length === 1) {
-        dot(px(pts[0].wx), py(pts[0].wy), w / 2 + 1, run.color)
-        return
-      }
-      ctx.beginPath()
-      ctx.moveTo(px(pts[0].wx), py(pts[0].wy))
-      for (let i = 1; i < pts.length; i++) ctx.lineTo(px(pts[i].wx), py(pts[i].wy))
-      ctx.strokeStyle = run.color
-      ctx.lineWidth = w
-      ctx.stroke()
-    }
-    for (const s of this.streets) {
-      if (s.wxMax < wxMin || s.wxMin > wxMax || s.wyMax < wyMin || s.wyMin > wyMax) continue
-      for (const run of s.runs) drawRun(run)
-    }
-    for (const run of this.draftRuns) drawRun(run)
-
-    // --- Doors: only the focused street's (paintFor null skips the rest). ---
     const pill = (x: number, y: number, text: string, h: number, fill: string, ring: string | null, ringW: number) => {
       const w = Math.max(h, 10 + text.length * 7)
       if (ring) {
@@ -521,18 +370,6 @@ export class DoorCanvasLayer {
     if (this.raf) cancelAnimationFrame(this.raf)
     this.overlay.setMap(null)
   }
-}
-
-/** Squared distance (world units) from a point to a segment. */
-function segDistSq(tx: number, ty: number, a: WorldPt, b: WorldPt): number {
-  const dx = b.wx - a.wx
-  const dy = b.wy - a.wy
-  const lenSq = dx * dx + dy * dy
-  let t = lenSq ? ((tx - a.wx) * dx + (ty - a.wy) * dy) / lenSq : 0
-  t = Math.max(0, Math.min(1, t))
-  const px = a.wx + t * dx - tx
-  const py = a.wy + t * dy - ty
-  return px * px + py * py
 }
 
 function rounded(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {

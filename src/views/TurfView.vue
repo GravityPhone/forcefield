@@ -1,13 +1,15 @@
 <script setup lang="ts">
-// Turf cutter, STREET-FIRST (2026-07-23 rework): the map renders the street
-// network — one smoothed line per street through its geocoded doors, colored
-// by turf ownership — and whole streets are the unit of work. Search a
-// street to zoom to it, tap its line to take every door on it, tap a drafted
-// street again to trim it: only then do that one street's doors appear as
-// tappable dots (tap to drop/restore a house). The Lasso circles a whole
-// patch at once. No per-door pins otherwise, no anchor taps, no hold or
-// double-tap gestures, no global side filter — the pill editor per street
-// still has range numbers and even/odd.
+// Turf cutter, SEARCH-FIRST (2026-07-24 rework): the map starts BLANK —
+// just the basemap (plus optional turf-area shading). Lines derived from
+// door geocodes never sat on the real roads, so nothing street-shaped is
+// drawn at all. The flow: type a street name, tap a match (the map zooms to
+// it and its doors appear as dots), then tap "Add to turf" on the match to
+// take every door. A street already in the draft trims from its pill: the
+// open pill editor paints that street's doors and each map tap drops or
+// restores one house. The Lasso still circles a whole patch at once.
+// Existing turfs live behind ONE dropdown — picking a turf zooms to it and
+// shows a single compact management card (edit / delete / reassign), not a
+// long list.
 //
 // Sweeps stack into a draft turf that gets a name and an assignee: a squad
 // (the day crew sorts out who takes what) or a single canvasser. Saving
@@ -50,8 +52,8 @@ import {
   writeTurfShadeMode,
 } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
-import { DoorCanvasLayer, smoothWorldPath, worldPoint } from '@/lib/doorCanvas'
-import type { CanvasStreet, DoorPaintState, StreetRun, WorldPt } from '@/lib/doorCanvas'
+import { DoorCanvasLayer } from '@/lib/doorCanvas'
+import type { DoorPaintState } from '@/lib/doorCanvas'
 import { geocodeAndCache, geocodeMissing } from '@/lib/geocode'
 import { localToday } from '@/lib/day'
 import { OUTCOME_HEX, PIN_DEFAULT_HEX, doorStatusOutcome } from '@/lib/outcomes'
@@ -140,12 +142,8 @@ const statusByAddress = ref<Map<string, KnockOutcome>>(new Map())
 const NUMBERS_MIN_ZOOM = 16
 /** Below this zoom trim-mode doors are tiny dots and door taps don't land. */
 const PINS_MIN_ZOOM = 15
-/** Below this zoom a tap means "take me closer", not "take that street". */
-const STREET_TAP_MIN_ZOOM = 13
 /** How close (screen px) a tap must land to a door to count as tapping it. */
 const TAP_RADIUS_PX = 22
-/** How close (screen px) a tap must land to a street line to take it. */
-const STREET_TAP_RADIUS_PX = 18
 
 // --- Draft turf state ---
 const draftName = ref('')
@@ -161,6 +159,9 @@ const focusedStreet = computed(() =>
     ? { name: expandedSeg.value.street_name, city: expandedSeg.value.city }
     : null,
 )
+/** The street last picked from search — its doors paint so "which houses is
+ * this?" has an answer on an otherwise blank map. */
+const locatedStreet = ref<{ name: string; city: string | null } | null>(null)
 
 function toggleSegEditor(key: string) {
   if (expandedSegKey.value === key) {
@@ -198,9 +199,6 @@ const streetsByName = new Map<string, AddressLite[]>()
 /** Prebuilt search list: one row per street+city with count and span. */
 let streetSummaries: { street_name: string; city: string; count: number; lo: number; hi: number }[] = []
 
-/** Draft stroke per segment: a smoothed world-coord path drawn on the door
- * canvas above the base street lines. */
-const segRuns = new Map<string, WorldPt[]>()
 let segKeyCounter = 0
 /** Set on teardown so a background geocode sweep stops writing to a
  * disposed map. */
@@ -415,7 +413,7 @@ const hint = computed(() => {
     return `Trimming ${focusedStreet.value.name} — tap its doors on the map to drop or restore each house. Tap open map (or the pill) when you're done.`
   }
   const base =
-    'Search or find a street, then tap its line to take every door on it. Tap a street already in the turf to trim it house by house, or circle a whole patch with Lasso.'
+    'Type a street name below, tap a match to see it on the map, then "Add to turf" takes every door on it. Tap a pill to trim a street house by house, or circle a patch with Lasso.'
   return isSubcutter.value
     ? `${base} Only streets inside your assigned turf count toward a sub-turf.`
     : base
@@ -517,15 +515,22 @@ function segmentLabel(s: { street_name: string; range_start: number; range_end: 
 }
 
 // --- Door canvas paint state ---
-// Doors paint ONLY for the street being trimmed (null = skip): the map is a
-// street network, not a dot cloud. Fill = knock status, ring = membership.
+// The map stays blank except for the doors of the located street (picked
+// from search) and the street being trimmed (open pill editor). Fill =
+// knock status, ring = membership.
+
+function doorOnStreet(a: AddressLite, s: { name: string; city: string | null }): boolean {
+  if (streetNameOf(a.street) !== s.name) return false
+  return !s.city || a.city.toUpperCase() === s.city.toUpperCase()
+}
 
 function paintForDoor(id: string): DoorPaintState | null {
   const f = focusedStreet.value
-  if (!f) return null
+  const l = locatedStreet.value
+  if (!f && !l) return null
   const a = addressById.get(id)
-  if (!a || streetNameOf(a.street) !== f.name) return null
-  if (f.city && a.city.toUpperCase() !== f.city.toUpperCase()) return null
+  if (!a) return null
+  if (!(f && doorOnStreet(a, f)) && !(l && doorOnStreet(a, l))) return null
   const inDraft = draftMemberIds.value.has(id)
   // While editing, doors still stamped to the turf but swept OUT of the
   // draft show ringless — the map previews the save.
@@ -543,9 +548,9 @@ function paintForDoor(id: string): DoorPaintState | null {
 
 // Any paint-relevant state change repaints the one canvas (rAF-coalesced in
 // the layer).
-watch([draftMemberIds, statusByAddress, expandedSegKey], () => doorLayer?.requestRepaint())
-// Ownership colors on the base street lines track turf data and edit mode.
-watch([turfColorById, editingTurfId], () => rebuildStreets())
+watch([draftMemberIds, statusByAddress, expandedSegKey, locatedStreet, turfColorById, editingTurfId], () =>
+  doorLayer?.requestRepaint(),
+)
 
 function canvasDoorOf(a: AddressLite) {
   const n = houseNumber(a.street)
@@ -556,88 +561,6 @@ function* locatedCanvasDoors() {
   for (const a of addressById.values()) {
     if (a.lat != null && a.lng != null) yield canvasDoorOf(a)
   }
-}
-
-// --- Street network: one smoothed line per street, split into colored runs
-// where turf ownership changes (a saved turf's stretch wears its color, the
-// edited turf's stretches read as unclaimed — the draft strokes preview the
-// save). Rebuilt only when address/turf data or edit mode changes. ---
-
-/** Unclaimed street line — neutral slate, readable on the beige basemap. */
-const STREET_BASE_COLOR = 'rgba(100, 116, 139, 0.55)'
-const STREET_WIDTH = 5
-const DRAFT_STROKE_WIDTH = 8
-
-function hexToRgba(hex: string, alpha: number): string {
-  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
-  if (!m) return hex
-  const v = parseInt(m[1], 16)
-  return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${alpha})`
-}
-
-function byHouseNumber(a: AddressLite, b: AddressLite) {
-  return houseNumber(a.street) - houseNumber(b.street)
-}
-
-function smoothedRunOf(rows: AddressLite[]): WorldPt[] {
-  return smoothWorldPath(rows.map((a) => worldPoint(a.lat!, a.lng!)))
-}
-
-function rebuildStreets() {
-  if (!doorLayer) return
-  const streets: CanvasStreet[] = []
-  for (const [key, rows] of streetsByKey) {
-    const located = rows.filter((a) => a.lat != null && a.lng != null).sort(byHouseNumber)
-    if (!located.length) continue
-    // Ownership of a door for line-coloring: the edited turf counts as
-    // unclaimed (its live shape is the draft stroke).
-    const turfOf = (a: AddressLite) =>
-      a.turf_id && !(editingTurfId.value && a.turf_id === editingTurfId.value)
-        ? a.turf_id
-        : null
-    const runs: StreetRun[] = []
-    let cur: AddressLite[] = []
-    let curTurf: string | null = null
-    const flush = () => {
-      if (!cur.length) return
-      const color = curTurf
-        ? hexToRgba(turfColorById.value.get(curTurf) ?? '#64748b', 0.6)
-        : STREET_BASE_COLOR
-      runs.push({ color, width: STREET_WIDTH, pts: smoothedRunOf(cur) })
-    }
-    for (const a of located) {
-      const t = turfOf(a)
-      if (!cur.length) {
-        cur = [a]
-        curTurf = t
-        continue
-      }
-      if (t !== curTurf) {
-        const bridge = cur[cur.length - 1]
-        flush()
-        // Start the next run at the previous door so the line stays
-        // continuous across the ownership boundary.
-        cur = [bridge, a]
-        curTurf = t
-      } else {
-        cur.push(a)
-      }
-    }
-    flush()
-    streets.push({ key, runs })
-  }
-  doorLayer.setStreets(streets)
-}
-
-/** Push the draft strokes (one per segment) to the canvas. */
-function pushDraftRuns() {
-  doorLayer?.setDraftRuns(
-    [...segRuns.values()].map((pts) => ({
-      color: draftColor.value,
-      width: DRAFT_STROKE_WIDTH,
-      pts,
-    })),
-  )
 }
 
 // --- Data fetches ---
@@ -859,7 +782,6 @@ async function loadCutterData() {
     defaultDraftParent()
     indexAddresses(rows)
     doorLayer?.setDoors(locatedCanvasDoors())
-    rebuildStreets()
     buildSavedAreas()
   } catch {
     loadError.value = 'Could not load the street data. Check your connection and reload.'
@@ -899,7 +821,6 @@ async function reloadAll() {
   ])
   indexAddresses(rows)
   doorLayer?.setDoors(locatedCanvasDoors())
-  rebuildStreets()
   defaultDraftParent()
   buildSavedAreas()
 }
@@ -931,10 +852,7 @@ async function geocodeTurfDoors(turfId: string) {
     },
     () => unmounted,
   )
-  if (!unmounted) {
-    buildSavedAreas()
-    rebuildStreets()
-  }
+  if (!unmounted) buildSavedAreas()
 }
 
 // --- Draft shading: one angular area for the whole draft, rebuilt in the
@@ -969,52 +887,16 @@ function rebuildDraftShade() {
 }
 
 // --- Tapping (all synchronous — the draft lives entirely in memory) ---
-// One gesture, contextual: tap a street line to take the whole street; tap a
-// street already in the draft to open trim mode; in trim mode, tap that
-// street's doors to drop/restore each house. Tapping open map exits trim.
+// The map takes no street-picking taps anymore (adding is the search flow's
+// "Add to turf" button). Taps only matter in trim mode: tap the focused
+// street's doors to drop/restore each house; tap open map to exit trim.
 
 function onMapClick(e: google.maps.MapMouseEvent) {
-  if (!e.latLng || !map) return
-  const zoom = map.getZoom() ?? 14
-  if (zoom < STREET_TAP_MIN_ZOOM) {
-    // Too far out to pick a street — a tap means "take me closer".
-    map.panTo(e.latLng)
-    map.setZoom(Math.min(zoom + 2, STREET_TAP_MIN_ZOOM + 1))
-    return
-  }
-  // Trim mode: the focused street's doors are the first-class tap targets.
-  if (focusedStreet.value && zoom >= PINS_MIN_ZOOM) {
-    const id = doorLayer?.doorAt(e.latLng, TAP_RADIUS_PX)
-    if (id) {
-      toggleTrimDoor(id)
-      return
-    }
-  }
-  const key = doorLayer?.streetAt(e.latLng, STREET_TAP_RADIUS_PX)
-  if (!key) {
-    // Open map: nothing to take — just close trim mode if it was on.
-    expandedSegKey.value = null
-    return
-  }
-  const rows = streetsByKey.get(key)
-  if (!rows?.length) return
-  const name = streetNameOf(rows[0].street)
-  const city = rows[0].city
-  const f = focusedStreet.value
-  if (f && f.name === name && (!f.city || f.city.toUpperCase() === city.toUpperCase())) {
-    return // already trimming this street — door taps do the work
-  }
-  const already = matchingSegments(name, city)
-  if (already.length) {
-    // Street's in the draft — switch trim mode onto it.
-    expandedSegKey.value = already[0].key
-    ensureKnockStatuses()
-    void materializeStreetPins(name, city, false)
-    flash(`Trimming ${name} — tap its doors to drop or restore each house.`)
-    return
-  }
-  expandedSegKey.value = null
-  sweepWholeStreet(name, city)
+  if (!e.latLng || !map || !focusedStreet.value) return
+  if ((map.getZoom() ?? 14) < PINS_MIN_ZOOM) return
+  const id = doorLayer?.doorAt(e.latLng, TAP_RADIUS_PX)
+  if (id) toggleTrimDoor(id)
+  else expandedSegKey.value = null
 }
 
 /** Trim-mode door tap: drop the house from the draft, or restore it. The
@@ -1024,6 +906,9 @@ function toggleTrimDoor(addressId: string) {
   const a = addressById.get(addressId)
   const f = focusedStreet.value
   if (!a || !f) return
+  // Painted doors can also belong to the search-located street — trimming
+  // only ever edits the focused one.
+  if (!doorOnStreet(a, f)) return
   const name = streetNameOf(a.street)
   const city = f.city ?? a.city
   const n = houseNumber(a.street)
@@ -1078,11 +963,6 @@ function computeSegment(seg: DraftSegment) {
   seg.memberIds = free.map((a) => a.id)
   seg.doorCount = free.length
   seg.takenCount = members.length - free.length
-
-  const located = free.filter((a) => a.lat != null && a.lng != null).sort(byHouseNumber)
-  if (located.length) segRuns.set(seg.key, smoothedRunOf(located))
-  else segRuns.delete(seg.key)
-  pushDraftRuns()
   scheduleDraftShade()
 }
 
@@ -1129,8 +1009,6 @@ function addSegment(
 
 function removeSegment(seg: DraftSegment) {
   segments.value = segments.value.filter((s) => s.key !== seg.key)
-  segRuns.delete(seg.key)
-  pushDraftRuns()
   if (expandedSegKey.value === seg.key) expandedSegKey.value = null
   scheduleDraftShade()
 }
@@ -1185,11 +1063,9 @@ function snapshotDraft() {
   if (undoStack.value.length > UNDO_CAP) undoStack.value.shift()
 }
 
-/** Clear every draft stroke/shade from the map (the segment list itself is
- * the caller's business). */
+/** Clear the draft shading from the map (the segment list itself is the
+ * caller's business). */
 function wipeDraftDrawing() {
-  segRuns.clear()
-  pushDraftRuns()
   draftData?.forEach((f) => draftData!.remove(f))
 }
 
@@ -1291,7 +1167,7 @@ function sweepWholeStreet(streetName: string, city: string | null) {
   const nums = rows.map((r) => houseNumber(r.street))
   snapshotDraft()
   addSegment(streetName, city, Math.min(...nums), Math.max(...nums), 'both')
-  flash(`Added ${streetName} — ${rows.length} doors. Tap it again to trim it, or Undo.`)
+  flash(`Added ${streetName} — ${rows.length} doors. Trim it from its pill below, or Undo.`)
   void materializeStreetPins(streetName, city, false)
 }
 
@@ -1330,7 +1206,6 @@ async function materializeStreetPins(streetName: string, city: string | null, zo
   }
   if (added) {
     for (const seg of matchingSegments(streetName, city)) computeSegment(seg)
-    rebuildStreets()
     if (zoomTo) fitToStreet()
   }
 }
@@ -1348,6 +1223,7 @@ function onStreetInput(value: string) {
   const q = value.trim().toUpperCase()
   if (q.length < 2) {
     streetMatches.value = []
+    locatedStreet.value = null
     return
   }
   streetMatches.value = streetSummaries
@@ -1356,13 +1232,30 @@ function onStreetInput(value: string) {
     .slice(0, 8)
 }
 
-/** Tapping a search result zooms the map to that street (geocoding a capped
- * batch of unmapped doors so the line is complete). Taking it stays a map
- * tap — the search only ever locates. */
+/** Is this match the one currently located (its doors on the map, its row
+ * wearing the Add button)? */
+function isLocated(m: { street_name: string; city: string }): boolean {
+  const l = locatedStreet.value
+  return !!l && l.name === m.street_name && (l.city ?? '').toUpperCase() === m.city.toUpperCase()
+}
+
+function streetInDraft(m: { street_name: string; city: string }): boolean {
+  return matchingSegments(m.street_name, m.city).length > 0
+}
+
+/** Tapping a search result LOCATES the street: zooms the map to it and
+ * paints its doors (geocoding a capped batch of unmapped ones). Taking it
+ * is the explicit "Add to turf" button that appears on the located row. */
 function locateStreet(m: { street_name: string; city: string }) {
+  locatedStreet.value = { name: m.street_name, city: m.city }
   mapEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-  flash(`Showing ${m.street_name} — tap its line on the map to take the whole street.`)
   void materializeStreetPins(m.street_name, m.city, true)
+}
+
+/** The located row's "Add to turf": every door on the street joins the
+ * draft (the turf being edited, or the new one being built). */
+function addLocatedStreet(m: { street_name: string; city: string }) {
+  sweepWholeStreet(m.street_name, m.city)
 }
 
 // --- Lasso: VAN-style region selection. Arm it, drag a loop, and every door
@@ -1598,6 +1491,27 @@ async function saveTurf() {
   }
 }
 
+// --- Turf picker: the old always-rendered turf list is ONE dropdown now
+// (2026-07-24, "we don't need to see all of the turfs at the bottom").
+// Picking a turf zooms the map to it and opens a single management card. ---
+
+const selectedTurfId = ref<string | null>(null)
+const selectedTurf = computed(
+  () => listTurfs.value.find((t) => t.id === selectedTurfId.value) ?? null,
+)
+const turfPickOptions = computed<SelectOption[]>(() => [
+  { value: 'none', label: 'Look at a turf…' },
+  ...listTurfs.value.map((t) => ({
+    value: t.id,
+    label: `${t.parent_turf_id ? '↳ ' : ''}${t.name}`,
+  })),
+])
+
+function onPickTurf(value: string) {
+  selectedTurfId.value = value === 'none' ? null : value
+  if (selectedTurfId.value) focusTurf(selectedTurfId.value)
+}
+
 function editTurf(t: TurfWithMeta) {
   clearDraft()
   undoStack.value = []
@@ -1620,6 +1534,7 @@ async function deleteTurf(t: TurfWithMeta) {
   if (!window.confirm(`Delete ${t.parent_turf_id ? 'sub-turf' : 'turf'} "${t.name}"? ${consequence}`)) return
   if (editingTurfId.value === t.id) clearDraft()
   await supabase.from('turfs').delete().eq('id', t.id)
+  if (selectedTurfId.value === t.id) selectedTurfId.value = null
   await reloadAll()
 }
 
@@ -1632,6 +1547,7 @@ function focusTurf(turfId: string) {
     }
   }
   if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
+  else if (pinsLoading.value) flash('Still loading street data — try that again in a moment.')
 }
 
 const draftCardEl = ref<HTMLElement | null>(null)
@@ -1650,7 +1566,6 @@ onMounted(() => {
 onUnmounted(() => {
   unmounted = true
   doorLayer?.dispose()
-  segRuns.clear()
   areasLayer?.dispose()
   cityLayer?.dispose()
   draftData?.setMap(null)
@@ -1681,26 +1596,38 @@ onUnmounted(() => {
         <p class="sweep-hint">{{ hint }}</p>
       </div>
 
-      <!-- Find a street by name: tap a match and the map zooms to it —
-           taking it is one tap on its line. -->
+      <!-- Find a street by name: tap a match to zoom to it and see its
+           doors; the located row grows the explicit "Add to turf" button. -->
       <input
         :value="streetQuery"
         class="street-search"
         type="search"
-        placeholder="Find a street — tap a match to zoom to it"
+        placeholder="Type a street name to start"
         aria-label="Search streets"
         @input="onStreetInput(($event.target as HTMLInputElement).value)"
       />
       <div v-if="streetMatches.length" class="street-matches">
-        <button
+        <div
           v-for="m in streetMatches"
           :key="m.street_name + m.city"
           class="street-match"
-          @click="locateStreet(m)"
+          :class="{ located: isLocated(m) }"
         >
-          <span class="street-match-name">{{ m.street_name }}</span>
-          <span class="muted">{{ m.city }} · {{ m.count }} doors · {{ m.lo }}–{{ m.hi }}</span>
-        </button>
+          <button class="street-match-main" @click="locateStreet(m)">
+            <span class="street-match-name">{{ m.street_name }}</span>
+            <span class="muted">{{ m.city }} · {{ m.count }} doors · {{ m.lo }}–{{ m.hi }}</span>
+          </button>
+          <span v-if="isLocated(m) && streetInDraft(m)" class="muted street-match-in">
+            In this turf ✓
+          </span>
+          <button
+            v-else-if="isLocated(m)"
+            class="btn btn-sm btn-primary street-match-add"
+            @click="addLocatedStreet(m)"
+          >
+            Add to turf
+          </button>
+        </div>
       </div>
 
       <div class="map-wrap">
@@ -1877,8 +1804,8 @@ onUnmounted(() => {
           </div>
         </template>
         <p v-else class="muted empty-note">
-          Nothing here yet — search a street above or tap one on the map to take every door on
-          it, or circle a whole patch with Lasso.
+          Nothing here yet — type a street name above, tap the match, then "Add to turf". Or
+          circle a patch with Lasso.
         </p>
 
         <div class="draft-form">
@@ -1914,7 +1841,8 @@ onUnmounted(() => {
         </template>
       </div>
 
-      <!-- Existing turfs -->
+      <!-- Existing turfs: one dropdown instead of a long list. Picking a
+           turf zooms the map to it and opens its management card. -->
       <div class="card">
         <h3>{{ isSubcutter ? 'Your turf' : 'Turfs' }}</h3>
         <p v-if="!listTurfs.length" class="muted empty-note">
@@ -1924,43 +1852,50 @@ onUnmounted(() => {
               : 'No turf cut yet. Squads without turf just pick their own streets.'
           }}
         </p>
-        <div v-else class="turf-list">
-          <div v-for="t in listTurfs" :key="t.id" class="turf-row" :class="{ 'turf-row-sub': t.parent_turf_id }">
+        <template v-else>
+          <AppSelect
+            class="turf-pick"
+            :options="turfPickOptions"
+            :model-value="selectedTurfId ?? 'none'"
+            aria-label="Zoom to a turf"
+            @update:model-value="onPickTurf"
+          />
+          <div v-if="selectedTurf" class="turf-row">
             <div class="turf-row-top">
-              <button class="turf-row-main" @click="focusTurf(t.id)">
-                <span class="turf-swatch" :style="{ background: t.color }" aria-hidden="true"></span>
+              <button class="turf-row-main" @click="focusTurf(selectedTurf.id)">
+                <span class="turf-swatch" :style="{ background: selectedTurf.color }" aria-hidden="true"></span>
                 <span class="turf-row-text">
                   <span class="turf-name">
-                    {{ t.name }}
-                    <span v-if="t.parent_turf_id" class="muted turf-sub-tag">↳ inside {{ parentName(t) }}</span>
+                    {{ selectedTurf.name }}
+                    <span v-if="selectedTurf.parent_turf_id" class="muted turf-sub-tag">↳ inside {{ parentName(selectedTurf) }}</span>
                   </span>
                   <span class="muted turf-segments">
-                    {{ t.turf_segments.map(segmentLabel).join(' · ') || 'No street ranges' }}
+                    {{ selectedTurf.turf_segments.map(segmentLabel).join(' · ') || 'No street ranges' }}
                   </span>
-                  <span v-if="staleDispatchLabel(t)" class="turf-stale">
-                    ⚠ {{ staleDispatchLabel(t) }}
+                  <span v-if="staleDispatchLabel(selectedTurf)" class="turf-stale">
+                    ⚠ {{ staleDispatchLabel(selectedTurf) }}
                   </span>
-                  <span v-if="crewHistory(t)" class="muted turf-history">
-                    Crews: {{ crewHistory(t) }}
+                  <span v-if="crewHistory(selectedTurf)" class="muted turf-history">
+                    Crews: {{ crewHistory(selectedTurf) }}
                   </span>
                 </span>
               </button>
-              <div v-if="canManage(t)" class="turf-row-actions">
-                <button class="btn btn-ghost btn-sm" @click="editTurf(t)">Edit</button>
-                <button class="btn btn-ghost btn-sm turf-delete" @click="deleteTurf(t)">Delete</button>
+              <div v-if="canManage(selectedTurf)" class="turf-row-actions">
+                <button class="btn btn-ghost btn-sm" @click="editTurf(selectedTurf)">Edit</button>
+                <button class="btn btn-ghost btn-sm turf-delete" @click="deleteTurf(selectedTurf)">Delete</button>
               </div>
             </div>
             <AppSelect
-              v-if="canManage(t)"
+              v-if="canManage(selectedTurf)"
               class="turf-row-assign"
               small
-              :options="assignOptionsFor(t)"
-              :model-value="assignChoiceOf(t)"
-              :aria-label="`Reassign ${t.name}`"
-              @update:model-value="reassignTurf(t, $event)"
+              :options="assignOptionsFor(selectedTurf)"
+              :model-value="assignChoiceOf(selectedTurf)"
+              :aria-label="`Reassign ${selectedTurf.name}`"
+              @update:model-value="reassignTurf(selectedTurf, $event)"
             />
           </div>
-        </div>
+        </template>
         <p v-if="listError" class="error">{{ listError }}</p>
       </div>
     </div>
@@ -2141,25 +2076,53 @@ onUnmounted(() => {
   gap: 0.35rem;
 }
 
-/* Each match is one tap target: name left, meta right, tap = zoom there. */
+/* Match rows: tap the name to locate; the located row grows the Add
+ * button. */
 .street-match {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 44px;
+  padding: 0.35rem 0.5rem 0.35rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.street-match.located {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.street-match-main {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 0.6rem;
-  min-height: 44px;
-  padding: 0.35rem 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  border: none;
+  background: transparent;
   cursor: pointer;
   font: inherit;
   color: inherit;
   text-align: left;
+  padding: 0;
 }
 
-.street-match:hover .street-match-name {
+.street-match-main:hover .street-match-name {
   text-decoration: underline;
+}
+
+.street-match-add {
+  flex-shrink: 0;
+}
+
+.street-match-in {
+  flex-shrink: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .street-match-name {
@@ -2374,12 +2337,10 @@ onUnmounted(() => {
   font-size: 0.9rem;
 }
 
-/* --- Turf list --- */
+/* --- Turf picker + management card --- */
 
-.turf-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
+.turf-pick {
+  margin-bottom: 0.6rem;
 }
 
 .turf-row {
@@ -2437,12 +2398,6 @@ onUnmounted(() => {
 
 .turf-name {
   font-weight: 700;
-}
-
-/* Sub-turfs tuck under their parent in the list. */
-.turf-row-sub {
-  margin-left: 1.1rem;
-  border-left: 3px solid var(--border);
 }
 
 .turf-sub-tag {
