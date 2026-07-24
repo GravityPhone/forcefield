@@ -108,6 +108,10 @@ interface DraftSegment {
   range_end: number
   parity: TurfParity
   memberIds: string[]
+  /** ALL doors the range covers — memberIds plus doors another turf owns.
+   * These all PAINT (taken ones wear their owner's ring), so an added
+   * street is always visible; only memberIds ever join the save. */
+  coveredIds: string[]
   doorCount: number
   /** Doors matching the range but already claimed by a different turf —
    * they stay where they are (first claim wins). */
@@ -177,7 +181,7 @@ function toggleSegEditor(key: string) {
   const seg = segments.value.find((s) => s.key === key)
   // Opening trim mode zooms to the street and pins down its unmapped doors
   // so there's something to tap.
-  if (seg) void materializeStreetPins(seg.street_name, seg.city, true)
+  if (seg) void materializeStreetPins(seg.street_name, seg.city, true, true)
 }
 const editingTurfId = ref<string | null>(null)
 /** Which of the lead's turfs a NEW sub-turf carves from (auto when one). */
@@ -392,6 +396,14 @@ const draftMemberIds = computed(() => {
   return all
 })
 
+/** Every door the draft's ranges cover, claimable or not — the paint set,
+ * so the turf being built/edited always shows its pins. */
+const draftCoveredIds = computed(() => {
+  const all = new Set<string>()
+  for (const s of segments.value) for (const id of s.coveredIds) all.add(id)
+  return all
+})
+
 const draftDoorCount = computed(() => draftMemberIds.value.size)
 const draftTakenCount = computed(() => segments.value.reduce((n, s) => n + s.takenCount, 0))
 
@@ -540,7 +552,7 @@ function paintForDoor(id: string): DoorPaintState | null {
   const a = addressById.get(id)
   if (!a) return null
   const inDraft = draftMemberIds.value.has(id)
-  if (!inDraft) {
+  if (!inDraft && !draftCoveredIds.value.has(id)) {
     const f = focusedStreet.value
     const l = locatedStreet.value
     if (!(f && doorOnStreet(a, f)) && !(l && doorOnStreet(a, l))) return null
@@ -561,8 +573,9 @@ function paintForDoor(id: string): DoorPaintState | null {
 
 // Any paint-relevant state change repaints the one canvas (rAF-coalesced in
 // the layer).
-watch([draftMemberIds, statusByAddress, expandedSegKey, locatedStreet, turfColorById, editingTurfId], () =>
-  doorLayer?.requestRepaint(),
+watch(
+  [draftMemberIds, draftCoveredIds, statusByAddress, expandedSegKey, locatedStreet, turfColorById, editingTurfId],
+  () => doorLayer?.requestRepaint(),
 )
 
 function canvasDoorOf(a: AddressLite) {
@@ -1023,6 +1036,7 @@ function computeSegment(seg: DraftSegment) {
       (parentId !== null ? a.turf_id === parentId : !a.turf_id && !isSubcutter.value),
   )
   seg.memberIds = free.map((a) => a.id)
+  seg.coveredIds = members.map((a) => a.id)
   seg.doorCount = free.length
   seg.takenCount = members.length - free.length
   scheduleDraftShade()
@@ -1065,6 +1079,7 @@ function addSegment(
     range_end: hi,
     parity,
     memberIds: [],
+    coveredIds: [],
     doorCount: 0,
     takenCount: 0,
   })
@@ -1145,6 +1160,7 @@ function undoDraft() {
       key: `seg-${++segKeyCounter}`,
       ...s,
       memberIds: [],
+      coveredIds: [],
       doorCount: 0,
       takenCount: 0,
     })
@@ -1220,13 +1236,20 @@ function matchingSegments(streetName: string, city: string | null) {
   )
 }
 
-/** Streets pulled in by search (or a double-tap near a sparsely-pinned
- * street) can hold doors that were never geocoded, so the sweep would float
- * over empty map. Geocode a capped batch of them, drop their dots, refresh
- * the segment's stroke, and optionally zoom the map to the street. */
+/** Streets can hold doors that were never geocoded, so their dots would sit
+ * on empty map. Geocode the missing ones (dropping each dot as it resolves)
+ * and optionally zoom to the street. `allMissing` = geocode the whole
+ * street, used whenever the street is in the DRAFT — a saved turf geocodes
+ * all its doors anyway (geocodeTurfDoors), so this only moves the same
+ * one-time cost earlier; a mere search-locate stays capped. */
 const GEOCODE_BATCH_CAP = 25
 
-async function materializeStreetPins(streetName: string, city: string | null, zoomTo: boolean) {
+async function materializeStreetPins(
+  streetName: string,
+  city: string | null,
+  zoomTo: boolean,
+  allMissing = false,
+) {
   const rows = streetRows(streetName, city)
   const fitToStreet = () => {
     if (!map) return
@@ -1240,7 +1263,9 @@ async function materializeStreetPins(streetName: string, city: string | null, zo
   // geocoding to see where the street is.
   if (zoomTo) fitToStreet()
 
-  const missing = rows.filter((a) => a.lat == null || a.lng == null).slice(0, GEOCODE_BATCH_CAP)
+  const missing = rows
+    .filter((a) => a.lat == null || a.lng == null)
+    .slice(0, allMissing ? rows.length : GEOCODE_BATCH_CAP)
   let added = 0
   for (const a of missing) {
     if (unmounted) return
@@ -1339,7 +1364,7 @@ function addLocatedStreet(m: { street_name: string; city: string }) {
   flash(
     `Added ${m.street_name} ${lo}–${hi} — ${locatedRangeCount.value} doors. Trim it from its pill below, or Undo.`,
   )
-  void materializeStreetPins(m.street_name, m.city, false)
+  void materializeStreetPins(m.street_name, m.city, false, true)
 }
 
 // --- Lasso: VAN-style region selection. Arm it, drag a loop, and every door
@@ -1437,8 +1462,16 @@ function handleStreetTap(latLng: google.maps.LatLng) {
   const nums = rows.map((r) => houseNumber(r.street))
   snapshotDraft()
   addSegment(name, city, Math.min(...nums), Math.max(...nums), 'both')
-  flash(`Added ${name} — ${rows.length} doors.`)
-  void materializeStreetPins(name, city, false)
+  // Honest count: doors this draft actually got vs. ones another turf holds.
+  const segsNow = matchingSegments(name, city)
+  const got = segsNow.reduce((n, s) => n + s.doorCount, 0)
+  const taken = segsNow.reduce((n, s) => n + s.takenCount, 0)
+  flash(
+    taken
+      ? `Added ${name} — ${got} door${got === 1 ? '' : 's'} (${taken} stay with another turf).`
+      : `Added ${name} — ${got} door${got === 1 ? '' : 's'}.`,
+  )
+  void materializeStreetPins(name, city, false, true)
 }
 
 function sizeLassoCanvas() {
@@ -1544,7 +1577,7 @@ function onLassoUp() {
     const key = `${name}|${a.city.toUpperCase()}`
     if (seen.has(key) || seen.size >= 6) continue
     seen.add(key)
-    void materializeStreetPins(name, a.city, false)
+    void materializeStreetPins(name, a.city, false, true)
   }
 }
 
@@ -1746,6 +1779,9 @@ function editTurf(t: TurfWithMeta) {
   }
   focusTurf(t.id)
   focusDraft()
+  // The whole turf should be pinned while it's being edited — geocode its
+  // still-unmapped doors in the background (same pass a save runs).
+  void geocodeTurfDoors(t.id)
 }
 
 async function deleteTurf(t: TurfWithMeta) {

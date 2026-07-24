@@ -327,7 +327,9 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body:
           'The Shade button colors each saved turf’s area, and your draft shades in its ' +
           'own color as you build. While a street is showing, a door’s fill is its knock ' +
-          'status (blue = never knocked) and its ring is who holds it. Tap any dot (with ' +
+          'status (blue = never knocked) and its ring is who holds it — doors inside your ' +
+          'ranges that another turf already owns show that turf’s ring and stay out of ' +
+          'your save. Tap any dot (with ' +
           'no tool armed) to pop up that door’s compact knock history. Existing turfs ' +
           'live in the dropdown at the bottom — picking one zooms to it and opens its ' +
           'management card (edit, delete, reassign).',
