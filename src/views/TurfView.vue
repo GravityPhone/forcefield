@@ -1,14 +1,22 @@
 <script setup lang="ts">
 // Turf cutter, SEARCH-FIRST (2026-07-24 rework): the map starts BLANK —
-// just the basemap (plus optional turf-area shading). Lines derived from
-// door geocodes never sat on the real roads, so nothing street-shaped is
-// drawn at all. The flow: type a street name, tap a match (the map zooms to
-// it and its doors appear as dots), then tap "Add to turf" on the match to
-// take every door. Drafted streets live in a compact TABLE (2026-07-24,
-// replaced the pill bubbles): one dense row per street with inline range /
-// side / count / remove controls; tapping a row focuses TRIM mode — that
-// street's doors paint and each map tap drops or restores one house. The
-// Lasso still circles a whole patch at once.
+// just the basemap; there is NO area shading here at all (2026-07-24 night,
+// user call — the door symbols carry all the meaning). The flow: type a
+// street name, tap a match (the map zooms to it and its doors appear as
+// dots), then tap "Add to turf" on the match to take every door. Drafted
+// streets live in a compact TABLE: one thin text row per street; tapping a
+// row opens the range/side editor below the table AND focuses TRIM mode —
+// that street's doors paint and each map tap drops or restores one house.
+// The Lasso still circles a whole patch at once.
+//
+// TURF IS FOR TODAY (2026-07-24 night, user call): the cutter only works
+// with turfs cut TODAY (local day of created_at). When a previous day's
+// turfs still hold doors, a prompt offers "Copy to today" (fresh rows, same
+// streets/assignee — day squads never carry) or "Clear" (their doors
+// release; the old rows stay behind, door-less, as history). Doors owned by
+// another turf never silently join a capture — they're skipped with a
+// flash, which offers a "Take them too" steal when the cutter may re-cut
+// the owner (managers for top-level turfs, sub-cutters for siblings).
 // Existing turfs live behind ONE dropdown — picking a turf zooms to it and
 // shows a single compact management card (edit / delete / reassign), not a
 // long list.
@@ -44,14 +52,7 @@ import AppSelect from '@/components/ui/AppSelect.vue'
 import type { SelectOption } from '@/components/ui/AppSelect.vue'
 import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
-import {
-  CityLimitsLayer,
-  TurfAreasLayer,
-  readMapPref,
-  turfAreaFor,
-  writeMapPref,
-} from '@/lib/mapLayers'
-import type { DoorPoint } from '@/lib/mapLayers'
+import { CityLimitsLayer, readMapPref, writeMapPref } from '@/lib/mapLayers'
 import { DoorCanvasLayer } from '@/lib/doorCanvas'
 import type { DoorPaintState } from '@/lib/doorCanvas'
 import {
@@ -116,19 +117,19 @@ interface DraftSegment {
   range_end: number
   parity: TurfParity
   memberIds: string[]
-  /** ALL doors the range covers — memberIds plus doors another turf owns.
-   * These all PAINT (taken ones wear their owner's ring), so an added
-   * street is always visible; only memberIds ever join the save. */
-  coveredIds: string[]
   doorCount: number
-  /** Doors matching the range but already claimed by a different turf —
-   * they stay where they are (first claim wins). */
+  /** Doors matching the range but claimed by a different (unstolen) turf —
+   * skipped, never painted or saved; surfaced only in the row editor when a
+   * hand-widened range sweeps over them. */
   takenCount: number
 }
 
-// Distinct map hues; a new turf takes the first color no existing turf uses.
+// Distinct hues for saved turfs (Scout's shading + UI chrome — the cutter
+// itself no longer shades anything). NO red: on the cutter's pins red means
+// exactly one thing, "closed door", and the old fallback landing on red was
+// read as an error. A new turf takes the least-used hue.
 const PALETTE = [
-  '#7c3aed', '#0ea5e9', '#f97316', '#10b981', '#ef4444',
+  '#7c3aed', '#0ea5e9', '#f97316', '#10b981',
   '#eab308', '#ec4899', '#14b8a6', '#6366f1', '#84cc16',
 ]
 
@@ -203,12 +204,8 @@ const draftParentId = ref<string | null>(null)
 const assignChoice = ref('none')
 
 let map: google.maps.Map | null = null
-let areasLayer: TurfAreasLayer | null = null
 let cityLayer: CityLimitsLayer | null = null
 let doorLayer: DoorCanvasLayer | null = null
-/** Draft shading lives on its own Data layer so it can rebuild and clear
- * independently of the saved-turf areas. */
-let draftData: google.maps.Data | null = null
 let initStarted = false
 
 // --- In-memory address data: the whole county, indexed by street ---
@@ -229,6 +226,54 @@ let segKeyCounter = 0
 let unmounted = false
 
 const turfById = computed(() => new Map(turfs.value.map((t) => [t.id, t])))
+
+// --- Turf is for TODAY (2026-07-24 night) ---
+// The cutter's whole working set — the dropdown, sub-cut scoping, editing,
+// door claiming — is turfs cut TODAY (local day of created_at, same
+// device-local day rule as squads). Past days' turfs are inert history: the
+// stale prompt below either copies them into fresh today-rows or releases
+// their doors, and until that choice their doors just read as taken.
+
+/** Local day a turf was cut, as YYYY-MM-DD (created_at is a timestamptz —
+ * derive the day in device-local time like every other day-scoped thing). */
+function turfDay(t: { created_at: string }): string {
+  const d = new Date(t.created_at)
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${month}-${day}`
+}
+
+function isTodayTurf(t: { created_at: string }): boolean {
+  return turfDay(t) === localToday()
+}
+
+const todayTurfs = computed(() => turfs.value.filter(isTodayTurf))
+
+/** Past-day turfs that still hold doors (plus parents of doored sub-turfs —
+ * a copy has to route sub doors through the parent). Non-empty = the
+ * copy-or-clear prompt shows. Recomputed after every address/turf load. */
+const staleTurfs = ref<TurfWithMeta[]>([])
+const staleBusy = ref(false)
+
+function refreshStaleTurfs() {
+  const doored = new Set<string>()
+  for (const a of addressById.values()) if (a.turf_id) doored.add(a.turf_id)
+  const past = turfs.value.filter((t) => !isTodayTurf(t))
+  staleTurfs.value = past.filter(
+    (t) =>
+      doored.has(t.id) ||
+      past.some((s) => s.parent_turf_id === t.id && doored.has(s.id)),
+  )
+}
+
+/** "Jul 23" (or "Jul 22 – Jul 23") — which day(s) the stale turfs are from. */
+const staleDaysLabel = computed(() => {
+  const days = [...new Set(staleTurfs.value.map(turfDay))].sort()
+  if (!days.length) return ''
+  const first = prettyDay(days[0])
+  const last = prettyDay(days[days.length - 1])
+  return first === last ? first : `${first} – ${last}`
+})
 
 function indexAddresses(rows: AddressLite[]) {
   addressById.clear()
@@ -297,7 +342,7 @@ const myLeaderlessSquadIds = ref<Set<string>>(new Set())
 const isMemberSubcutter = computed(
   () =>
     auth.profile?.role === 'canvasser' &&
-    turfs.value.some(
+    todayTurfs.value.some(
       (t) => !t.parent_turf_id && t.squad_id !== null && myLeaderlessSquadIds.value.has(t.squad_id),
     ),
 )
@@ -308,9 +353,10 @@ const isSubcutter = computed(() => isLead.value || isMemberSubcutter.value)
 const canCut = computed(() => isManager.value || isSubcutter.value)
 
 /** Top-level turfs I may sub-cut inside: assigned to me or a squad I'm on (as
- * a lead), or to a leaderless squad I'm on (as a stand-in member). */
+ * a lead), or to a leaderless squad I'm on (as a stand-in member). Today's
+ * turfs only — yesterday's ground isn't cuttable anymore. */
 const myParentTurfs = computed(() =>
-  turfs.value.filter((t) => {
+  todayTurfs.value.filter((t) => {
     if (t.parent_turf_id) return false
     if (isLead.value) {
       return (
@@ -351,17 +397,17 @@ function parentName(t: { parent_turf_id: string | null }): string {
   return turfs.value.find((p) => p.id === t.parent_turf_id)?.name ?? 'its parent turf'
 }
 
-/** Leads see only their turf + its sub-turfs; managers see everything,
- * parents first with their sub-turfs tucked underneath. */
+/** Leads see only their turf + its sub-turfs; managers see everything cut
+ * TODAY, parents first with their sub-turfs tucked underneath. */
 const listTurfs = computed(() => {
   const source = isSubcutter.value
-    ? turfs.value.filter(
+    ? todayTurfs.value.filter(
         (t) =>
           myParentTurfs.value.some((p) => p.id === t.id) ||
           (t.parent_turf_id !== null &&
             myParentTurfs.value.some((p) => p.id === t.parent_turf_id)),
       )
-    : turfs.value
+    : todayTurfs.value
   const subsByParent = new Map<string, TurfWithMeta[]>()
   const tops: TurfWithMeta[] = []
   for (const t of source) {
@@ -383,21 +429,19 @@ const listTurfs = computed(() => {
 })
 
 // Layer toggles, persisted per device like Hunt's pin mode.
-// The cutter's one "Turf" button (2026-07-24, was "Shade"): shades ONLY the
-// turfs that are OUT today — dispatched to one of today's squads or durably
-// assigned to a canvasser — AND is the sole gate for the door-level "taken"
-// symbols (see paintForDoor). OFF BY DEFAULT on its own per-device key
-// (2026-07-24 night, user call): a fresh cutter opens clean, showing plain
-// Scout-style status dots; flip Turf on when you want to see whose ground
-// is whose. Deliberately NOT Scout's shared tri-state pref anymore — Scout
-// shading on must not drag the cutter's taken symbols on with it.
-const showAreas = ref(readMapPref('cutter-turf-layer', false))
+// The cutter's "Turf" button gates exactly ONE thing now: the door-level
+// "taken" symbols for other turfs' doors (there is no area shading in the
+// cutter at all — 2026-07-24 night, user call). OFF BY DEFAULT on its own
+// per-device key: a fresh cutter opens clean, showing plain Scout-style
+// status dots; flip Turf on to see whose ground is whose, door by door.
+// Deliberately NOT Scout's shared tri-state pref — Scout shading on must
+// not drag the cutter's taken symbols on with it.
+const showTakenDoors = ref(readMapPref('cutter-turf-layer', false))
 const showCity = ref(readMapPref('map-show-city', false))
 
-function toggleAreas() {
-  showAreas.value = !showAreas.value
-  writeMapPref('cutter-turf-layer', showAreas.value)
-  areasLayer?.setVisible(showAreas.value)
+function toggleTakenDoors() {
+  showTakenDoors.value = !showTakenDoors.value
+  writeMapPref('cutter-turf-layer', showTakenDoors.value)
 }
 
 function toggleCity() {
@@ -410,8 +454,24 @@ const draftColor = computed(() => {
   if (editingTurfId.value) {
     return turfs.value.find((t) => t.id === editingTurfId.value)?.color ?? PALETTE[0]
   }
-  const used = new Set(turfs.value.map((t) => t.color))
-  return PALETTE.find((c) => !used.has(c)) ?? PALETTE[turfs.value.length % PALETTE.length]
+  // Least-used hue among today's turfs — never an index-fallback that can
+  // surprise (the old one landed on red once the sim data filled the
+  // palette).
+  const counts = new Map(PALETTE.map((c) => [c, 0]))
+  for (const t of todayTurfs.value) {
+    const n = counts.get(t.color)
+    if (n !== undefined) counts.set(t.color, n + 1)
+  }
+  let best = PALETTE[0]
+  let bestN = Infinity
+  for (const c of PALETTE) {
+    const n = counts.get(c)!
+    if (n < bestN) {
+      bestN = n
+      best = c
+    }
+  }
+  return best
 })
 
 const draftMemberIds = computed(() => {
@@ -420,28 +480,42 @@ const draftMemberIds = computed(() => {
   return all
 })
 
-/** Every door the draft's ranges cover, claimable or not — the paint set,
- * so the turf being built/edited always shows its pins. */
-const draftCoveredIds = computed(() => {
-  const all = new Set<string>()
-  for (const s of segments.value) for (const id of s.coveredIds) all.add(id)
-  return all
-})
-
 const draftDoorCount = computed(() => draftMemberIds.value.size)
 const draftTakenCount = computed(() => segments.value.reduce((n, s) => n + s.takenCount, 0))
 
+/** Doors the user chose to STEAL from another turf ("Take them too" on the
+ * skip flash). They count as claimable in every draft computation; at save
+ * time the owning turf is re-cut around them first, so the draft's RPC can
+ * actually claim them. Snapshotted/restored with Undo. */
+const stealIds = ref(new Set<string>())
+
 // Transient feedback line ("Added WALNUT ST — 41 doors") that temporarily
-// replaces the standing instructions in the sweep bar.
+// replaces the standing instructions in the sweep bar, optionally carrying
+// one action button ("Take them too").
 const flashMsg = ref('')
+const flashAction = ref<{ label: string; run: () => void } | null>(null)
 let flashTimer: ReturnType<typeof setTimeout> | undefined
 
-function flash(msg: string) {
+function flash(msg: string, action: { label: string; run: () => void } | null = null) {
   flashMsg.value = msg
+  flashAction.value = action
   clearTimeout(flashTimer)
-  flashTimer = setTimeout(() => {
-    flashMsg.value = ''
-  }, 3500)
+  // Messages with a decision on them hang around longer.
+  flashTimer = setTimeout(
+    () => {
+      flashMsg.value = ''
+      flashAction.value = null
+    },
+    action ? 8000 : 3500,
+  )
+}
+
+function runFlashAction() {
+  const a = flashAction.value
+  flashMsg.value = ''
+  flashAction.value = null
+  clearTimeout(flashTimer)
+  a?.run()
 }
 
 const hint = computed(() => {
@@ -612,24 +686,24 @@ function paintForDoor(id: string): DoorPaintState | null {
   const inDraft = draftMemberIds.value.has(id)
   const ownedElsewhere =
     !!a.turf_id && !(editingTurfId.value && a.turf_id === editingTurfId.value)
-  if (!inDraft && !draftCoveredIds.value.has(id)) {
+  if (!inDraft) {
     const f = focusedStreet.value
     const l = locatedStreet.value
     const onShownStreet = (f && doorOnStreet(a, f)) || (l && doorOnStreet(a, l))
     // Turf layer on + zoomed to pin range: every door another turf owns
     // paints as a taken symbol, so someone else's ground reads door-level
-    // just by having the toggle on. Toggle off = only the draft's coverage.
+    // just by having the toggle on. Toggle off = draft members and the
+    // shown street only.
     const shownAsTaken =
-      ownedElsewhere && showAreas.value && (map?.getZoom() ?? 0) >= PINS_MIN_ZOOM
+      ownedElsewhere && showTakenDoors.value && (map?.getZoom() ?? 0) >= PINS_MIN_ZOOM
     if (!onShownStreet && !shownAsTaken) return null
   }
   // Draft members can still carry another turf's stamp (a sub-cut claims
-  // from its parent) — membership wins over the taken symbol. And the
-  // symbol ONLY exists while the Turf layer is on (2026-07-24 night, user
-  // call): with it off, every painted door — covered-but-taken included —
-  // just wears its Scout-style status color; the table's "N stay with
-  // another turf" line still tells the story.
-  if (ownedElsewhere && !inDraft && showAreas.value) {
+  // from its parent pool, a steal from its victim until save) — membership
+  // wins over the taken symbol. And the symbol ONLY exists while the Turf
+  // layer is on: with it off, every painted door wears its Scout-style
+  // status color, full stop.
+  if (ownedElsewhere && !inDraft && showTakenDoors.value) {
     const who = turfById.value.get(a.turf_id!)?.assignee ?? null
     return {
       fill: FILL_OPEN,
@@ -660,11 +734,10 @@ function paintForDoor(id: string): DoorPaintState | null {
 }
 
 // Any paint-relevant state change repaints the one canvas (rAF-coalesced in
-// the layer). showAreas is here because the Turf layer toggle now also
-// governs the door-level taken symbols; zoom crossings repaint via the
-// layer's own idle check.
+// the layer). showTakenDoors governs the door-level taken symbols; zoom
+// crossings repaint via the layer's own idle check.
 watch(
-  [draftMemberIds, draftCoveredIds, statusByAddress, partlySignedDoors, expandedSegKey, locatedStreet, turfs, editingTurfId, showAreas],
+  [draftMemberIds, statusByAddress, partlySignedDoors, expandedSegKey, locatedStreet, turfs, editingTurfId, showTakenDoors],
   () => doorLayer?.requestRepaint(),
 )
 
@@ -825,18 +898,8 @@ async function initialize() {
   // stretches via its CSS transform).
   map.addListener('idle', () => doorLayer?.checkView())
 
-  areasLayer = new TurfAreasLayer(map)
-  areasLayer.setVisible(showAreas.value)
   cityLayer = new CityLimitsLayer(map)
   if (showCity.value) void cityLayer.setVisible(true)
-  draftData = new google.maps.Data({ map })
-  draftData.setStyle((f) => ({
-    fillColor: (f.getProperty('color') as string) || '#7c3aed',
-    fillOpacity: 0.2,
-    strokeOpacity: 0,
-    clickable: false,
-    zIndex: 0,
-  }))
 
   // Fly to where the user is standing — cutting usually starts on the
   // ground — while the street data streams in behind the map.
@@ -903,41 +966,12 @@ async function loadCutterData() {
     defaultDraftParent()
     indexAddresses(rows)
     doorLayer?.setDoors(locatedCanvasDoors())
-    buildSavedAreas()
+    refreshStaleTurfs()
   } catch {
     loadError.value = 'Could not load the street data. Check your connection and reload.'
   } finally {
     pinsLoading.value = false
   }
-}
-
-/** Is this turf out on the ground today? Dispatched to a squad whose
- * squad_date is today, or durably assigned to one canvasser. Sub-turfs
- * follow their parent's dispatch. */
-function turfActiveToday(t: TurfWithMeta): boolean {
-  const top = t.parent_turf_id ? (turfs.value.find((p) => p.id === t.parent_turf_id) ?? t) : t
-  return top.squad?.squad_date === localToday() || top.assignee_id != null
-}
-
-/** Shade the saved turfs that are ACTIVE TODAY (except the one being edited
- * — its shape is being redrawn live as the draft). Stale dispatches don't
- * paint: while cutting, what matters is today's ground. */
-function buildSavedAreas() {
-  if (!areasLayer) return
-  const doorsByTurf = new Map<string, DoorPoint[]>()
-  for (const a of addressById.values()) {
-    if (!a.turf_id || a.lat == null || a.lng == null) continue
-    if (editingTurfId.value && a.turf_id === editingTurfId.value) continue
-    const list = doorsByTurf.get(a.turf_id)
-    const door = { lat: a.lat, lng: a.lng, street: a.street }
-    if (list) list.push(door)
-    else doorsByTurf.set(a.turf_id, [door])
-  }
-  areasLayer.setTurfs(
-    turfs.value
-      .filter((t) => doorsByTurf.has(t.id) && turfActiveToday(t))
-      .map((t) => ({ id: t.id, color: t.color, doors: doorsByTurf.get(t.id)! })),
-  )
 }
 
 /** Re-pull addresses + turfs after a save/delete (turf_id stamps changed
@@ -952,7 +986,8 @@ async function reloadAll() {
   indexAddresses(rows)
   doorLayer?.setDoors(locatedCanvasDoors())
   defaultDraftParent()
-  buildSavedAreas()
+  refreshStaleTurfs()
+  doorLayer?.requestRepaint()
 }
 
 /** After a turf is cut, geocode every door in it that has no coordinates yet
@@ -982,38 +1017,6 @@ async function geocodeTurfDoors(turfId: string) {
     },
     () => unmounted,
   )
-  if (!unmounted) buildSavedAreas()
-}
-
-// --- Draft shading: one angular area for the whole draft, rebuilt in the
-// next frame after any change (rAF-coalesced — gestures never wait on it).
-
-let shadeQueued = false
-function scheduleDraftShade() {
-  if (shadeQueued) return
-  shadeQueued = true
-  requestAnimationFrame(() => {
-    shadeQueued = false
-    rebuildDraftShade()
-  })
-}
-
-function rebuildDraftShade() {
-  if (!draftData) return
-  draftData.forEach((f) => draftData!.remove(f))
-  const doors: DoorPoint[] = []
-  for (const id of draftMemberIds.value) {
-    const a = addressById.get(id)
-    if (a && a.lat != null && a.lng != null) doors.push({ lat: a.lat, lng: a.lng, street: a.street })
-  }
-  const shape = turfAreaFor(doors)
-  if (shape) {
-    draftData.addGeoJson({
-      type: 'Feature',
-      geometry: shape.geometry,
-      properties: { color: draftColor.value },
-    })
-  }
 }
 
 // --- Tapping (all synchronous — the draft lives entirely in memory) ---
@@ -1152,16 +1155,23 @@ function toggleTrimDoor(addressId: string) {
   const name = streetNameOf(a.street)
   const city = f.city ?? a.city
   const n = houseNumber(a.street)
-  if (!draftMemberIds.value.has(addressId)) {
-    // Restoring — but only doors this draft could actually claim.
-    const parentId = effectiveParentId.value
-    const claimable =
-      (editingTurfId.value !== null && a.turf_id === editingTurfId.value) ||
-      (parentId !== null ? a.turf_id === parentId : !a.turf_id && !isSubcutter.value)
-    if (!claimable) {
-      flash(`${a.street} already belongs to another turf.`)
-      return
-    }
+  if (!draftMemberIds.value.has(addressId) && !claimableDoor(a)) {
+    // Restoring a door another turf owns: never silently — flash it, and
+    // offer the steal when this cutter may re-cut the owner.
+    const owner = a.turf_id ? turfById.value.get(a.turf_id) : undefined
+    flash(
+      `${a.street} belongs to ${owner ? `"${owner.name}"` : 'another turf'}.`,
+      owner && canStealFrom(owner)
+        ? {
+            label: 'Take it',
+            run: () => {
+              stealIds.value.add(addressId)
+              toggleTrimDoor(addressId)
+            },
+          }
+        : null,
+    )
+    return
   }
   const segs = matchingSegments(name, city)
   const nums = new Set<number>()
@@ -1186,25 +1196,38 @@ function matchesSegment(a: AddressLite, seg: Pick<DraftSegment, 'range_start' | 
   return seg.parity === 'both' || (n % 2 === 0) === (seg.parity === 'even')
 }
 
-/** (Re)derive a segment's members from the street index, refresh its
- * highlighter stroke, and queue the shading rebuild. Pure memory — instant. */
+/** Can this draft claim this door? Mirrors set_turf_segments(): doors
+ * already in the edited turf, plus the pool it draws from — the parent's
+ * doors for a sub-turf, unassigned doors for a top-level cut — plus any
+ * door the user explicitly chose to steal. Everything else is "taken". */
+function claimableDoor(a: AddressLite): boolean {
+  if (stealIds.value.has(a.id)) return true
+  const parentId = effectiveParentId.value
+  return (
+    (editingTurfId.value !== null && a.turf_id === editingTurfId.value) ||
+    (parentId !== null ? a.turf_id === parentId : !a.turf_id && !isSubcutter.value)
+  )
+}
+
+/** May the current cutter steal doors from this turf? Managers can re-cut
+ * any top-level turf; sub-cutters only a SIBLING sub-turf (its released
+ * doors return to the shared parent pool, where this draft can claim them —
+ * anywhere else they'd land out of reach). */
+function canStealFrom(victim: TurfWithMeta | undefined): boolean {
+  if (!victim || !isTodayTurf(victim)) return false
+  if (isManager.value) return victim.parent_turf_id === null
+  return victim.parent_turf_id !== null && victim.parent_turf_id === effectiveParentId.value
+}
+
+/** (Re)derive a segment's members from the street index. Pure memory —
+ * instant. Taken doors are counted but never join. */
 function computeSegment(seg: DraftSegment) {
   const rows = streetRows(seg.street_name, seg.city)
   const members = rows.filter((a) => matchesSegment(a, seg))
-  // Claimable mirrors set_turf_segments(): doors already in this turf, plus
-  // the pool it draws from — the parent's doors for a sub-turf, unassigned
-  // doors for a top-level cut. Everything else counts as "taken".
-  const parentId = effectiveParentId.value
-  const free = members.filter(
-    (a) =>
-      (editingTurfId.value !== null && a.turf_id === editingTurfId.value) ||
-      (parentId !== null ? a.turf_id === parentId : !a.turf_id && !isSubcutter.value),
-  )
+  const free = members.filter(claimableDoor)
   seg.memberIds = free.map((a) => a.id)
-  seg.coveredIds = members.map((a) => a.id)
   seg.doorCount = free.length
   seg.takenCount = members.length - free.length
-  scheduleDraftShade()
 }
 
 function addSegment(
@@ -1244,7 +1267,6 @@ function addSegment(
     range_end: hi,
     parity,
     memberIds: [],
-    coveredIds: [],
     doorCount: 0,
     takenCount: 0,
   })
@@ -1255,7 +1277,6 @@ function addSegment(
 function removeSegment(seg: DraftSegment) {
   segments.value = segments.value.filter((s) => s.key !== seg.key)
   if (expandedSegKey.value === seg.key) expandedSegKey.value = null
-  scheduleDraftShade()
 }
 
 /** Take a range OUT of the draft: segments covering it shrink (or split in
@@ -1291,41 +1312,41 @@ function subtractRange(streetName: string, city: string | null, lo: number, hi: 
 // hand-reversible, so they don't clutter the stack.
 
 type SegSnapshot = Pick<DraftSegment, 'street_name' | 'city' | 'range_start' | 'range_end' | 'parity'>
-const undoStack = ref<SegSnapshot[][]>([])
+/** Undo restores the street list AND which doors were marked stolen — a
+ * "Take them too" is one gesture, so one Undo takes it back whole. */
+interface DraftSnapshot {
+  segs: SegSnapshot[]
+  steals: string[]
+}
+const undoStack = ref<DraftSnapshot[]>([])
 const UNDO_CAP = 25
 const canUndo = computed(() => undoStack.value.length > 0)
 
 function snapshotDraft() {
-  undoStack.value.push(
-    segments.value.map((s) => ({
+  undoStack.value.push({
+    segs: segments.value.map((s) => ({
       street_name: s.street_name,
       city: s.city,
       range_start: s.range_start,
       range_end: s.range_end,
       parity: s.parity,
     })),
-  )
+    steals: [...stealIds.value],
+  })
   if (undoStack.value.length > UNDO_CAP) undoStack.value.shift()
-}
-
-/** Clear the draft shading from the map (the segment list itself is the
- * caller's business). */
-function wipeDraftDrawing() {
-  draftData?.forEach((f) => draftData!.remove(f))
 }
 
 function undoDraft() {
   const snap = undoStack.value.pop()
   if (!snap) return
-  wipeDraftDrawing()
   segments.value = []
   expandedSegKey.value = null
-  for (const s of snap) {
+  stealIds.value = new Set(snap.steals)
+  for (const s of snap.segs) {
     const seg: DraftSegment = reactive({
       key: `seg-${++segKeyCounter}`,
       ...s,
       memberIds: [],
-      coveredIds: [],
       doorCount: 0,
       takenCount: 0,
     })
@@ -1351,11 +1372,10 @@ function cancelEdit() {
 function startOverDraft() {
   if (segments.value.length) snapshotDraft()
   segments.value = []
-  wipeDraftDrawing()
+  stealIds.value = new Set()
   expandedSegKey.value = null
   saveError.value = ''
   defaultDraftParent()
-  buildSavedAreas()
 }
 
 function onSegmentRangeChange(seg: DraftSegment) {
@@ -1372,15 +1392,13 @@ function onSegmentParityChange(seg: DraftSegment, parity: string) {
 
 function clearDraft() {
   segments.value = []
-  wipeDraftDrawing()
+  stealIds.value = new Set()
   expandedSegKey.value = null
   editingTurfId.value = null
   draftName.value = ''
   assignChoice.value = 'none'
   saveError.value = ''
   defaultDraftParent()
-  // Restore the saved shading of whatever turf was being edited.
-  buildSavedAreas()
 }
 
 // A different parent = a different claim pool: recompute every sweep so door
@@ -1515,6 +1533,63 @@ function locateStreet(m: { street_name: string; city: string; lo: number; hi: nu
   void materializeStreetPins(m.street_name, m.city, true)
 }
 
+// --- Skipped-door stealing ---
+// A capture NEVER silently includes doors another turf owns: they're
+// skipped, the flash says so, and — when this cutter may re-cut the owner
+// (canStealFrom) — the flash carries a "Take them too" button. Stealing
+// marks the doors in stealIds (drafts treat them as claimable); the owning
+// turf is only actually re-cut around them at save time.
+
+/** The flash action for a batch of skipped doors, or null when none of
+ * their owners can be stolen from. */
+function stealActionFor(doors: AddressLite[]): { label: string; run: () => void } | null {
+  const stealable = doors.filter((a) =>
+    canStealFrom(a.turf_id ? turfById.value.get(a.turf_id) : undefined),
+  )
+  if (!stealable.length) return null
+  return {
+    label:
+      stealable.length === doors.length
+        ? 'Take them too'
+        : `Take ${stealable.length} of them`,
+    run: () => stealDoors(stealable),
+  }
+}
+
+function stealDoors(doors: AddressLite[]) {
+  snapshotDraft()
+  for (const d of doors) stealIds.value.add(d.id)
+  // Doors already inside a draft range just recompute in; the rest (a lasso
+  // capture that never built a segment for them) join as honest runs.
+  const uncovered = doors.filter((d) => {
+    const name = streetNameOf(d.street)
+    return !name || !matchingSegments(name, d.city).some((s) => matchesSegment(d, s))
+  })
+  for (const seg of segments.value) computeSegment(seg)
+  if (uncovered.length) addDoorsAsSegments(uncovered)
+  const n = doors.length
+  flash(`Took ${n} door${n === 1 ? '' : 's'} — the other turf gives them up when you save.`)
+}
+
+/** Post-add flash for a street: honest got/skipped counts, with the steal
+ * offer when doors were skipped. */
+function flashAddResult(streetName: string, city: string | null, prefix: string) {
+  const segsNow = matchingSegments(streetName, city)
+  const got = segsNow.reduce((n, s) => n + s.doorCount, 0)
+  const taken = segsNow.reduce((n, s) => n + s.takenCount, 0)
+  if (!taken) {
+    flash(`${prefix} — ${got} door${got === 1 ? '' : 's'}.`)
+    return
+  }
+  const takenDoors = streetRows(streetName, city).filter(
+    (a) => segsNow.some((s) => matchesSegment(a, s)) && !claimableDoor(a),
+  )
+  flash(
+    `${prefix} — ${got} door${got === 1 ? '' : 's'} · ${taken} skipped (another turf's).`,
+    stealActionFor(takenDoors),
+  )
+}
+
 /** The located row's Add: the entered house-number range joins the draft
  * (defaults to the whole street; overlapping ranges fold together). */
 function addLocatedStreet(m: { street_name: string; city: string }) {
@@ -1526,9 +1601,7 @@ function addLocatedStreet(m: { street_name: string; city: string }) {
   }
   snapshotDraft()
   addSegment(m.street_name, m.city, lo, hi, 'both')
-  flash(
-    `Added ${m.street_name} ${lo}–${hi} — ${locatedRangeCount.value} doors. Trim it in the street list below, or Undo.`,
-  )
+  flashAddResult(m.street_name, m.city, `Added ${m.street_name} ${lo}–${hi}`)
   void materializeStreetPins(m.street_name, m.city, false, true)
 }
 
@@ -1734,15 +1807,7 @@ function applyStreetTap(name: string, city: string) {
   const nums = rows.map((r) => houseNumber(r.street))
   snapshotDraft()
   addSegment(name, city, Math.min(...nums), Math.max(...nums), 'both')
-  // Honest count: doors this draft actually got vs. ones another turf holds.
-  const segsNow = matchingSegments(name, city)
-  const got = segsNow.reduce((n, s) => n + s.doorCount, 0)
-  const taken = segsNow.reduce((n, s) => n + s.takenCount, 0)
-  flash(
-    taken
-      ? `Added ${name} — ${got} door${got === 1 ? '' : 's'} (${taken} stay with another turf).`
-      : `Added ${name} — ${got} door${got === 1 ? '' : 's'}.`,
-  )
+  flashAddResult(name, city, `Added ${name}`)
   void materializeStreetPins(name, city, false, true)
 }
 
@@ -1815,9 +1880,7 @@ function onLassoUp() {
     .map((id) => addressById.get(id))
     .filter((a): a is AddressLite => !!a)
   if (selectMode.value === 'erase') {
-    // Anything the draft's ranges COVER is erasable — not just claimable
-    // members, or circling a taken door's pill would silently do nothing.
-    const drafted = doors.filter((a) => draftCoveredIds.value.has(a.id))
+    const drafted = doors.filter((a) => draftMemberIds.value.has(a.id))
     if (!drafted.length) {
       flash(
         segments.value.length
@@ -1844,22 +1907,36 @@ function onLassoUp() {
     )
     return
   }
+  // Doors another turf owns never silently join a capture — they're
+  // skipped, and the flash offers the steal when it's allowed.
+  const free = doors.filter(claimableDoor)
+  const taken = doors.filter((a) => !claimableDoor(a))
+  if (!free.length) {
+    flash(
+      `Every door in that loop belongs to another turf (${taken.length} skipped).`,
+      stealActionFor(taken),
+    )
+    return
+  }
   snapshotDraft()
-  const { doorCount, streetCount } = addDoorsAsSegments(doors)
+  const { doorCount, streetCount } = addDoorsAsSegments(free)
   if (!doorCount) {
     undoStack.value.pop()
     flash('Could not read streets for those doors — try a tighter loop.')
     return
   }
   flash(
-    `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
+    taken.length
+      ? `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'} · ${taken.length} skipped (another turf's).`
+      : `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
+    taken.length ? stealActionFor(taken) : null,
   )
   // Populate the dots: the captured streets usually hold doors that were
   // never geocoded (the lasso can only see mapped ones), so without this
   // the sweep sits half-blank.
   const streets: { name: string; city: string }[] = []
   const seen = new Set<string>()
-  for (const a of doors) {
+  for (const a of free) {
     const name = streetNameOf(a.street)
     if (!name) continue
     const key = `${name}|${a.city.toUpperCase()}`
@@ -2009,6 +2086,160 @@ function removeDoorsFromDraft(doors: AddressLite[]): { doorCount: number; street
 
 // --- Save / edit / delete ---
 
+/** Segment payload for set_turf_segments. */
+interface SegmentPayload {
+  street_name: string
+  city: string | null
+  range_start: number
+  range_end: number
+  parity: TurfParity
+}
+
+/** A victim turf's segments with the stolen doors carved out: honest runs
+ * over the house numbers it keeps, split at EVERY street number it doesn't
+ * keep — stolen or never-owned — so a rebuilt range can never annex an
+ * in-between door the victim didn't hold (ranges claim from the open pool
+ * on re-cut). The server's honest-rewrite trims further anyway. */
+function victimSegmentsMinus(victimId: string, stolen: Set<string>): SegmentPayload[] {
+  const byStreet = new Map<string, { name: string; city: string; keep: Set<number> }>()
+  for (const a of addressById.values()) {
+    if (a.turf_id !== victimId) continue
+    const name = streetNameOf(a.street)
+    if (!name) continue
+    const key = `${name}|${a.city.toUpperCase()}`
+    let g = byStreet.get(key)
+    if (!g) byStreet.set(key, (g = { name, city: a.city, keep: new Set() }))
+    if (!stolen.has(a.id)) g.keep.add(houseNumber(a.street))
+  }
+  const out: SegmentPayload[] = []
+  for (const g of byStreet.values()) {
+    const laneNums = [
+      ...new Set(streetRows(g.name, g.city).map((r) => houseNumber(r.street))),
+    ].sort((a, b) => a - b)
+    let lo: number | null = null
+    let hi = 0
+    for (const n of laneNums) {
+      if (g.keep.has(n)) {
+        if (lo == null) lo = n
+        hi = n
+      } else if (lo != null) {
+        out.push({ street_name: g.name, city: g.city, range_start: lo, range_end: hi, parity: 'both' })
+        lo = null
+      }
+    }
+    if (lo != null) {
+      out.push({ street_name: g.name, city: g.city, range_start: lo, range_end: hi, parity: 'both' })
+    }
+  }
+  return out
+}
+
+/** Before the draft claims: re-cut every victim turf around the doors the
+ * user chose to steal, so those doors land in this draft's claim pool
+ * (unassigned for a top-level cut, the parent for a sub-cut). */
+async function releaseStolenDoors() {
+  const byVictim = new Map<string, Set<string>>()
+  for (const id of stealIds.value) {
+    const a = addressById.get(id)
+    if (!a?.turf_id) continue // already free — nothing to release
+    if (editingTurfId.value && a.turf_id === editingTurfId.value) continue
+    if (a.turf_id === effectiveParentId.value) continue // parent pool: claimable as-is
+    const set = byVictim.get(a.turf_id)
+    if (set) set.add(id)
+    else byVictim.set(a.turf_id, new Set([id]))
+  }
+  for (const [victimId, ids] of byVictim) {
+    const { error } = await supabase.rpc('set_turf_segments', {
+      target_turf_id: victimId,
+      segments: victimSegmentsMinus(victimId, ids),
+    })
+    if (error) throw error
+  }
+}
+
+// --- Copy-or-clear: a previous day's turfs still holding doors ---
+// Turf is for today. When yesterday's turfs still hold doors, the manager
+// picks: copy them into fresh today-rows (same streets/color/assignee — a
+// day-squad dispatch never carries), or clear them (doors release; the old
+// rows stay behind door-less, as history). Sub-turfs never copy — they were
+// the old crew's internal split — their doors ride along with the parent.
+
+async function clearStaleTurfs() {
+  staleBusy.value = true
+  try {
+    const subs = staleTurfs.value.filter((t) => t.parent_turf_id)
+    const tops = staleTurfs.value.filter((t) => !t.parent_turf_id)
+    // Subs first: emptying a sub returns doors to its parent, and the
+    // parent's emptying then releases them for good.
+    for (const t of [...subs, ...tops]) {
+      const { error } = await supabase.rpc('set_turf_segments', {
+        target_turf_id: t.id,
+        segments: [],
+      })
+      if (error) throw error
+    }
+    await reloadAll()
+    flash('Cleared — every door is up for grabs today.')
+  } catch {
+    flash('Could not clear the old turf — try again.')
+  } finally {
+    staleBusy.value = false
+  }
+}
+
+async function copyStaleTurfs() {
+  staleBusy.value = true
+  try {
+    // Fold day-crew sub-splits back into their parents first.
+    for (const sub of staleTurfs.value.filter((t) => t.parent_turf_id)) {
+      const { error } = await supabase.rpc('set_turf_segments', {
+        target_turf_id: sub.id,
+        segments: [],
+      })
+      if (error) throw error
+    }
+    for (const t of staleTurfs.value.filter((t) => !t.parent_turf_id)) {
+      const segs: SegmentPayload[] = t.turf_segments.map((s) => ({
+        street_name: s.street_name,
+        city: s.city,
+        range_start: s.range_start,
+        range_end: s.range_end,
+        parity: s.parity,
+      }))
+      const { data, error } = await supabase
+        .from('turfs')
+        .insert({
+          name: t.name,
+          color: t.color,
+          assignee_id: t.assignee_id,
+          squad_id: null,
+          parent_turf_id: null,
+          created_by: auth.profile?.id,
+        })
+        .select('id')
+        .single()
+      if (error || !data) throw error ?? new Error('insert failed')
+      // Release the old rows' doors, then claim them under the fresh turf.
+      const { error: freeErr } = await supabase.rpc('set_turf_segments', {
+        target_turf_id: t.id,
+        segments: [],
+      })
+      if (freeErr) throw freeErr
+      const { error: claimErr } = await supabase.rpc('set_turf_segments', {
+        target_turf_id: data.id as string,
+        segments: segs,
+      })
+      if (claimErr) throw claimErr
+    }
+    await reloadAll()
+    flash('Copied to today — same turf, fresh day.')
+  } catch {
+    flash('Could not copy the old turf — reload and try again.')
+  } finally {
+    staleBusy.value = false
+  }
+}
+
 async function saveTurf() {
   saveError.value = ''
   if (!segments.value.length) {
@@ -2021,7 +2252,7 @@ async function saveTurf() {
   if (!name) {
     const opt = assignOptions.value.find((o) => o.value === assignChoice.value)
     const who = assignChoice.value !== 'none' && opt ? opt.label.split(' — ')[1] : ''
-    name = who ? `${who}'s turf` : `Turf ${turfs.value.length + 1}`
+    name = who ? `${who}'s turf` : `Turf ${todayTurfs.value.length + 1}`
   }
   if (isSubcutter.value && !editingTurfId.value && !draftParentId.value) {
     saveError.value = 'No turf is assigned to you yet — your campaign manager assigns turf first.'
@@ -2056,6 +2287,9 @@ async function saveTurf() {
       if (error || !data) throw error ?? new Error('insert failed')
       turfId = data.id as string
     }
+    // Stolen doors: carve them out of their owners first, so the claim
+    // below actually gets them.
+    await releaseStolenDoors()
     const { error: rpcError } = await supabase.rpc('set_turf_segments', {
       target_turf_id: turfId,
       segments: segments.value.map((s) => ({
@@ -2107,8 +2341,6 @@ function editTurf(t: TurfWithMeta) {
   editingTurfId.value = t.id
   draftName.value = t.name
   assignChoice.value = assignChoiceOf(t)
-  // Hide this turf's saved shading — the draft redraws it live.
-  buildSavedAreas()
   for (const s of t.turf_segments) {
     addSegment(s.street_name, s.city, s.range_start, s.range_end, s.parity)
   }
@@ -2158,9 +2390,7 @@ onMounted(() => {
 onUnmounted(() => {
   unmounted = true
   doorLayer?.dispose()
-  areasLayer?.dispose()
   cityLayer?.dispose()
-  draftData?.setMap(null)
 })
 </script>
 
@@ -2186,6 +2416,32 @@ onUnmounted(() => {
       <div class="sweep-bar" :style="{ '--draft-color': draftColor }">
         <span class="sweep-dot" aria-hidden="true"></span>
         <p class="sweep-hint">{{ hint }}</p>
+        <!-- One optional action on the flash — e.g. "Take them too" after a
+             capture skipped another turf's doors. -->
+        <button v-if="flashAction" class="btn btn-sm btn-primary sweep-action" @click="runFlashAction">
+          {{ flashAction.label }}
+        </button>
+      </div>
+
+      <!-- Turf is for today: a previous day's turfs still holding doors get
+           resolved here — copied into fresh today-rows, or cleared so every
+           door is up for grabs. -->
+      <div v-if="isManager && staleTurfs.length" class="card stale-card">
+        <p class="stale-text">
+          <strong>{{ staleTurfs.filter((t) => !t.parent_turf_id).length }}
+            turf{{ staleTurfs.filter((t) => !t.parent_turf_id).length === 1 ? '' : 's' }}</strong>
+          from {{ staleDaysLabel }} still hold{{ staleTurfs.length === 1 ? 's' : '' }} doors.
+          Copy {{ staleTurfs.length === 1 ? 'it' : 'them' }} to today, or clear the ground and
+          cut fresh.
+        </p>
+        <div class="stale-actions">
+          <button class="btn btn-primary btn-sm" :disabled="staleBusy" @click="copyStaleTurfs">
+            {{ staleBusy ? 'Working…' : 'Copy to today' }}
+          </button>
+          <button class="btn btn-ghost btn-sm" :disabled="staleBusy" @click="clearStaleTurfs">
+            Clear them
+          </button>
+        </div>
       </div>
 
       <!-- Find a street by name: tap a match to zoom to it and see its
@@ -2258,15 +2514,15 @@ onUnmounted(() => {
           <span class="pins-loading-spinner" aria-hidden="true"></span>
           Loading streets…
         </div>
-        <!-- Map layers: turf area shading and city/village limits. -->
+        <!-- Map layers: other turfs' doors (taken symbols) and city limits. -->
         <div class="layer-toggle" role="group" aria-label="Map layers">
           <button
             type="button"
             class="layer-btn"
-            :class="{ active: showAreas }"
-            :aria-pressed="showAreas"
-            title="Shade the turfs that are out today in their colors"
-            @click="toggleAreas"
+            :class="{ active: showTakenDoors }"
+            :aria-pressed="showTakenDoors"
+            title="Mark doors that belong to other turfs"
+            @click="toggleTakenDoors"
           >
             Turf
           </button>
@@ -2344,7 +2600,7 @@ onUnmounted(() => {
               <span class="muted"> — {{ ownerAssignment(doorOwner) }}</span>
             </span>
             <button
-              v-if="canManage(doorOwner)"
+              v-if="canManage(doorOwner) && isTodayTurf(doorOwner)"
               class="btn btn-ghost btn-sm door-card-owner-edit"
               @click="editOwnerTurf(doorOwner)"
             >
@@ -2420,14 +2676,13 @@ onUnmounted(() => {
         </p>
 
         <template v-if="segments.length">
-          <!-- Streets table: one dense row per swept stretch. Range and side
-               edit inline; tapping the row (street name) focuses TRIM mode
-               on that street exactly like the old pill tap. -->
+          <!-- Streets table: one thin text row per swept stretch. Tapping a
+               row opens the editor below it AND focuses TRIM mode on that
+               street (its doors paint; each map tap drops/restores a house). -->
           <div class="seg-table" role="table" aria-label="Streets in this turf">
             <div class="seg-thead" role="row">
               <span role="columnheader">Street</span>
               <span role="columnheader">Numbers</span>
-              <span role="columnheader">Side</span>
               <span role="columnheader" class="seg-col-num">Doors</span>
               <span role="columnheader" aria-label="Remove"></span>
             </div>
@@ -2439,42 +2694,9 @@ onUnmounted(() => {
               role="row"
               @click="toggleSegEditor(seg.key)"
             >
-              <span class="seg-street" role="cell">
-                <span class="seg-street-name">{{ seg.street_name }}</span>
-                <span v-if="seg.takenCount" class="seg-street-taken">
-                  {{ seg.takenCount }} stay with another turf
-                </span>
-              </span>
-              <span class="seg-range" role="cell" @click.stop>
-                <input
-                  type="number"
-                  class="seg-cell-num"
-                  :value="seg.range_start"
-                  min="0"
-                  :aria-label="`${seg.street_name} range start`"
-                  @change="seg.range_start = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(seg)"
-                />
-                <span class="muted seg-dash">–</span>
-                <input
-                  type="number"
-                  class="seg-cell-num"
-                  :value="seg.range_end"
-                  min="0"
-                  :aria-label="`${seg.street_name} range end`"
-                  @change="seg.range_end = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(seg)"
-                />
-              </span>
-              <span class="seg-side" role="cell" @click.stop>
-                <select
-                  class="seg-side-select"
-                  :value="seg.parity"
-                  :aria-label="`${seg.street_name} — which side of the street`"
-                  @change="onSegmentParityChange(seg, ($event.target as HTMLSelectElement).value)"
-                >
-                  <option value="both">Both</option>
-                  <option value="even">Even</option>
-                  <option value="odd">Odd</option>
-                </select>
+              <span class="seg-street-name" role="cell">{{ seg.street_name }}</span>
+              <span class="seg-range-text" role="cell">
+                {{ seg.range_start }}–{{ seg.range_end }}<template v-if="seg.parity !== 'both'"> · {{ seg.parity }}</template>
               </span>
               <span class="seg-count" role="cell">{{ seg.doorCount }}</span>
               <button
@@ -2486,10 +2708,54 @@ onUnmounted(() => {
               </button>
             </div>
           </div>
-          <p v-if="expandedSeg" class="muted seg-trim-hint">
-            Trimming {{ expandedSeg.street_name }} — tap its doors on the map to drop or restore
-            each house. Tap the row again when you're done.
-          </p>
+          <!-- Editor for the open row: house-number range, side, and
+               trim-by-tapping on the map. -->
+          <div v-if="expandedSeg" class="seg-editor">
+            <div class="seg-editor-title">
+              <strong>{{ expandedSeg.street_name }}</strong>
+              <span class="muted">{{ expandedSeg.city ?? 'any city' }}</span>
+              <span class="seg-doors" :class="{ 'seg-doors-empty': !expandedSeg.doorCount }">
+                {{ expandedSeg.doorCount }} doors
+              </span>
+            </div>
+            <div class="seg-editor-controls">
+              <input
+                type="number"
+                class="seg-cell-num"
+                :value="expandedSeg.range_start"
+                min="0"
+                aria-label="Range start"
+                @change="expandedSeg.range_start = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(expandedSeg)"
+              />
+              <span class="muted">–</span>
+              <input
+                type="number"
+                class="seg-cell-num"
+                :value="expandedSeg.range_end"
+                min="0"
+                aria-label="Range end"
+                @change="expandedSeg.range_end = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(expandedSeg)"
+              />
+              <select
+                class="seg-side-select"
+                :value="expandedSeg.parity"
+                aria-label="Which side of the street"
+                @change="onSegmentParityChange(expandedSeg, ($event.target as HTMLSelectElement).value)"
+              >
+                <option value="both">Both sides</option>
+                <option value="even">Even side</option>
+                <option value="odd">Odd side</option>
+              </select>
+            </div>
+            <p class="muted seg-trim-hint">
+              Tap this street's doors on the map to drop or restore each house. Tap the row again
+              when you're done.
+            </p>
+            <p v-if="expandedSeg.takenCount" class="muted seg-trim-hint">
+              {{ expandedSeg.takenCount }} door{{ expandedSeg.takenCount === 1 ? '' : 's' }} in
+              this range belong to another turf — skipped.
+            </p>
+          </div>
         </template>
         <p v-else class="muted empty-note">
           Nothing here yet — type a street name above, tap the match, then Add. Narrow the
@@ -2521,8 +2787,9 @@ onUnmounted(() => {
             </button>
           </div>
           <p v-if="draftTakenCount" class="muted">
-            {{ draftTakenCount }} swept doors
-            {{ isSubcutter ? 'are outside your turf or already in another cut' : 'stay with their current turf (first claim wins)' }}.
+            {{ draftTakenCount }} door{{ draftTakenCount === 1 ? '' : 's' }} inside these ranges
+            belong{{ draftTakenCount === 1 ? 's' : '' }} to another turf and
+            {{ draftTakenCount === 1 ? 'is' : 'are' }} skipped.
           </p>
           <p v-if="saveError" class="error">{{ saveError }}</p>
         </div>
@@ -3006,10 +3273,9 @@ onUnmounted(() => {
   color: var(--draft-color);
 }
 
-/* --- Streets table: one dense row per swept stretch (2026-07-24, replaced
-   the pill bubbles — long drafts were a wall of padding). Tuned for phone
-   widths: tight rows, small type, fixed narrow control columns, the street
-   name takes what's left and truncates. --- */
+/* --- Streets table: one THIN text row per swept stretch (2026-07-24
+   night — "more compact, just rows and columns"). No inline inputs; the
+   open row's editor sits below the table. --- */
 
 .seg-table {
   display: flex;
@@ -3023,15 +3289,15 @@ onUnmounted(() => {
 .seg-thead,
 .seg-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 3.4rem 2.1rem 1.9rem;
+  grid-template-columns: minmax(0, 1fr) auto 2.4rem 1.9rem;
   align-items: center;
-  gap: 0.3rem;
-  padding: 0 0.25rem 0 0.55rem;
+  gap: 0.4rem;
+  padding: 0 0.2rem 0 0.55rem;
 }
 
 .seg-thead {
-  min-height: 26px;
-  font-size: 0.68rem;
+  min-height: 24px;
+  font-size: 0.66rem;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -3041,9 +3307,7 @@ onUnmounted(() => {
 }
 
 .seg-row {
-  min-height: 42px;
-  padding-top: 0.2rem;
-  padding-bottom: 0.2rem;
+  min-height: 36px;
   background: var(--surface);
   cursor: pointer;
 }
@@ -3052,86 +3316,29 @@ onUnmounted(() => {
   border-top: 1px solid var(--border);
 }
 
-/* The open row is the map's trim target — draft-color accent, like the old
-   open pill. */
+/* The open row is the map's trim target. */
 .seg-row.open {
   background: color-mix(in srgb, var(--draft-color) 10%, var(--surface));
   box-shadow: inset 3px 0 0 var(--draft-color);
 }
 
-.seg-street {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
 .seg-street-name {
   font-weight: 700;
-  font-size: 0.82rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.seg-street-taken {
-  font-size: 0.68rem;
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.seg-range {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.15rem;
-}
-
-.seg-dash {
-  font-size: 0.78rem;
-}
-
-.seg-cell-num {
-  width: 2.9rem;
-  min-height: 34px;
-  padding: 0.15rem 0.25rem;
-  font: inherit;
   font-size: 0.8rem;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.seg-cell-num:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
-}
-
-/* Chrome/Safari draw spinners inside number inputs — dead weight at this
-   width. */
-.seg-cell-num::-webkit-outer-spin-button,
-.seg-cell-num::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-
-.seg-side-select {
-  width: 100%;
-  min-height: 34px;
-  padding: 0.15rem 0.2rem;
-  font: inherit;
+.seg-range-text {
   font-size: 0.78rem;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .seg-count {
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -3147,7 +3354,7 @@ onUnmounted(() => {
 }
 
 .seg-x {
-  min-height: 38px;
+  min-height: 34px;
   border: none;
   background: transparent;
   color: var(--text-muted);
@@ -3161,9 +3368,100 @@ onUnmounted(() => {
   color: var(--danger);
 }
 
+/* Editor for the open row. */
+.seg-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  margin-bottom: 0.6rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--draft-color);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.seg-editor-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.seg-editor-title .muted {
+  flex: 1;
+  font-size: 0.82rem;
+}
+
+.seg-doors {
+  font-size: 0.85rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.seg-doors-empty {
+  color: var(--danger);
+}
+
+.seg-editor-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.seg-cell-num {
+  width: 4.6rem;
+  min-height: 40px;
+  padding: 0.3rem 0.4rem;
+  font: inherit;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.seg-cell-num:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.seg-side-select {
+  min-height: 40px;
+  padding: 0.3rem 0.4rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
 .seg-trim-hint {
-  margin: -0.2rem 0 0.6rem;
+  margin: 0;
   font-size: 0.8rem;
+}
+
+/* Flash action button in the sweep bar ("Take them too"). */
+.sweep-action {
+  flex-shrink: 0;
+}
+
+/* Copy-or-clear prompt for a previous day's turfs. */
+.stale-card {
+  border-left: 6px solid #d97706;
+}
+
+.stale-text {
+  margin: 0 0 0.5rem;
+  font-size: 0.88rem;
+}
+
+.stale-actions {
+  display: flex;
+  gap: 0.5rem;
 }
 
 /* Base number-input style shared with the located search row. */
