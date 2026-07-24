@@ -407,13 +407,15 @@ function flash(msg: string) {
 const hint = computed(() => {
   if (flashMsg.value) return flashMsg.value
   if (lassoActive.value) {
-    return 'Lasso armed — drag a loop and every door inside joins the turf. Tap Lasso again to go back to panning.'
+    return lassoMode.value === 'erase'
+      ? 'Lasso armed to ERASE — drag a loop and every turf door inside comes back out. Tap Lasso again to go back to panning.'
+      : 'Lasso armed — drag a loop and every door inside joins the turf. Tap Lasso again to go back to panning.'
   }
   if (focusedStreet.value) {
     return `Trimming ${focusedStreet.value.name} — tap its doors on the map to drop or restore each house. Tap open map (or the pill) when you're done.`
   }
   const base =
-    'Type a street name below, tap a match to see it on the map, then "Add to turf" takes every door on it. Tap a pill to trim a street house by house, or circle a patch with Lasso.'
+    'Type a street name below and tap a match to see it on the map. Add takes the house range you set (the whole street unless you narrow it). Tap a pill to trim house by house, or circle a patch with Lasso.'
   return isSubcutter.value
     ? `${base} Only streets inside your assigned turf count toward a sub-turf.`
     : base
@@ -515,9 +517,10 @@ function segmentLabel(s: { street_name: string; range_start: number; range_end: 
 }
 
 // --- Door canvas paint state ---
-// The map stays blank except for the doors of the located street (picked
-// from search) and the street being trimmed (open pill editor). Fill =
-// knock status, ring = membership.
+// The map stays blank except for: every door in the DRAFT (they accumulate
+// as streets are added, so the turf builds up visibly), the located street
+// (picked from search), and the street being trimmed (open pill editor).
+// Fill = knock status, ring = membership.
 
 function doorOnStreet(a: AddressLite, s: { name: string; city: string | null }): boolean {
   if (streetNameOf(a.street) !== s.name) return false
@@ -525,13 +528,14 @@ function doorOnStreet(a: AddressLite, s: { name: string; city: string | null }):
 }
 
 function paintForDoor(id: string): DoorPaintState | null {
-  const f = focusedStreet.value
-  const l = locatedStreet.value
-  if (!f && !l) return null
   const a = addressById.get(id)
   if (!a) return null
-  if (!(f && doorOnStreet(a, f)) && !(l && doorOnStreet(a, l))) return null
   const inDraft = draftMemberIds.value.has(id)
+  if (!inDraft) {
+    const f = focusedStreet.value
+    const l = locatedStreet.value
+    if (!(f && doorOnStreet(a, f)) && !(l && doorOnStreet(a, l))) return null
+  }
   // While editing, doors still stamped to the turf but swept OUT of the
   // draft show ringless — the map previews the save.
   const stamped =
@@ -973,6 +977,9 @@ function addSegment(
   hi: number,
   parity: TurfParity,
 ) {
+  // Draft doors paint with knock-status fills — make sure those are on the
+  // way the moment anything joins a draft (one-shot).
+  ensureKnockStatuses()
   // A sweep that overlaps an existing draft segment on the same street folds
   // into it (the ranges union) — the same doors must never sit in a turf's
   // segment list twice.
@@ -1143,32 +1150,16 @@ watch(draftParentId, () => {
   for (const seg of segments.value) computeSegment(seg)
 })
 
-// --- Whole-street taking ---
+// --- Street taking ---
 
 /** Draft segments already covering this street (in the same city, when
- * known) — the tap handler consults this so a street can never land in the
- * draft twice. */
+ * known) — consulted so a street can never land in the draft twice. */
 function matchingSegments(streetName: string, city: string | null) {
   return segments.value.filter(
     (s) =>
       s.street_name === streetName &&
       (!s.city || !city || s.city.toUpperCase() === city.toUpperCase()),
   )
-}
-
-/** Take an entire street (its full house-number span) as one draft segment,
- * then pin down its unmapped doors. */
-function sweepWholeStreet(streetName: string, city: string | null) {
-  const rows = streetRows(streetName, city)
-  if (!rows.length) {
-    flash(`No doors found on ${streetName}.`)
-    return
-  }
-  const nums = rows.map((r) => houseNumber(r.street))
-  snapshotDraft()
-  addSegment(streetName, city, Math.min(...nums), Math.max(...nums), 'both')
-  flash(`Added ${streetName} — ${rows.length} doors. Trim it from its pill below, or Undo.`)
-  void materializeStreetPins(streetName, city, false)
 }
 
 /** Streets pulled in by search (or a double-tap near a sparsely-pinned
@@ -1233,29 +1224,64 @@ function onStreetInput(value: string) {
 }
 
 /** Is this match the one currently located (its doors on the map, its row
- * wearing the Add button)? */
+ * wearing the Add controls)? */
 function isLocated(m: { street_name: string; city: string }): boolean {
   const l = locatedStreet.value
   return !!l && l.name === m.street_name && (l.city ?? '').toUpperCase() === m.city.toUpperCase()
 }
 
-function streetInDraft(m: { street_name: string; city: string }): boolean {
-  return matchingSegments(m.street_name, m.city).length > 0
+/** Every door on the street already covered by the draft? The located row
+ * shows a ✓ instead of the Add controls. */
+function fullyInDraft(m: { street_name: string; city: string }): boolean {
+  const segs = matchingSegments(m.street_name, m.city)
+  if (!segs.length) return false
+  const rows = streetRows(m.street_name, m.city)
+  return rows.length > 0 && rows.every((a) => segs.some((s) => matchesSegment(a, s)))
 }
+
+// The located row's editable house-number range — prefilled with the whole
+// street, narrow it to take just a portion ("fill in the house numbers").
+const locatedFrom = ref(0)
+const locatedTo = ref(0)
+
+/** Doors the entered range would take (live count on the Add button). */
+const locatedRangeCount = computed(() => {
+  const l = locatedStreet.value
+  if (!l) return 0
+  const lo = Math.min(locatedFrom.value, locatedTo.value)
+  const hi = Math.max(locatedFrom.value, locatedTo.value)
+  return streetRows(l.name, l.city).filter((a) => {
+    const n = houseNumber(a.street)
+    return n >= lo && n <= hi
+  }).length
+})
 
 /** Tapping a search result LOCATES the street: zooms the map to it and
  * paints its doors (geocoding a capped batch of unmapped ones). Taking it
- * is the explicit "Add to turf" button that appears on the located row. */
-function locateStreet(m: { street_name: string; city: string }) {
+ * is the explicit Add button that appears on the located row. */
+function locateStreet(m: { street_name: string; city: string; lo: number; hi: number }) {
   locatedStreet.value = { name: m.street_name, city: m.city }
+  locatedFrom.value = m.lo
+  locatedTo.value = m.hi
   mapEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   void materializeStreetPins(m.street_name, m.city, true)
 }
 
-/** The located row's "Add to turf": every door on the street joins the
- * draft (the turf being edited, or the new one being built). */
+/** The located row's Add: the entered house-number range joins the draft
+ * (defaults to the whole street; overlapping ranges fold together). */
 function addLocatedStreet(m: { street_name: string; city: string }) {
-  sweepWholeStreet(m.street_name, m.city)
+  const lo = Math.min(locatedFrom.value, locatedTo.value)
+  const hi = Math.max(locatedFrom.value, locatedTo.value)
+  if (!locatedRangeCount.value) {
+    flash(`No doors on ${m.street_name} between ${lo} and ${hi}.`)
+    return
+  }
+  snapshotDraft()
+  addSegment(m.street_name, m.city, lo, hi, 'both')
+  flash(
+    `Added ${m.street_name} ${lo}–${hi} — ${locatedRangeCount.value} doors. Trim it from its pill below, or Undo.`,
+  )
+  void materializeStreetPins(m.street_name, m.city, false)
 }
 
 // --- Lasso: VAN-style region selection. Arm it, drag a loop, and every door
@@ -1264,12 +1290,16 @@ function addLocatedStreet(m: { street_name: string; city: string }) {
 // everything is hit-tested in memory, so the capture is instant. ---
 
 const lassoActive = ref(false)
+/** Armed lasso adds circled doors, or (erase) takes them back OUT of the
+ * draft — the Add/Erase toggle only shows while the lasso is armed. */
+const lassoMode = ref<'add' | 'erase'>('add')
 const lassoCanvasEl = ref<HTMLCanvasElement | null>(null)
 let lassoPath: { x: number; y: number }[] = []
 let lassoDrawing = false
 
 function toggleLasso() {
   lassoActive.value = !lassoActive.value
+  lassoMode.value = 'add'
   map?.setOptions({ gestureHandling: lassoActive.value ? 'none' : 'greedy' })
   lassoPath = []
   lassoDrawing = false
@@ -1302,7 +1332,9 @@ function drawLassoTrail() {
   ctx.beginPath()
   ctx.moveTo(lassoPath[0].x, lassoPath[0].y)
   for (let i = 1; i < lassoPath.length; i++) ctx.lineTo(lassoPath[i].x, lassoPath[i].y)
-  ctx.strokeStyle = draftColor.value
+  // Erase loops draw in the shared "this is a no" red so the intent reads
+  // before the finger lifts.
+  ctx.strokeStyle = lassoMode.value === 'erase' ? '#d64545' : draftColor.value
   ctx.lineWidth = 3
   ctx.lineJoin = 'round'
   ctx.stroke()
@@ -1342,15 +1374,28 @@ function onLassoUp() {
   const doors = ids
     .map((id) => addressById.get(id))
     .filter((a): a is AddressLite => !!a)
+  if (lassoMode.value === 'erase') {
+    const drafted = doors.filter((a) => draftMemberIds.value.has(a.id))
+    if (!drafted.length) {
+      flash('No turf doors inside that loop — circle around the ringed dots.')
+      return
+    }
+    snapshotDraft()
+    const { doorCount, streetCount } = removeDoorsFromDraft(drafted)
+    flash(
+      `Lasso: removed ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
+    )
+    return
+  }
   if (!doors.length) {
-    flash('No doors inside that loop — zoom in or circle closer around the dots.')
+    flash('No doors inside that loop — zoom in or circle closer around the houses.')
     return
   }
   snapshotDraft()
   const { doorCount, streetCount } = addDoorsAsSegments(doors)
   if (!doorCount) {
     undoStack.value.pop()
-    flash('Could not read streets for those doors — try circling closer around the lines.')
+    flash('Could not read streets for those doors — try a tighter loop.')
     return
   }
   flash(
@@ -1414,6 +1459,37 @@ function addDoorsAsSegments(doors: AddressLite[]): { doorCount: number; streetCo
   let streetCount = 0
   for (const g of groups.values()) {
     if (addStreetRuns(g.name, g.city, g.nums)) streetCount++
+  }
+  return { doorCount, streetCount }
+}
+
+/** Take a door selection OUT of the draft (the erase lasso), street by
+ * street — each touched street's segments rebuild as honest runs of what
+ * remains, so ranges shrink or split around the removed hole. */
+function removeDoorsFromDraft(doors: AddressLite[]): { doorCount: number; streetCount: number } {
+  const groups = new Map<string, { name: string; city: string; nums: Set<number> }>()
+  let doorCount = 0
+  for (const a of doors) {
+    const name = streetNameOf(a.street)
+    if (!name) continue
+    doorCount++
+    const key = `${name}|${a.city.toUpperCase()}`
+    let g = groups.get(key)
+    if (!g) groups.set(key, (g = { name, city: a.city, nums: new Set() }))
+    g.nums.add(houseNumber(a.street))
+  }
+  let streetCount = 0
+  for (const g of groups.values()) {
+    const segs = matchingSegments(g.name, g.city)
+    if (!segs.length) continue
+    const remaining = new Set<number>()
+    for (const row of streetRows(g.name, g.city)) {
+      const n = houseNumber(row.street)
+      if (!g.nums.has(n) && segs.some((s) => matchesSegment(row, s))) remaining.add(n)
+    }
+    for (const s of segs) removeSegment(s)
+    if (remaining.size) addStreetRuns(g.name, g.city, remaining)
+    streetCount++
   }
   return { doorCount, streetCount }
 }
@@ -1617,16 +1693,35 @@ onUnmounted(() => {
             <span class="street-match-name">{{ m.street_name }}</span>
             <span class="muted">{{ m.city }} · {{ m.count }} doors · {{ m.lo }}–{{ m.hi }}</span>
           </button>
-          <span v-if="isLocated(m) && streetInDraft(m)" class="muted street-match-in">
-            In this turf ✓
-          </span>
-          <button
-            v-else-if="isLocated(m)"
-            class="btn btn-sm btn-primary street-match-add"
-            @click="addLocatedStreet(m)"
-          >
-            Add to turf
-          </button>
+          <!-- Located row: edit the house-number range (prefilled = whole
+               street) and Add takes exactly that stretch. -->
+          <div v-if="isLocated(m)" class="street-match-actions">
+            <span v-if="fullyInDraft(m)" class="muted street-match-in">All in this turf ✓</span>
+            <template v-else>
+              <input
+                v-model.number="locatedFrom"
+                type="number"
+                class="seg-num range-num"
+                min="0"
+                aria-label="From house number"
+              />
+              <span class="muted">–</span>
+              <input
+                v-model.number="locatedTo"
+                type="number"
+                class="seg-num range-num"
+                min="0"
+                aria-label="To house number"
+              />
+              <button
+                class="btn btn-sm btn-primary street-match-add"
+                :disabled="!locatedRangeCount"
+                @click="addLocatedStreet(m)"
+              >
+                Add {{ locatedRangeCount }} door{{ locatedRangeCount === 1 ? '' : 's' }}
+              </button>
+            </template>
+          </div>
         </div>
       </div>
 
@@ -1671,7 +1766,7 @@ onUnmounted(() => {
           </button>
         </div>
         <!-- Lasso toggle, top-right: freezes the map and turns drags into a
-             selection loop. -->
+             selection loop. While armed, Add/Erase picks what the loop does. -->
         <div class="lasso-toggle">
           <button
             type="button"
@@ -1683,6 +1778,28 @@ onUnmounted(() => {
           >
             ◯ Lasso
           </button>
+          <template v-if="lassoActive">
+            <button
+              type="button"
+              class="layer-btn"
+              :class="{ active: lassoMode === 'add' }"
+              :aria-pressed="lassoMode === 'add'"
+              title="Loops add the circled doors to the turf"
+              @click="lassoMode = 'add'"
+            >
+              Add
+            </button>
+            <button
+              type="button"
+              class="layer-btn lasso-erase"
+              :class="{ active: lassoMode === 'erase' }"
+              :aria-pressed="lassoMode === 'erase'"
+              title="Loops remove the circled doors from the turf"
+              @click="lassoMode = 'erase'"
+            >
+              Erase
+            </button>
+          </template>
         </div>
       </div>
       <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
@@ -1804,8 +1921,8 @@ onUnmounted(() => {
           </div>
         </template>
         <p v-else class="muted empty-note">
-          Nothing here yet — type a street name above, tap the match, then "Add to turf". Or
-          circle a patch with Lasso.
+          Nothing here yet — type a street name above, tap the match, then Add. Narrow the
+          house numbers first to take just part of a street, or circle a patch with Lasso.
         </p>
 
         <div class="draft-form">
@@ -2035,6 +2152,11 @@ onUnmounted(() => {
   color: #fff;
 }
 
+/* Erase mode wears the outcomes' fixed "no" red, not the theme accent. */
+.layer-btn.lasso-erase.active {
+  background: #d64545;
+}
+
 .layer-btn:not(.active):hover {
   background: var(--surface-2);
 }
@@ -2076,17 +2198,31 @@ onUnmounted(() => {
   gap: 0.35rem;
 }
 
-/* Match rows: tap the name to locate; the located row grows the Add
- * button. */
+/* Match rows: tap the name to locate; the located row grows a second line
+ * with the house-number range and the Add button. */
 .street-match {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0 0.6rem;
   min-height: 44px;
   padding: 0.35rem 0.5rem 0.35rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+}
+
+.street-match-actions {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0 0.25rem;
+}
+
+.range-num {
+  width: 4.8rem;
+  min-height: 38px;
 }
 
 .street-match.located {

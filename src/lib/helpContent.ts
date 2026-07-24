@@ -312,10 +312,13 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         heading: 'Search, then add',
         body:
           'The map starts blank. Type a street name, tap a match to zoom to it (its doors ' +
-          'appear as dots), then "Add to turf" takes every door on it. A street already in ' +
-          'the turf trims from its pill below the map: open the pill and each map tap ' +
-          'drops or restores one house. The Lasso button freezes the map so you can drag ' +
-          'a loop — every door inside joins at once. Undo steps back one gesture at a time.',
+          'appear as dots), then Add takes the house-number range shown on the row — the ' +
+          'whole street unless you narrow the numbers first. Doors you take stay on the ' +
+          'map as ringed dots, so the turf builds up visibly. A street already in the ' +
+          'turf trims from its pill below the map: open the pill and each map tap drops ' +
+          'or restores one house. The Lasso freezes the map so you can drag a loop — in ' +
+          'Add mode every door inside joins at once; flip to Erase and a red loop takes ' +
+          'turf doors back out. Undo steps back one gesture at a time.',
       },
       {
         heading: 'Reading the map',
