@@ -316,17 +316,20 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
           'whole street unless you narrow the numbers first. Doors you take stay on the ' +
           'map as ringed dots, so the turf builds up visibly. A street already in the ' +
           'turf trims from its pill below the map: open the pill and each map tap drops ' +
-          'or restores one house. The Lasso freezes the map so you can drag a loop — in ' +
-          'Add mode every door inside joins at once; flip to Erase and a red loop takes ' +
-          'turf doors back out. Undo steps back one gesture at a time.',
+          'or restores one house. The map tools share an Add/Erase switch: ◯ Lasso ' +
+          'freezes the map so you can drag a loop (every door inside joins — or comes ' +
+          'back out in Erase), and ☝ Streets lets you tap a road right on the map, dots ' +
+          'or no dots, to take or drop that whole street. Undo steps back one gesture at ' +
+          'a time.',
       },
       {
         heading: 'Reading the map',
         body:
           'The Shade button colors each saved turf’s area, and your draft shades in its ' +
           'own color as you build. While a street is showing, a door’s fill is its knock ' +
-          'status (blue = never knocked) and its ring is who holds it. Existing turfs live ' +
-          'in the dropdown at the bottom — picking one zooms to it and opens its ' +
+          'status (blue = never knocked) and its ring is who holds it. Tap any dot (with ' +
+          'no tool armed) to pop up that door’s compact knock history. Existing turfs ' +
+          'live in the dropdown at the bottom — picking one zooms to it and opens its ' +
           'management card (edit, delete, reassign).',
       },
       {

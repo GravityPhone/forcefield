@@ -56,7 +56,7 @@ import { DoorCanvasLayer } from '@/lib/doorCanvas'
 import type { DoorPaintState } from '@/lib/doorCanvas'
 import { geocodeAndCache, geocodeMissing } from '@/lib/geocode'
 import { localToday } from '@/lib/day'
-import { OUTCOME_HEX, PIN_DEFAULT_HEX, doorStatusOutcome } from '@/lib/outcomes'
+import { OUTCOME_HEX, OUTCOME_LABELS, PIN_DEFAULT_HEX, doorStatusOutcome } from '@/lib/outcomes'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import { useAuthStore } from '@/stores/auth'
@@ -170,6 +170,10 @@ function toggleSegEditor(key: string) {
   }
   expandedSegKey.value = key
   ensureKnockStatuses()
+  // Trim mode owns the map taps — the armed tools and the history bubble
+  // step aside.
+  streetTapActive.value = false
+  doorInfo.value = null
   const seg = segments.value.find((s) => s.key === key)
   // Opening trim mode zooms to the street and pins down its unmapped doors
   // so there's something to tap.
@@ -407,9 +411,14 @@ function flash(msg: string) {
 const hint = computed(() => {
   if (flashMsg.value) return flashMsg.value
   if (lassoActive.value) {
-    return lassoMode.value === 'erase'
+    return selectMode.value === 'erase'
       ? 'Lasso armed to ERASE — drag a loop and every turf door inside comes back out. Tap Lasso again to go back to panning.'
       : 'Lasso armed — drag a loop and every door inside joins the turf. Tap Lasso again to go back to panning.'
+  }
+  if (streetTapActive.value) {
+    return selectMode.value === 'erase'
+      ? 'Street tap armed to ERASE — tap any street on the map and it comes out of the turf. Tap Streets again when done.'
+      : 'Street tap armed — tap any street right on the map, dots or no dots, and every door on it joins the turf. Tap Streets again when done.'
   }
   if (focusedStreet.value) {
     return `Trimming ${focusedStreet.value.name} — tap its doors on the map to drop or restore each house. Tap open map (or the pill) when you're done.`
@@ -891,16 +900,65 @@ function rebuildDraftShade() {
 }
 
 // --- Tapping (all synchronous — the draft lives entirely in memory) ---
-// The map takes no street-picking taps anymore (adding is the search flow's
-// "Add to turf" button). Taps only matter in trim mode: tap the focused
-// street's doors to drop/restore each house; tap open map to exit trim.
+// Tap routing, in priority order: armed street-tap tool → trim mode's door
+// toggles → a painted dot opens its compact house history → empty map
+// closes whatever's open.
 
 function onMapClick(e: google.maps.MapMouseEvent) {
-  if (!e.latLng || !map || !focusedStreet.value) return
-  if ((map.getZoom() ?? 14) < PINS_MIN_ZOOM) return
-  const id = doorLayer?.doorAt(e.latLng, TAP_RADIUS_PX)
-  if (id) toggleTrimDoor(id)
-  else expandedSegKey.value = null
+  if (!e.latLng || !map) return
+  if (streetTapActive.value) {
+    handleStreetTap(e.latLng)
+    return
+  }
+  const zoomedIn = (map.getZoom() ?? 14) >= PINS_MIN_ZOOM
+  if (focusedStreet.value) {
+    if (!zoomedIn) return
+    const id = doorLayer?.doorAt(e.latLng, TAP_RADIUS_PX)
+    if (id) toggleTrimDoor(id)
+    else expandedSegKey.value = null
+    return
+  }
+  const id = zoomedIn ? doorLayer?.doorAt(e.latLng, TAP_RADIUS_PX) : null
+  if (id) void showDoorInfo(id)
+  else doorInfo.value = null
+}
+
+// --- Compact house history: tap a painted dot (no tool armed) and the
+// door's last few knocks pop up over the map. ---
+
+interface DoorKnock {
+  outcome: KnockOutcome
+  occurred_at: string
+  person: { name: string } | null
+  canvasser: { username: string; display_name: string | null } | null
+}
+
+const doorInfo = ref<{ address: AddressLite; loading: boolean; knocks: DoorKnock[] } | null>(null)
+let doorInfoSeq = 0
+
+async function showDoorInfo(addressId: string) {
+  const a = addressById.get(addressId)
+  if (!a) return
+  const seq = ++doorInfoSeq
+  doorInfo.value = { address: a, loading: true, knocks: [] }
+  const { data } = await supabase
+    .from('knock_logs')
+    .select('outcome, occurred_at, person:persons(name), canvasser:profiles(username, display_name)')
+    .eq('household_id', addressId)
+    .order('occurred_at', { ascending: false })
+    .limit(6)
+  if (doorInfoSeq !== seq || unmounted) return
+  doorInfo.value = { address: a, loading: false, knocks: (data ?? []) as unknown as DoorKnock[] }
+}
+
+function knockWhen(iso: string): string {
+  return new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
+function knockWho(k: DoorKnock): string {
+  const by = k.canvasser ? k.canvasser.display_name || k.canvasser.username : ''
+  if (k.person?.name && by) return `${k.person.name} · by ${by}`
+  return k.person?.name || (by ? `by ${by}` : '')
 }
 
 /** Trim-mode door tap: drop the house from the draft, or restore it. The
@@ -1290,22 +1348,97 @@ function addLocatedStreet(m: { street_name: string; city: string }) {
 // everything is hit-tested in memory, so the capture is instant. ---
 
 const lassoActive = ref(false)
-/** Armed lasso adds circled doors, or (erase) takes them back OUT of the
- * draft — the Add/Erase toggle only shows while the lasso is armed. */
-const lassoMode = ref<'add' | 'erase'>('add')
+/** Shared Add/Erase mode for the armed tools (lasso + street tap): add puts
+ * doors into the draft, erase takes them back out. The toggle only shows
+ * while a tool is armed. */
+const selectMode = ref<'add' | 'erase'>('add')
 const lassoCanvasEl = ref<HTMLCanvasElement | null>(null)
 let lassoPath: { x: number; y: number }[] = []
 let lassoDrawing = false
 
 function toggleLasso() {
   lassoActive.value = !lassoActive.value
-  lassoMode.value = 'add'
+  selectMode.value = 'add'
+  streetTapActive.value = false
+  doorInfo.value = null
   map?.setOptions({ gestureHandling: lassoActive.value ? 'none' : 'greedy' })
   lassoPath = []
   lassoDrawing = false
   if (lassoActive.value) {
     void nextTick(() => sizeLassoCanvas())
   }
+}
+
+// --- Armed street tap: tap the road itself on the basemap — no dots or
+// overlay needed — and the nearest street's every door joins the draft (or
+// leaves it, in erase mode). The houses pop in as dots after the tap. ---
+
+const streetTapActive = ref(false)
+/** How far (meters) a street tap may land from the nearest known door. */
+const STREET_SNAP_METERS = 150
+
+function toggleStreetTap() {
+  streetTapActive.value = !streetTapActive.value
+  selectMode.value = 'add'
+  doorInfo.value = null
+  if (streetTapActive.value) {
+    // One tool at a time — disarm the lasso and unfreeze the map.
+    if (lassoActive.value) {
+      lassoActive.value = false
+      map?.setOptions({ gestureHandling: 'greedy' })
+      lassoPath = []
+      lassoDrawing = false
+    }
+    expandedSegKey.value = null
+  }
+}
+
+/** Closest geocoded door to a point — how a tap on bare road resolves to a
+ * street. O(all doors), a few ms at county scale. */
+function nearestDoor(lat: number, lng: number): { door: AddressLite; meters: number } | null {
+  let best: AddressLite | null = null
+  let bestD = Infinity
+  for (const a of addressById.values()) {
+    if (a.lat == null || a.lng == null) continue
+    const d = roughMeters({ lat, lng }, { lat: a.lat, lng: a.lng })
+    if (d < bestD) {
+      bestD = d
+      best = a
+    }
+  }
+  return best ? { door: best, meters: bestD } : null
+}
+
+function handleStreetTap(latLng: google.maps.LatLng) {
+  const hit = nearestDoor(latLng.lat(), latLng.lng())
+  if (!hit || hit.meters > STREET_SNAP_METERS) {
+    flash('No known street near that tap — try closer to the houses.')
+    return
+  }
+  const name = streetNameOf(hit.door.street)
+  const city = hit.door.city
+  if (!name) return
+  if (selectMode.value === 'erase') {
+    const segs = matchingSegments(name, city)
+    if (!segs.length) {
+      flash(`${name} isn't in this turf.`)
+      return
+    }
+    snapshotDraft()
+    for (const s of segs) removeSegment(s)
+    flash(`Removed ${name} from the turf.`)
+    return
+  }
+  if (fullyInDraft({ street_name: name, city })) {
+    flash(`${name} is already in this turf.`)
+    return
+  }
+  const rows = streetRows(name, city)
+  const nums = rows.map((r) => houseNumber(r.street))
+  snapshotDraft()
+  addSegment(name, city, Math.min(...nums), Math.max(...nums), 'both')
+  flash(`Added ${name} — ${rows.length} doors.`)
+  void materializeStreetPins(name, city, false)
 }
 
 function sizeLassoCanvas() {
@@ -1334,7 +1467,7 @@ function drawLassoTrail() {
   for (let i = 1; i < lassoPath.length; i++) ctx.lineTo(lassoPath[i].x, lassoPath[i].y)
   // Erase loops draw in the shared "this is a no" red so the intent reads
   // before the finger lifts.
-  ctx.strokeStyle = lassoMode.value === 'erase' ? '#d64545' : draftColor.value
+  ctx.strokeStyle = selectMode.value === 'erase' ? '#d64545' : draftColor.value
   ctx.lineWidth = 3
   ctx.lineJoin = 'round'
   ctx.stroke()
@@ -1374,7 +1507,7 @@ function onLassoUp() {
   const doors = ids
     .map((id) => addressById.get(id))
     .filter((a): a is AddressLite => !!a)
-  if (lassoMode.value === 'erase') {
+  if (selectMode.value === 'erase') {
     const drafted = doors.filter((a) => draftMemberIds.value.has(a.id))
     if (!drafted.length) {
       flash('No turf doors inside that loop — circle around the ringed dots.')
@@ -1401,6 +1534,18 @@ function onLassoUp() {
   flash(
     `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
   )
+  // Populate the dots: the captured streets usually hold doors that were
+  // never geocoded (the lasso can only see mapped ones), so without this
+  // the sweep sits half-blank. Geocode a capped batch per street.
+  const seen = new Set<string>()
+  for (const a of doors) {
+    const name = streetNameOf(a.street)
+    if (!name) continue
+    const key = `${name}|${a.city.toUpperCase()}`
+    if (seen.has(key) || seen.size >= 6) continue
+    seen.add(key)
+    void materializeStreetPins(name, a.city, false)
+  }
 }
 
 function onLassoCancel() {
@@ -1765,8 +1910,9 @@ onUnmounted(() => {
             City
           </button>
         </div>
-        <!-- Lasso toggle, top-right: freezes the map and turns drags into a
-             selection loop. While armed, Add/Erase picks what the loop does. -->
+        <!-- Selection tools, top-right: Lasso (freezes the map, drag a
+             loop) and Streets (tap the road itself to take a whole
+             street). While either is armed, Add/Erase picks what it does. -->
         <div class="lasso-toggle">
           <button
             type="button"
@@ -1778,28 +1924,57 @@ onUnmounted(() => {
           >
             ◯ Lasso
           </button>
-          <template v-if="lassoActive">
+          <button
+            type="button"
+            class="layer-btn"
+            :class="{ active: streetTapActive }"
+            :aria-pressed="streetTapActive"
+            title="Tap a street on the map to take (or remove) every door on it"
+            @click="toggleStreetTap"
+          >
+            ☝ Streets
+          </button>
+          <template v-if="lassoActive || streetTapActive">
             <button
               type="button"
               class="layer-btn"
-              :class="{ active: lassoMode === 'add' }"
-              :aria-pressed="lassoMode === 'add'"
-              title="Loops add the circled doors to the turf"
-              @click="lassoMode = 'add'"
+              :class="{ active: selectMode === 'add' }"
+              :aria-pressed="selectMode === 'add'"
+              title="Add the selection to the turf"
+              @click="selectMode = 'add'"
             >
               Add
             </button>
             <button
               type="button"
               class="layer-btn lasso-erase"
-              :class="{ active: lassoMode === 'erase' }"
-              :aria-pressed="lassoMode === 'erase'"
-              title="Loops remove the circled doors from the turf"
-              @click="lassoMode = 'erase'"
+              :class="{ active: selectMode === 'erase' }"
+              :aria-pressed="selectMode === 'erase'"
+              title="Remove the selection from the turf"
+              @click="selectMode = 'erase'"
             >
               Erase
             </button>
           </template>
+        </div>
+        <!-- Compact house history: tap a dot (no tool armed) to see the
+             door's last knocks. -->
+        <div v-if="doorInfo" class="door-card">
+          <div class="door-card-head">
+            <strong class="door-card-street">{{ doorInfo.address.street }}</strong>
+            <span class="muted">{{ doorInfo.address.city }}</span>
+            <button class="door-card-x" aria-label="Close house history" @click="doorInfo = null">✕</button>
+          </div>
+          <p v-if="doorInfo.loading" class="muted door-card-note">Loading history…</p>
+          <p v-else-if="!doorInfo.knocks.length" class="muted door-card-note">Never knocked.</p>
+          <ul v-else class="door-card-list">
+            <li v-for="(k, i) in doorInfo.knocks" :key="i" class="door-card-row">
+              <span class="door-card-dot" :style="{ background: OUTCOME_HEX[k.outcome] }" aria-hidden="true"></span>
+              <span class="door-card-outcome">{{ OUTCOME_LABELS[k.outcome] }}</span>
+              <span v-if="knockWho(k)" class="muted door-card-who">{{ knockWho(k) }}</span>
+              <span class="muted door-card-when">{{ knockWhen(k.occurred_at) }}</span>
+            </li>
+          </ul>
         </div>
       </div>
       <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
@@ -2159,6 +2334,104 @@ onUnmounted(() => {
 
 .layer-btn:not(.active):hover {
   background: var(--surface-2);
+}
+
+/* Compact house-history card, pinned to the map's bottom edge. */
+.door-card {
+  position: absolute;
+  left: 0.6rem;
+  right: 0.6rem;
+  bottom: 0.6rem;
+  z-index: 6;
+  padding: 0.5rem 0.65rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  max-height: 45%;
+  overflow-y: auto;
+}
+
+.door-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.door-card-street {
+  font-size: 0.95rem;
+}
+
+.door-card-head > .muted {
+  flex: 1;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.door-card-x {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+  padding: 0 0.15rem;
+}
+
+.door-card-x:hover {
+  color: var(--danger);
+}
+
+.door-card-note {
+  margin: 0.3rem 0 0;
+  font-size: 0.85rem;
+}
+
+.door-card-list {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.door-card-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+}
+
+.door-card-dot {
+  flex-shrink: 0;
+  align-self: center;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
+}
+
+.door-card-outcome {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.door-card-who {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+}
+
+.door-card-when {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .pins-loading-spinner {
