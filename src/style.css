@@ -31,6 +31,10 @@ body {
   margin: 0;
   padding: 0;
   height: 100%;
+  /* No page-level pinch/double-tap zoom (app-like feel; the installed PWA
+   * sometimes reopened with a stale zoom level). Maps still pinch — their
+   * canvases set their own touch-action and zoom via the JS camera. */
+  touch-action: pan-x pan-y;
 }
 
 html {
