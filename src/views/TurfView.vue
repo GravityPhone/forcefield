@@ -15,12 +15,18 @@
 // is what Hunt reads to show "your turf".
 //
 // EVERYTHING before Save is client-side and synchronous: the full address
-// table (~23k rows, ungeocoded included) loads once at init into in-memory
-// street indexes, streets and doors render on ONE canvas overlay
+// table (~23k rows, ungeocoded included) loads into in-memory street
+// indexes, streets and doors render on ONE canvas overlay
 // (src/lib/doorCanvas.ts — no DOM markers, no pin cap), and every gesture
 // mutates the draft purely in memory and repaints in a frame. The only
-// network after init: Save (turf insert + set_turf_segments RPC), geocoding
+// network after load: Save (turf insert + set_turf_segments RPC), geocoding
 // drips, and the post-save refetch.
+//
+// STARTUP IS MAP-FIRST (2026-07-23, "it's crazy how long it's taking to
+// load"): the map appears immediately and flies to the user's location
+// zoomed in; the address/turf data loads in the background (streets pop in
+// when ready) and knock statuses — needed only for trim-mode door fills —
+// don't load at all until trim mode first opens.
 //
 // Roles: campaign managers (and admins) cut anywhere. Squad leaders only
 // cut SUB-turfs — cuts inside a turf assigned to them (directly or via
@@ -28,6 +34,7 @@
 // assignment. RLS + the RPC enforce this server-side; the scoping here just
 // keeps the UI honest.
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { Geolocation } from '@capacitor/geolocation'
 import AppShell from '@/components/AppShell.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import type { SelectOption } from '@/components/ui/AppSelect.vue'
@@ -161,6 +168,7 @@ function toggleSegEditor(key: string) {
     return
   }
   expandedSegKey.value = key
+  ensureKnockStatuses()
   const seg = segments.value.find((s) => s.key === key)
   // Opening trim mode zooms to the street and pins down its unmapped doors
   // so there's something to tap.
@@ -638,12 +646,16 @@ function pushDraftRuns() {
  * counts, and search all run from memory so no gesture ever waits on the
  * network. ~23k slim rows ≈ a small map tile's worth of JSON. */
 async function fetchAddresses(): Promise<AddressLite[]> {
-  return fetchAllRows<AddressLite>((from, to) =>
-    supabase
-      .from('addresses')
-      .select('id, street, unit, city, zip, lat, lng, turf_id')
-      .order('id')
-      .range(from, to),
+  // 8 concurrent pages: ~23 pages of 1000 land in 3 round trips instead of 6.
+  return fetchAllRows<AddressLite>(
+    (from, to) =>
+      supabase
+        .from('addresses')
+        .select('id, street, unit, city, zip, lat, lng, turf_id')
+        .order('id')
+        .range(from, to),
+    1000,
+    8,
   )
 }
 
@@ -670,6 +682,16 @@ async function fetchTurfs() {
     else hist.set(row.turf_id, [row])
   }
   historyByTurf.value = hist
+}
+
+/** Trim-mode door fills wear knock-status colors — ~15k rows the page never
+ * needs at startup, so they load once, lazily, the first time trim mode
+ * opens (the statusByAddress watch repaints when they land). */
+let statusesRequested = false
+function ensureKnockStatuses() {
+  if (statusesRequested) return
+  statusesRequested = true
+  void fetchKnockStatuses()
 }
 
 /** Latest outcome per door, for the status-colored dot fills. Best-effort:
@@ -715,36 +737,15 @@ async function computeLeaderlessSquads() {
   )
 }
 
+// Map-first startup: only the Maps SDK blocks showing the map. Everything
+// else — the county address table, turfs, squads, people — streams in behind
+// it while the user is already looking at (and panning) their neighborhood.
 async function initialize() {
   pinsLoading.value = true
-  let rows: AddressLite[] = []
   try {
-    ;[rows] = await Promise.all([
-      fetchAddresses(),
-      fetchTurfs(),
-      loadMaps(),
-      squadsStore.loadToday(),
-      supabase
-        .from('profiles')
-        .select('id, username, display_name')
-        .order('username')
-        .then((res) => {
-          people.value = (res.data ?? []) as ChatProfile[]
-        }),
-      supabase
-        .from('squad_members')
-        .select('squad_id, squads!inner(squad_date)')
-        .eq('user_id', auth.profile?.id ?? '')
-        .eq('squads.squad_date', localToday())
-        .then((res) => {
-          mySquadIds.value = new Set((res.data ?? []).map((r) => r.squad_id as string))
-        }),
-      fetchKnockStatuses(),
-    ])
-    await computeLeaderlessSquads()
-    defaultDraftParent()
+    await loadMaps()
   } catch {
-    loadError.value = 'Could not load the map or address data. Check your connection.'
+    loadError.value = 'Could not load the map. Check your connection.'
     initStarted = false
     pinsLoading.value = false
     return
@@ -756,7 +757,7 @@ async function initialize() {
 
   map = new google.maps.Map(mapEl.value, {
     center: FALLBACK_CENTER,
-    zoom: 14,
+    zoom: 15,
     mapId: GOOGLE_MAPS_MAP_ID,
     renderingType: MAP_RENDERING_TYPE,
     streetViewControl: false,
@@ -770,15 +771,11 @@ async function initialize() {
   })
   map.addListener('click', (e: google.maps.MapMouseEvent) => onMapClick(e))
 
-  indexAddresses(rows)
-
   doorLayer = new DoorCanvasLayer(map, {
     minPinZoom: PINS_MIN_ZOOM,
     numbersMinZoom: NUMBERS_MIN_ZOOM,
     paintFor: paintForDoor,
   })
-  doorLayer.setDoors(locatedCanvasDoors())
-  rebuildStreets()
   // Settled pan/zoom: repaint only if the view outgrew the painted canvas
   // (or the zoom landed somewhere new — mid-animation the canvas just
   // stretches via its CSS transform).
@@ -797,13 +794,78 @@ async function initialize() {
     zIndex: 0,
   }))
 
-  const bounds = new google.maps.LatLngBounds()
-  for (const a of addressById.values()) {
-    if (a.lat != null && a.lng != null) bounds.extend({ lat: a.lat, lng: a.lng })
+  // Fly to where the user is standing — cutting usually starts on the
+  // ground — while the street data streams in behind the map.
+  void zoomToMe()
+  void loadCutterData()
+}
+
+/** How far from the campaign's ground the user can be and still get flown
+ * to their own location — demo visitors across the country stay on the
+ * fallback view instead of landing on an empty map. */
+const NEAR_CAMPAIGN_METERS = 60000
+
+/** Rough planar distance — plenty at county scale. */
+function roughMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const rad = Math.PI / 180
+  const x = (b.lng - a.lng) * rad * Math.cos(((a.lat + b.lat) / 2) * rad)
+  const y = (b.lat - a.lat) * rad
+  return Math.hypot(x, y) * 6371000
+}
+
+/** Center tight on the user's real location (same Capacitor call as Scout's
+ * locate button — browser fallback included). Denied/unavailable/far away =
+ * stay on the fallback town view. Never blocks anything. */
+async function zoomToMe() {
+  try {
+    const pos = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 8000 })
+    if (unmounted || !map) return
+    const here = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+    if (roughMeters(here, FALLBACK_CENTER) > NEAR_CAMPAIGN_METERS) return
+    map.panTo(here)
+    map.setZoom(17)
+  } catch {
+    /* no permission or no fix — the fallback view is fine */
   }
-  if (!bounds.isEmpty()) map.fitBounds(bounds, 48)
-  buildSavedAreas()
-  pinsLoading.value = false
+}
+
+/** Background data load: the county address table into the street indexes,
+ * plus turfs/squads/people for coloring, scoping, and the assign pickers.
+ * The map is already up and interactive while this runs. */
+async function loadCutterData() {
+  try {
+    const [rows] = await Promise.all([
+      fetchAddresses(),
+      fetchTurfs(),
+      squadsStore.loadToday(),
+      supabase
+        .from('profiles')
+        .select('id, username, display_name')
+        .order('username')
+        .then((res) => {
+          people.value = (res.data ?? []) as ChatProfile[]
+        }),
+      supabase
+        .from('squad_members')
+        .select('squad_id, squads!inner(squad_date)')
+        .eq('user_id', auth.profile?.id ?? '')
+        .eq('squads.squad_date', localToday())
+        .then((res) => {
+          mySquadIds.value = new Set((res.data ?? []).map((r) => r.squad_id as string))
+        }),
+    ])
+    await computeLeaderlessSquads()
+    if (unmounted) return
+    defaultDraftParent()
+    indexAddresses(rows)
+    doorLayer?.setDoors(locatedCanvasDoors())
+    rebuildStreets()
+    buildSavedAreas()
+  } catch {
+    loadError.value = 'Could not load the street data. Check your connection and reload.'
+  } finally {
+    pinsLoading.value = false
+  }
 }
 
 /** Shade every saved turf (except the one being edited — its shape is being
@@ -827,9 +889,14 @@ function buildSavedAreas() {
 }
 
 /** Re-pull addresses + turfs after a save/delete (turf_id stamps changed
- * server-side) and repaint. */
+ * server-side) and repaint. Statuses only re-pull if trim mode ever loaded
+ * them. */
 async function reloadAll() {
-  const [rows] = await Promise.all([fetchAddresses(), fetchTurfs(), fetchKnockStatuses()])
+  const [rows] = await Promise.all([
+    fetchAddresses(),
+    fetchTurfs(),
+    ...(statusesRequested ? [fetchKnockStatuses()] : []),
+  ])
   indexAddresses(rows)
   doorLayer?.setDoors(locatedCanvasDoors())
   rebuildStreets()
@@ -941,6 +1008,7 @@ function onMapClick(e: google.maps.MapMouseEvent) {
   if (already.length) {
     // Street's in the draft — switch trim mode onto it.
     expandedSegKey.value = already[0].key
+    ensureKnockStatuses()
     void materializeStreetPins(name, city, false)
     flash(`Trimming ${name} — tap its doors to drop or restore each house.`)
     return
@@ -1650,7 +1718,7 @@ onUnmounted(() => {
         </div>
         <div v-if="pinsLoading" class="pins-loading" role="status" aria-live="polite">
           <span class="pins-loading-spinner" aria-hidden="true"></span>
-          Loading doors…
+          Loading streets…
         </div>
         <!-- Map layers: turf area shading and city/village limits. -->
         <div class="layer-toggle" role="group" aria-label="Map layers">
