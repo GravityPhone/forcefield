@@ -65,6 +65,7 @@ import {
 import type { StreetAtPoint } from '@/lib/geocode'
 import { avatarUrl } from '@/lib/avatars'
 import { localToday } from '@/lib/day'
+import { memberColor } from '@/lib/memberColors'
 import { OUTCOME_HEX, OUTCOME_LABELS, doorStatusOutcome } from '@/lib/outcomes'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
@@ -158,11 +159,12 @@ const partlySignedDoors = ref<Set<string>>(new Set())
 const NUMBERS_MIN_ZOOM = 16
 /** Below this zoom trim-mode doors are tiny dots and door taps don't land. */
 const PINS_MIN_ZOOM = 15
-/** Other turfs' "taken" symbols (Turf layer on) start showing this much
- * farther OUT than regular door pins — 2026-07-24 later still, user call:
- * seeing whose ground is whose is useful at a wider view than trimming
- * individual doors is. Still gated behind the toggle, still tiny dots below
- * PINS_MIN_ZOOM (doorCanvas's own tiny-vs-full split is unchanged). */
+/** Other turfs' doors (Turf layer on — crossed out while cutting, colored
+ * by owner in overview) start showing this much farther OUT than regular
+ * door pins — 2026-07-24 later still, user call: seeing whose ground is
+ * whose is useful at a wider view than trimming individual doors is. Still
+ * gated behind the toggle, still tiny dots below PINS_MIN_ZOOM
+ * (doorCanvas's own tiny-vs-full split is unchanged). */
 const TAKEN_MIN_ZOOM = PINS_MIN_ZOOM - 2
 /** How close (screen px) a tap must land to a door to count as tapping it. */
 const TAP_RADIUS_PX = 22
@@ -264,6 +266,12 @@ function removeGroupWithUndo(g: StreetGroup) {
 }
 
 const editingTurfId = ref<string | null>(null)
+/** Is the cutting UI open at all? (2026-07-24 later still, user call: "you
+ * should have to actually select create new turf".) Closed = the page is a
+ * pure turf OVERVIEW — no draft card, and the map colors other turfs by
+ * owner instead of crossing them out. Opened by "Create new turf" or by
+ * editing an existing one. */
+const draftOpen = ref(false)
 /** Which of the lead's turfs a NEW sub-turf carves from (auto when one). */
 const draftParentId = ref<string | null>(null)
 // 'none' | 'squad:<id>' | 'user:<id>' — Reka's SelectItem forbids '' values.
@@ -614,6 +622,13 @@ function runFlashAction() {
 
 const hint = computed(() => {
   if (flashMsg.value) return flashMsg.value
+  // Overview: no draft open, so nothing is being cut — say what the map is
+  // showing and how to start.
+  if (!draftOpen.value) {
+    return showTakenDoors.value
+      ? 'Overview — every turf\'s doors wear their own color (the person it\'s assigned to, where there is one). Tap a door to see whose it is. Tap "Create new turf" below to start cutting.'
+      : 'Overview — turn on the Turf layer to color every turf\'s doors by owner, or tap "Create new turf" below to start cutting.'
+  }
   if (lassoActive.value) {
     return selectMode.value === 'erase'
       ? 'Lasso armed to ERASE — drag a loop and every turf door inside comes back out. Tap Lasso again to go back to panning.'
@@ -769,6 +784,14 @@ function badgeImage(slug: string | null | undefined): HTMLImageElement | null {
   return img
 }
 
+/** A turf's identity color for the OVERVIEW rings: the assignee's own accent
+ * (the same color their Squad card / chat name wears) when it's one
+ * person's turf, else the turf's auto-assigned palette hue — squad-assigned
+ * and unassigned turfs still each get a distinct color. */
+function turfDisplayColor(t: TurfWithMeta): string {
+  return t.assignee ? memberColor(t.assignee) : t.color
+}
+
 function doorOnStreet(a: AddressLite, s: { name: string; city: string | null }): boolean {
   if (streetNameOf(a.street) !== s.name) return false
   return !s.city || a.city.toUpperCase() === s.city.toUpperCase()
@@ -785,21 +808,25 @@ function paintForDoor(id: string): DoorPaintState | null {
     const l = locatedStreet.value
     const onShownStreet = (f && doorOnStreet(a, f)) || (l && doorOnStreet(a, l))
     // Turf layer on + zoomed to at least TAKEN_MIN_ZOOM: every door another
-    // turf owns paints as a taken symbol, so someone else's ground reads
-    // door-level just by having the toggle on — from farther out than
-    // regular pins need. Toggle off = draft members and the shown street
-    // only.
-    const shownAsTaken =
+    // turf owns paints (crossed out while cutting, turf-colored in
+    // overview), so someone else's ground reads door-level just by having
+    // the toggle on — from farther out than regular pins need. Toggle off =
+    // draft members and the shown street only.
+    const shownAsOtherTurf =
       ownedElsewhere && showTakenDoors.value && (map?.getZoom() ?? 0) >= TAKEN_MIN_ZOOM
-    if (!onShownStreet && !shownAsTaken) return null
+    if (!onShownStreet && !shownAsOtherTurf) return null
   }
   // Draft members can still carry another turf's stamp (a sub-cut claims
   // from its parent pool, a steal from its victim until save) — membership
-  // wins over the taken symbol. And the symbol ONLY exists while the Turf
-  // layer is on: with it off, every painted door wears its Scout-style
-  // status color, full stop.
-  if (ownedElsewhere && !inDraft && showTakenDoors.value) {
-    const who = turfById.value.get(a.turf_id!)?.assignee ?? null
+  // wins over anything else. Otherwise, with the Turf layer on, another
+  // turf's door reads one of two ways depending on what you're doing
+  // (2026-07-24 later still, user call): while a draft is OPEN those doors
+  // are obstacles, so they cross out; with no draft open the page is a pure
+  // OVERVIEW, so they keep their status fill and wear their turf's color as
+  // a ring instead.
+  const owner = ownedElsewhere && !inDraft ? turfById.value.get(a.turf_id!) : undefined
+  if (owner && showTakenDoors.value && draftOpen.value) {
+    const who = owner.assignee
     return {
       fill: FILL_OPEN,
       ring: null,
@@ -820,7 +847,10 @@ function paintForDoor(id: string): DoorPaintState | null {
   } else if (eff === 'didnt_sign' || eff === 'skip' || eff === 'hostile') fill = FILL_CLOSED
   return {
     fill,
-    ring: inDraft ? DRAFT_RING : null,
+    // The outer ring says WHOSE this door is: the uniform dark ring while
+    // it's joining the draft you're building, or (overview) the owning
+    // turf's identity color.
+    ring: inDraft ? DRAFT_RING : owner && showTakenDoors.value ? turfDisplayColor(owner) : null,
     innerRing,
     outline: fill === FILL_OPEN ? OPEN_OUTLINE : null,
     ink: fill === FILL_OPEN ? OPEN_INK : '#fff',
@@ -832,7 +862,7 @@ function paintForDoor(id: string): DoorPaintState | null {
 // the layer). showTakenDoors governs the door-level taken symbols; zoom
 // crossings repaint via the layer's own idle check.
 watch(
-  [draftMemberIds, statusByAddress, partlySignedDoors, expandedSegKey, locatedStreet, turfs, editingTurfId, showTakenDoors, pinMode],
+  [draftMemberIds, statusByAddress, partlySignedDoors, expandedSegKey, locatedStreet, turfs, editingTurfId, showTakenDoors, pinMode, draftOpen],
   () => doorLayer?.requestRepaint(),
 )
 
@@ -871,7 +901,7 @@ async function fetchTurfs() {
     supabase
       .from('turfs')
       .select(
-        '*, turf_segments(*), assignee:profiles!turfs_assignee_id_fkey(id, username, display_name, avatar), squad:squads!turfs_squad_id_fkey(id, name, squad_date)',
+        '*, turf_segments(*), assignee:profiles!turfs_assignee_id_fkey(id, username, display_name, avatar, color), squad:squads!turfs_squad_id_fkey(id, name, squad_date)',
       )
       .order('created_at'),
     supabase
@@ -1459,8 +1489,7 @@ function removeSegmentWithUndo(seg: DraftSegment) {
 /** Fully abandon an edit — unlike Start Over, this leaves edit mode
  * entirely, so nothing about this session is worth keeping in Undo. */
 function cancelEdit() {
-  clearDraft()
-  undoStack.value = []
+  closeDraft()
 }
 
 /** Re-cut from scratch WITHOUT losing the name/assignee already picked (or,
@@ -1494,7 +1523,26 @@ function clearDraft() {
   draftName.value = ''
   assignChoice.value = 'none'
   saveError.value = ''
+  locatedStreet.value = null
   defaultDraftParent()
+}
+
+/** Leave cutting entirely — back to the pure overview (turf colors on the
+ * map, no draft card). Any armed tool disarms with it. */
+function closeDraft() {
+  clearDraft()
+  undoStack.value = []
+  draftOpen.value = false
+  if (lassoActive.value) toggleLasso()
+  streetTapActive.value = false
+}
+
+/** "Create new turf" — the only way into a fresh cut now. */
+function startNewTurf() {
+  clearDraft()
+  undoStack.value = []
+  draftOpen.value = true
+  void nextTick(focusDraft)
 }
 
 // A different parent = a different claim pool: recompute every sweep so door
@@ -2397,8 +2445,8 @@ async function saveTurf() {
       })),
     })
     if (rpcError) throw rpcError
-    clearDraft()
-    undoStack.value = []
+    // Saved: back to the overview, where the new turf shows in its color.
+    closeDraft()
     await reloadAll()
     // Fill in dots for every door now in this turf, in the background —
     // never blocks the save.
@@ -2434,6 +2482,7 @@ function onPickTurf(value: string) {
 function editTurf(t: TurfWithMeta) {
   clearDraft()
   undoStack.value = []
+  draftOpen.value = true
   editingTurfId.value = t.id
   draftName.value = t.name
   assignChoice.value = assignChoiceOf(t)
@@ -2441,7 +2490,9 @@ function editTurf(t: TurfWithMeta) {
     addSegment(s.street_name, s.city, s.range_start, s.range_end, s.parity)
   }
   focusTurf(t.id)
-  focusDraft()
+  // The draft card only just started existing (draftOpen) — scroll to it
+  // once it's actually in the DOM.
+  void nextTick(focusDraft)
   // The whole turf should be pinned while it's being edited — geocode its
   // still-unmapped doors in the background (same pass a save runs).
   void geocodeTurfDoors(t.id)
@@ -2452,7 +2503,7 @@ async function deleteTurf(t: TurfWithMeta) {
     ? `Its doors return to "${parentName(t)}".`
     : 'Its doors become unassigned.'
   if (!window.confirm(`Delete ${t.parent_turf_id ? 'sub-turf' : 'turf'} "${t.name}"? ${consequence}`)) return
-  if (editingTurfId.value === t.id) clearDraft()
+  if (editingTurfId.value === t.id) closeDraft()
   await supabase.from('turfs').delete().eq('id', t.id)
   if (selectedTurfId.value === t.id) selectedTurfId.value = null
   await reloadAll()
@@ -2476,17 +2527,63 @@ function focusDraft() {
   draftCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 
+// --- Map fullscreen. Same approach as Scout's (HuntTab): Safari (incl.
+// iOS) only ever exposes the webkit-prefixed API, so both directions need a
+// fallback, and Google Maps has to be told its container resized once the
+// browser finishes the transition. ---
+
+const isFullscreen = ref(false)
+const mapWrapEl = ref<HTMLElement | null>(null)
+
+type FullscreenableEl = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void
+}
+type FullscreenableDoc = Document & {
+  webkitExitFullscreen?: () => Promise<void> | void
+  webkitFullscreenElement?: Element | null
+}
+
+function toggleFullscreen() {
+  const doc = document as FullscreenableDoc
+  if (document.fullscreenElement ?? doc.webkitFullscreenElement) {
+    if (document.exitFullscreen) void document.exitFullscreen()
+    else doc.webkitExitFullscreen?.()
+    return
+  }
+  const el = mapWrapEl.value as FullscreenableEl | null
+  if (!el) return
+  if (el.requestFullscreen) void el.requestFullscreen()
+  else el.webkitRequestFullscreen?.()
+}
+
+function onFullscreenChange() {
+  const doc = document as FullscreenableDoc
+  isFullscreen.value = Boolean(document.fullscreenElement ?? doc.webkitFullscreenElement)
+  setTimeout(() => {
+    if (!map) return
+    google.maps.event.trigger(map, 'resize')
+    // The canvas overlay sizes itself off the map div — re-measure after the
+    // transition or it keeps painting at the old dimensions.
+    doorLayer?.checkView()
+    doorLayer?.requestRepaint()
+  }, 0)
+}
+
 onMounted(() => {
   if (!initStarted) {
     initStarted = true
     void initialize()
   }
+  document.addEventListener('fullscreenchange', onFullscreenChange)
+  document.addEventListener('webkitfullscreenchange', onFullscreenChange)
 })
 
 onUnmounted(() => {
   unmounted = true
   doorLayer?.dispose()
   cityLayer?.dispose()
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
+  document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
 })
 </script>
 
@@ -2541,8 +2638,11 @@ onUnmounted(() => {
       </div>
 
       <!-- Find a street by name: tap a match to zoom to it and see its
-           doors; the located row grows the explicit "Add to turf" button. -->
+           doors; the located row grows the explicit "Add to turf" button.
+           Cutting only — in overview there's no draft for a street to
+           join, and the search box is how a cut starts. -->
       <input
+        v-if="draftOpen"
         :value="streetQuery"
         class="street-search"
         type="search"
@@ -2550,7 +2650,7 @@ onUnmounted(() => {
         aria-label="Search streets"
         @input="onStreetInput(($event.target as HTMLInputElement).value)"
       />
-      <div v-if="streetMatches.length" class="street-matches">
+      <div v-if="draftOpen && streetMatches.length" class="street-matches">
         <div
           v-for="m in streetMatches"
           :key="m.street_name + m.city"
@@ -2593,7 +2693,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="map-wrap">
+      <div ref="mapWrapEl" class="map-wrap" :class="{ 'map-wrap-fullscreen': isFullscreen }">
         <div ref="mapEl" class="map"></div>
         <!-- Freehand selection surface — only exists while Lasso is armed. -->
         <div
@@ -2662,10 +2762,48 @@ onUnmounted(() => {
             City
           </button>
         </div>
+        <!-- Fullscreen, top-right corner. Always available — the map is the
+             work surface, and on a phone the page chrome eats most of it. -->
+        <button
+          type="button"
+          class="map-fullscreen-btn"
+          :aria-label="isFullscreen ? 'Exit fullscreen map' : 'View map fullscreen'"
+          title="Fullscreen"
+          @click="toggleFullscreen"
+        >
+          <!-- Four corner brackets pointing out (enter) / in (exit), drawn
+               inline so it renders identically everywhere. -->
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <template v-if="isFullscreen">
+              <path d="M8 3v3a2 2 0 0 1-2 2H3M16 3v3a2 2 0 0 0 2 2h3M8 21v-3a2 2 0 0 0-2-2H3M16 21v-3a2 2 0 0 1 2-2h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </template>
+            <template v-else>
+              <path d="M3 9V5a2 2 0 0 1 2-2h4M21 9V5a2 2 0 0 0-2-2h-4M3 15v4a2 2 0 0 0 2 2h4M21 15v4a2 2 0 0 1-2 2h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </template>
+          </svg>
+        </button>
+        <!-- Undo, right under the fullscreen button: the draft-card Undo is
+             a scroll away (and invisible in fullscreen), and undo is the
+             one control you reach for mid-gesture. -->
+        <button
+          v-if="draftOpen && canUndo"
+          type="button"
+          class="map-undo-btn"
+          :disabled="saving"
+          aria-label="Undo the last change to this turf"
+          title="Undo"
+          @click="undoDraft"
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M9 14 4 9l5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M4 9h10a6 6 0 0 1 0 12h-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
         <!-- Selection tools, top-right: Lasso (freezes the map, drag a
              loop) and Streets (tap the road itself to take a whole
-             street). While either is armed, Add/Erase picks what it does. -->
-        <div class="lasso-toggle">
+             street). While either is armed, Add/Erase picks what it does.
+             Cutting only — in overview there's no draft to sweep into. -->
+        <div v-if="draftOpen" class="lasso-toggle">
           <button
             type="button"
             class="layer-btn"
@@ -2760,8 +2898,24 @@ onUnmounted(() => {
         the key. The exact reason is logged in the browser console.
       </p>
 
+      <!-- Overview: cutting starts only when you ask for it. -->
+      <div v-if="!draftOpen && !(isSubcutter && !myParentTurfs.length)" class="new-turf-bar">
+        <button class="btn btn-primary new-turf-btn" @click="startNewTurf">
+          + {{ isSubcutter ? 'Create new sub-turf' : 'Create new turf' }}
+        </button>
+      </div>
+      <p v-else-if="!draftOpen" class="muted empty-note">
+        No turf is assigned to you (or a squad you're on) yet — your campaign manager cuts and
+        assigns turf. Once you have some, you can split it into sub-turfs here.
+      </p>
+
       <!-- Draft tray: the turf being cut. -->
-      <div ref="draftCardEl" class="card draft-card" :style="{ '--draft-color': draftColor }">
+      <div
+        v-if="draftOpen"
+        ref="draftCardEl"
+        class="card draft-card"
+        :style="{ '--draft-color': draftColor }"
+      >
         <!-- A lead with no assigned turf has no ground to cut on. -->
         <template v-if="isSubcutter && !myParentTurfs.length">
           <h3 class="draft-title">
@@ -2917,8 +3071,9 @@ onUnmounted(() => {
             <button v-if="segments.length" class="btn btn-ghost" :disabled="saving" @click="startOverDraft">
               Start over
             </button>
-            <button v-if="editingTurfId" class="btn btn-ghost" :disabled="saving" @click="cancelEdit">
-              Cancel edit
+            <!-- Always a way back out to the overview, not just mid-edit. -->
+            <button class="btn btn-ghost" :disabled="saving" @click="cancelEdit">
+              {{ editingTurfId ? 'Cancel edit' : 'Cancel' }}
             </button>
           </div>
           <p v-if="draftTakenCount" class="muted">
@@ -3078,6 +3233,72 @@ onUnmounted(() => {
   z-index: 6;
 }
 
+/* Actual Fullscreen API target — filling the screen only takes effect once
+ * the browser grants it, driven by the JS-toggled class rather than the
+ * `:fullscreen` pseudo-class so old-Safari's webkit-prefixed event (no
+ * matching prefixed pseudo-class) still gets the right layout. */
+.map-wrap-fullscreen {
+  background: #000;
+}
+
+.map-wrap-fullscreen .map {
+  height: 100%;
+  border-radius: 0;
+  border: none;
+}
+
+/* Fullscreen button, top-right corner. */
+.map-fullscreen-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+}
+
+.map-fullscreen-btn:hover {
+  background: var(--surface-2);
+}
+
+/* Undo, third in the LEFT stack (under pin-style and layers) — last in that
+ * column, so it appearing/disappearing never shifts another control. */
+.map-undo-btn {
+  position: absolute;
+  top: calc(0.6rem + 2 * (36px + 0.5rem));
+  left: 0.6rem;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+}
+
+.map-undo-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.map-undo-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Segmented dots/numbers control, top-left, same chrome as Scout's. */
 .pin-mode-toggle {
   position: absolute;
@@ -3132,10 +3353,11 @@ onUnmounted(() => {
   z-index: 6;
 }
 
-/* Lasso toggle, top-right — same chrome as the layer buttons. */
+/* Lasso toggle, top-right under the fullscreen button — same chrome as the
+   layer buttons. */
 .lasso-toggle {
   position: absolute;
-  top: 0.6rem;
+  top: calc(0.6rem + 36px + 0.5rem);
   right: 0.6rem;
   display: flex;
   border: 1px solid var(--border);
@@ -3708,6 +3930,17 @@ onUnmounted(() => {
 .draft-actions {
   display: flex;
   gap: 0.5rem;
+}
+
+/* Overview's one call to action — full width, thumb-sized. */
+.new-turf-bar {
+  display: flex;
+}
+
+.new-turf-btn {
+  flex: 1;
+  min-height: 52px;
+  font-size: 1rem;
 }
 
 .empty-note {
