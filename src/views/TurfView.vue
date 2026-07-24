@@ -48,10 +48,8 @@ import {
   CityLimitsLayer,
   TurfAreasLayer,
   readMapPref,
-  readTurfShadeMode,
   turfAreaFor,
   writeMapPref,
-  writeTurfShadeMode,
 } from '@/lib/mapLayers'
 import type { DoorPoint } from '@/lib/mapLayers'
 import { DoorCanvasLayer } from '@/lib/doorCanvas'
@@ -387,20 +385,18 @@ const listTurfs = computed(() => {
 // Layer toggles, persisted per device like Hunt's pin mode.
 // The cutter's one "Turf" button (2026-07-24, was "Shade"): shades ONLY the
 // turfs that are OUT today — dispatched to one of today's squads or durably
-// assigned to a canvasser — so the map shows the draft being built against
-// the ground actually being worked, not every cut ever made. It shares
-// Scout's tri-state pref, mapping the button to off ↔ all (Scout's 'mine'
-// just counts as "shading on" here). Legacy `map-show-areas` seeds the
-// default.
-const showAreas = ref(
-  readTurfShadeMode('map-turf-shading', readMapPref('map-show-areas', true) ? 'all' : 'off') !==
-    'off',
-)
+// assigned to a canvasser — AND is the sole gate for the door-level "taken"
+// symbols (see paintForDoor). OFF BY DEFAULT on its own per-device key
+// (2026-07-24 night, user call): a fresh cutter opens clean, showing plain
+// Scout-style status dots; flip Turf on when you want to see whose ground
+// is whose. Deliberately NOT Scout's shared tri-state pref anymore — Scout
+// shading on must not drag the cutter's taken symbols on with it.
+const showAreas = ref(readMapPref('cutter-turf-layer', false))
 const showCity = ref(readMapPref('map-show-city', false))
 
 function toggleAreas() {
   showAreas.value = !showAreas.value
-  writeTurfShadeMode('map-turf-shading', showAreas.value ? 'all' : 'off')
+  writeMapPref('cutter-turf-layer', showAreas.value)
   areasLayer?.setVisible(showAreas.value)
 }
 
@@ -628,8 +624,12 @@ function paintForDoor(id: string): DoorPaintState | null {
     if (!onShownStreet && !shownAsTaken) return null
   }
   // Draft members can still carry another turf's stamp (a sub-cut claims
-  // from its parent) — membership wins over the taken symbol.
-  if (ownedElsewhere && !inDraft) {
+  // from its parent) — membership wins over the taken symbol. And the
+  // symbol ONLY exists while the Turf layer is on (2026-07-24 night, user
+  // call): with it off, every painted door — covered-but-taken included —
+  // just wears its Scout-style status color; the table's "N stay with
+  // another turf" line still tells the story.
+  if (ownedElsewhere && !inDraft && showAreas.value) {
     const who = turfById.value.get(a.turf_id!)?.assignee ?? null
     return {
       fill: FILL_OPEN,
