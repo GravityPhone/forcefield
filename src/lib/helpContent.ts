@@ -317,10 +317,10 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
           'map as ringed dots, so the turf builds up visibly. A street already in the ' +
           'turf trims from its pill below the map: open the pill and each map tap drops ' +
           'or restores one house. The map tools share an Add/Erase switch: ◯ Lasso ' +
-          'freezes the map so you can drag a loop (every door inside joins — or comes ' +
-          'back out in Erase), and ☝ Streets lets you tap a road right on the map, dots ' +
-          'or no dots, to take or drop that whole street. Undo steps back one gesture at ' +
-          'a time.',
+          'freezes the map so you can drag a loop (every dot inside joins — or comes ' +
+          'back out in Erase; it can only catch doors already showing as dots), and ' +
+          '☝ Streets looks up the road you tap right on the basemap, dots or no dots, ' +
+          'and takes or drops that whole street. Undo steps back one gesture at a time.',
       },
       {
         heading: 'Reading the map',

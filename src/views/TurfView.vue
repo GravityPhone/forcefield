@@ -54,7 +54,14 @@ import {
 import type { DoorPoint } from '@/lib/mapLayers'
 import { DoorCanvasLayer } from '@/lib/doorCanvas'
 import type { DoorPaintState } from '@/lib/doorCanvas'
-import { geocodeAndCache, geocodeMissing } from '@/lib/geocode'
+import {
+  geocodeAndCache,
+  geocodeMissing,
+  normalizeStreetName,
+  streetAtPoint,
+  stripLeadingDirectional,
+} from '@/lib/geocode'
+import type { StreetAtPoint } from '@/lib/geocode'
 import { localToday } from '@/lib/day'
 import { OUTCOME_HEX, OUTCOME_LABELS, PIN_DEFAULT_HEX, doorStatusOutcome } from '@/lib/outcomes'
 import { fetchAllRows, supabase } from '@/lib/supabase'
@@ -206,6 +213,9 @@ const streetsByKey = new Map<string, AddressLite[]>()
 const streetsByName = new Map<string, AddressLite[]>()
 /** Prebuilt search list: one row per street+city with count and span. */
 let streetSummaries: { street_name: string; city: string; count: number; lo: number; hi: number }[] = []
+/** Normalized name -> streets bearing it, for matching reverse-geocoded
+ * route names ("South Clinton Street") to voter-file streets ("S CLINTON ST"). */
+const streetsByNorm = new Map<string, { name: string; city: string }[]>()
 
 let segKeyCounter = 0
 /** Set on teardown so a background geocode sweep stops writing to a
@@ -218,6 +228,7 @@ function indexAddresses(rows: AddressLite[]) {
   addressById.clear()
   streetsByKey.clear()
   streetsByName.clear()
+  streetsByNorm.clear()
   const summaries = new Map<string, { street_name: string; city: string; count: number; lo: number; hi: number }>()
   for (const a of rows) {
     addressById.set(a.id, a)
@@ -226,7 +237,13 @@ function indexAddresses(rows: AddressLite[]) {
     const key = `${name}|${a.city.toUpperCase()}`
     const byKey = streetsByKey.get(key)
     if (byKey) byKey.push(a)
-    else streetsByKey.set(key, [a])
+    else {
+      streetsByKey.set(key, [a])
+      const norm = normalizeStreetName(name)
+      const entries = streetsByNorm.get(norm)
+      if (entries) entries.push({ name, city: a.city })
+      else streetsByNorm.set(norm, [{ name, city: a.city }])
+    }
     const byName = streetsByName.get(name)
     if (byName) byName.push(a)
     else streetsByName.set(name, [a])
@@ -920,7 +937,7 @@ function rebuildDraftShade() {
 function onMapClick(e: google.maps.MapMouseEvent) {
   if (!e.latLng || !map) return
   if (streetTapActive.value) {
-    handleStreetTap(e.latLng)
+    void handleStreetTap(e.latLng)
     return
   }
   const zoomedIn = (map.getZoom() ?? 14) >= PINS_MIN_ZOOM
@@ -1395,17 +1412,25 @@ function toggleLasso() {
 }
 
 // --- Armed street tap: tap the road itself on the basemap — no dots or
-// overlay needed — and the nearest street's every door joins the draft (or
-// leaves it, in erase mode). The houses pop in as dots after the tap. ---
+// overlay needed — and that street's every door joins the draft (or leaves
+// it, in erase mode). The houses pop in as dots after the tap. ---
 
 const streetTapActive = ref(false)
-/** How far (meters) a street tap may land from the nearest known door. */
+/** Fallback vote: how far (meters) a tap may sit from a mapped door for
+ * that door's street to get a vote. */
 const STREET_SNAP_METERS = 150
+/** Fallback vote: a winner whose nearest mapped door is farther than this
+ * needs a second confirming tap before it's added. */
+const STREET_CONFIRM_METERS = 100
+
+/** Fallback-vote guess awaiting its confirming second tap. */
+let pendingTapStreet: { name: string; city: string } | null = null
 
 function toggleStreetTap() {
   streetTapActive.value = !streetTapActive.value
   selectMode.value = 'add'
   doorInfo.value = null
+  pendingTapStreet = null
   if (streetTapActive.value) {
     // One tool at a time — disarm the lasso and unfreeze the map.
     if (lassoActive.value) {
@@ -1418,31 +1443,130 @@ function toggleStreetTap() {
   }
 }
 
-/** Closest geocoded door to a point — how a tap on bare road resolves to a
- * street. O(all doors), a few ms at county scale. */
-function nearestDoor(lat: number, lng: number): { door: AddressLite; meters: number } | null {
-  let best: AddressLite | null = null
+/** Match reverse-geocoded route names to a voter-file street. Exact
+ * normalized match first, then directional-stripped; ties break by Google's
+ * locality, then by whichever candidate has mapped doors nearest the tap.
+ * Ambiguity with no distance signal returns null — never guess N vs S. */
+function matchIndexedStreet(rev: StreetAtPoint, lat: number, lng: number): { name: string; city: string } | null {
+  let candidates: { name: string; city: string }[] = []
+  for (const n of rev.names) candidates.push(...(streetsByNorm.get(n) ?? []))
+  if (!candidates.length) {
+    const stripped = rev.names.map(stripLeadingDirectional)
+    for (const [norm, entries] of streetsByNorm) {
+      if (stripped.includes(stripLeadingDirectional(norm))) candidates.push(...entries)
+    }
+  }
+  const seen = new Set<string>()
+  candidates = candidates.filter((c) => {
+    const k = `${c.name}|${c.city.toUpperCase()}`
+    if (seen.has(k)) return false
+    seen.add(k)
+    return true
+  })
+  if (!candidates.length) return null
+  if (candidates.length === 1) return candidates[0]
+  const inCity = rev.city
+    ? candidates.filter((c) => c.city.toUpperCase() === rev.city!.toUpperCase())
+    : []
+  const pool = inCity.length ? inCity : candidates
+  if (pool.length === 1) return pool[0]
+  let best: { name: string; city: string } | null = null
   let bestD = Infinity
+  for (const c of pool) {
+    for (const a of streetRows(c.name, c.city)) {
+      if (a.lat == null || a.lng == null) continue
+      const d = roughMeters({ lat, lng }, { lat: a.lat, lng: a.lng })
+      if (d < bestD) {
+        bestD = d
+        best = c
+      }
+    }
+  }
+  return best
+}
+
+/** Fallback when reverse geocoding gets nothing usable: mapped doors within
+ * STREET_SNAP_METERS vote for their street, weighted by closeness. */
+function voteNearbyStreet(lat: number, lng: number): { name: string; city: string; nearest: number } | null {
+  const acc = new Map<string, { name: string; city: string; w: number; nearest: number }>()
   for (const a of addressById.values()) {
     if (a.lat == null || a.lng == null) continue
     const d = roughMeters({ lat, lng }, { lat: a.lat, lng: a.lng })
-    if (d < bestD) {
-      bestD = d
-      best = a
+    if (d > STREET_SNAP_METERS) continue
+    const name = streetNameOf(a.street)
+    if (!name) continue
+    const key = `${name}|${a.city.toUpperCase()}`
+    const v = acc.get(key) ?? { name, city: a.city, w: 0, nearest: Infinity }
+    v.w += 1 / (d + 10)
+    if (d < v.nearest) v.nearest = d
+    acc.set(key, v)
+  }
+  let best: { name: string; city: string; nearest: number } | null = null
+  let bestW = 0
+  for (const v of acc.values()) {
+    if (v.w > bestW) {
+      bestW = v.w
+      best = { name: v.name, city: v.city, nearest: v.nearest }
     }
   }
-  return best ? { door: best, meters: bestD } : null
+  return best
 }
 
-function handleStreetTap(latLng: google.maps.LatLng) {
-  const hit = nearestDoor(latLng.lat(), latLng.lng())
-  if (!hit || hit.meters > STREET_SNAP_METERS) {
-    flash('No known street near that tap — try closer to the houses.')
-    return
+/** Resolve an armed-tool tap to a street. Primary: reverse-geocode the tap —
+ * works on streets with zero mapped doors, which is exactly where the old
+ * nearest-mapped-door guess added whole wrong streets (tap S CLINTON, get
+ * E BOMFORD). Fallback: closeness-weighted vote among nearby mapped doors,
+ * with a confirm-tap guard when even the winner's doors are far away. */
+async function resolveTapStreet(lat: number, lng: number): Promise<{ name: string; city: string } | null> {
+  const rev = await streetAtPoint(lat, lng)
+  if (rev) {
+    const hit = matchIndexedStreet(rev, lat, lng)
+    if (hit) {
+      pendingTapStreet = null
+      return hit
+    }
   }
-  const name = streetNameOf(hit.door.street)
-  const city = hit.door.city
-  if (!name) return
+  const vote = voteNearbyStreet(lat, lng)
+  if (!vote) {
+    flash(
+      rev?.names.length
+        ? `No voter doors on ${rev.names[0]}.`
+        : 'No known street near that tap — try right on the road.',
+    )
+    return null
+  }
+  if (vote.nearest > STREET_CONFIRM_METERS) {
+    const same =
+      pendingTapStreet &&
+      pendingTapStreet.name === vote.name &&
+      pendingTapStreet.city.toUpperCase() === vote.city.toUpperCase()
+    if (!same) {
+      pendingTapStreet = { name: vote.name, city: vote.city }
+      flash(`That looks like ${vote.name} — tap again to confirm.`)
+      return null
+    }
+  }
+  pendingTapStreet = null
+  return vote
+}
+
+/** One tap at a time: a second tap while the first still resolves is
+ * dropped, not queued (double-fires from impatient taps read as bugs). */
+let streetTapBusy = false
+
+async function handleStreetTap(latLng: google.maps.LatLng) {
+  if (streetTapBusy) return
+  streetTapBusy = true
+  try {
+    const resolved = await resolveTapStreet(latLng.lat(), latLng.lng())
+    if (!resolved || unmounted) return
+    applyStreetTap(resolved.name, resolved.city)
+  } finally {
+    streetTapBusy = false
+  }
+}
+
+function applyStreetTap(name: string, city: string) {
   if (selectMode.value === 'erase') {
     const segs = matchingSegments(name, city)
     if (!segs.length) {
@@ -1455,7 +1579,7 @@ function handleStreetTap(latLng: google.maps.LatLng) {
     return
   }
   if (fullyInDraft({ street_name: name, city })) {
-    flash(`${name} is already in this turf.`)
+    flash(`${name} is already in this turf — switch to Erase to take it out.`)
     return
   }
   const rows = streetRows(name, city)
@@ -1554,7 +1678,9 @@ function onLassoUp() {
     return
   }
   if (!doors.length) {
-    flash('No doors inside that loop — zoom in or circle closer around the houses.')
+    flash(
+      'No mapped doors in that loop — houses only get dots once their street is added or searched. Use the ☝ tool or search first.',
+    )
     return
   }
   snapshotDraft()
@@ -1592,8 +1718,13 @@ function onLassoCancel() {
  * house numbers. Runs split only around numbers that actually EXIST on the
  * street but weren't included, and a single-side selection (all-even or
  * all-odd while the other side exists) becomes a parity segment. Shared by
- * the lasso and trim-mode door toggling. Returns how many runs landed. */
-function addStreetRuns(name: string, city: string | null, nums: Set<number>): number {
+ * the lasso and trim-mode door toggling. Returns how many runs landed.
+ *
+ * `visible` (the add-lasso passes the street's GEOCODED numbers): only a
+ * visible number the user left out splits a run — a door with no dot on the
+ * map can't be "not circled", so invisible numbers between captured
+ * neighbors ride along instead of punching phantom holes. */
+function addStreetRuns(name: string, city: string | null, nums: Set<number>, visible?: Set<number>): number {
   const rows = streetRows(name, city)
   const allNums = [...new Set(rows.map((r) => houseNumber(r.street)))].sort((a, b) => a - b)
   const selEven = [...nums].some((n) => n % 2 === 0)
@@ -1610,7 +1741,7 @@ function addStreetRuns(name: string, city: string | null, nums: Set<number>): nu
     if (nums.has(n)) {
       if (lo == null) lo = n
       hi = n
-    } else if (lo != null) {
+    } else if (lo != null && (!visible || visible.has(n))) {
       runs.push([lo, hi])
       lo = null
     }
@@ -1636,7 +1767,13 @@ function addDoorsAsSegments(doors: AddressLite[]): { doorCount: number; streetCo
   }
   let streetCount = 0
   for (const g of groups.values()) {
-    if (addStreetRuns(g.name, g.city, g.nums)) streetCount++
+    // Only doors with dots could be circled — invisible (ungeocoded) numbers
+    // between captured neighbors must not split the runs.
+    const visible = new Set<number>()
+    for (const row of streetRows(g.name, g.city)) {
+      if (row.lat != null && row.lng != null) visible.add(houseNumber(row.street))
+    }
+    if (addStreetRuns(g.name, g.city, g.nums, visible)) streetCount++
   }
   return { doorCount, streetCount }
 }
