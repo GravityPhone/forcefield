@@ -66,8 +66,11 @@ export interface DoorPaintState {
 export interface DoorCanvasOptions {
   /** Below this zoom painted doors draw as tiny dots (no numbers). */
   minPinZoom: number
-  /** House-number pills need at least this zoom. */
+  /** House-number pills need at least this zoom (AND pinMode() === 'numbers'). */
   numbersMinZoom: number
+  /** Live pin-style pref, read fresh each repaint like paintFor — 'numbers'
+   * still falls back to dots below numbersMinZoom, same as Scout. */
+  pinMode(): 'dots' | 'numbers'
   /** Paint state for a door, or null to skip it entirely — unpainted doors
    * are also invisible to doorAt(), so only the located/trimmed street is
    * tappable door-by-door. */
@@ -333,7 +336,7 @@ export class DoorCanvasLayer {
 
     const { wxMax, wyMax } = this.painted
     const tiny = zoom < this.opts.minPinZoom
-    const numbers = !tiny && zoom >= this.opts.numbersMinZoom
+    const numbers = !tiny && zoom >= this.opts.numbersMinZoom && this.opts.pinMode() === 'numbers'
     const px = (wx: number) => (wx - wxMin) * scale
     const py = (wy: number) => (wy - wyMin) * scale
 

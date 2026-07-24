@@ -158,6 +158,12 @@ const partlySignedDoors = ref<Set<string>>(new Set())
 const NUMBERS_MIN_ZOOM = 16
 /** Below this zoom trim-mode doors are tiny dots and door taps don't land. */
 const PINS_MIN_ZOOM = 15
+/** Other turfs' "taken" symbols (Turf layer on) start showing this much
+ * farther OUT than regular door pins — 2026-07-24 later still, user call:
+ * seeing whose ground is whose is useful at a wider view than trimming
+ * individual doors is. Still gated behind the toggle, still tiny dots below
+ * PINS_MIN_ZOOM (doorCanvas's own tiny-vs-full split is unchanged). */
+const TAKEN_MIN_ZOOM = PINS_MIN_ZOOM - 2
 /** How close (screen px) a tap must land to a door to count as tapping it. */
 const TAP_RADIUS_PX = 22
 /** How close (screen px) the lasso LINE must pass to a door to brush it —
@@ -197,6 +203,66 @@ function toggleSegEditor(key: string) {
   // so there's something to tap.
   if (seg) void materializeStreetPins(seg.street_name, seg.city, true, true)
 }
+
+// --- Streets table display: one row per STREET, not per segment ---
+// A street can hold several DraftSegments (trimming a hole in the middle
+// splits a run in two) — the segments themselves are still what drives
+// claiming/trim mode/Undo, unchanged. This just groups them for the table
+// (2026-07-24 later still, user call: "we only have one line per street"),
+// listing every chunk's range side by side, left to right, on that line.
+interface StreetGroup {
+  key: string
+  street_name: string
+  city: string | null
+  segs: DraftSegment[]
+  doorCount: number
+  takenCount: number
+}
+const streetGroups = computed<StreetGroup[]>(() => {
+  const byKey = new Map<string, StreetGroup>()
+  const order: string[] = []
+  for (const seg of segments.value) {
+    const key = `${seg.street_name}|${(seg.city ?? '').toUpperCase()}`
+    let g = byKey.get(key)
+    if (!g) {
+      g = { key, street_name: seg.street_name, city: seg.city, segs: [], doorCount: 0, takenCount: 0 }
+      byKey.set(key, g)
+      order.push(key)
+    }
+    g.segs.push(seg)
+    g.doorCount += seg.doorCount
+    g.takenCount += seg.takenCount
+  }
+  for (const g of byKey.values()) g.segs.sort((a, b) => a.range_start - b.range_start)
+  return order.map((k) => byKey.get(k)!)
+})
+
+/** "100–150" or "100–150 · even" — one chunk's range chip text. */
+function rangeLabel(s: Pick<DraftSegment, 'range_start' | 'range_end' | 'parity'>): string {
+  const side = s.parity === 'both' ? '' : ` · ${PARITY_LABELS[s.parity].toLowerCase()}`
+  return `${s.range_start}–${s.range_end}${side}`
+}
+
+function isGroupOpen(g: StreetGroup): boolean {
+  return g.segs.some((s) => s.key === expandedSegKey.value)
+}
+
+/** Row tap: close if any chunk of this street is open, else open its FIRST
+ * chunk (multi-chunk streets stay reachable per-chunk via the individual
+ * range chips, which call toggleSegEditor directly). */
+function toggleGroupEditor(g: StreetGroup) {
+  if (isGroupOpen(g)) {
+    expandedSegKey.value = null
+    return
+  }
+  toggleSegEditor(g.segs[0].key)
+}
+
+function removeGroupWithUndo(g: StreetGroup) {
+  snapshotDraft()
+  for (const seg of g.segs) removeSegment(seg)
+}
+
 const editingTurfId = ref<string | null>(null)
 /** Which of the lead's turfs a NEW sub-turf carves from (auto when one). */
 const draftParentId = ref<string | null>(null)
@@ -442,6 +508,34 @@ const showCity = ref(readMapPref('map-show-city', false))
 function toggleTakenDoors() {
   showTakenDoors.value = !showTakenDoors.value
   writeMapPref('cutter-turf-layer', showTakenDoors.value)
+}
+
+// Dots vs. house-number pills — same control as Scout's pin-style toggle,
+// re-added to the cutter (2026-07-24 later still, user call). Own
+// localStorage key, same pattern Hunt uses (not the boolean readMapPref
+// helper — this is a 3-way-shaped string pref). Defaults to 'numbers' —
+// unlike Hunt, the cutter always showed numbers automatically once zoomed
+// in before this toggle existed, so 'numbers' is the behavior-preserving
+// default; 'dots' still falls back automatically below NUMBERS_MIN_ZOOM.
+type PinMode = 'dots' | 'numbers'
+function readStoredPinMode(): PinMode {
+  try {
+    return localStorage.getItem('turf-pin-mode') === 'dots' ? 'dots' : 'numbers'
+  } catch {
+    return 'numbers'
+  }
+}
+const pinMode = ref<PinMode>(readStoredPinMode())
+
+function setPinMode(mode: PinMode) {
+  if (pinMode.value === mode) return
+  pinMode.value = mode
+  try {
+    localStorage.setItem('turf-pin-mode', mode)
+  } catch {
+    /* private-mode / storage disabled — the toggle still works this session */
+  }
+  doorLayer?.requestRepaint()
 }
 
 function toggleCity() {
@@ -690,12 +784,13 @@ function paintForDoor(id: string): DoorPaintState | null {
     const f = focusedStreet.value
     const l = locatedStreet.value
     const onShownStreet = (f && doorOnStreet(a, f)) || (l && doorOnStreet(a, l))
-    // Turf layer on + zoomed to pin range: every door another turf owns
-    // paints as a taken symbol, so someone else's ground reads door-level
-    // just by having the toggle on. Toggle off = draft members and the
-    // shown street only.
+    // Turf layer on + zoomed to at least TAKEN_MIN_ZOOM: every door another
+    // turf owns paints as a taken symbol, so someone else's ground reads
+    // door-level just by having the toggle on — from farther out than
+    // regular pins need. Toggle off = draft members and the shown street
+    // only.
     const shownAsTaken =
-      ownedElsewhere && showTakenDoors.value && (map?.getZoom() ?? 0) >= PINS_MIN_ZOOM
+      ownedElsewhere && showTakenDoors.value && (map?.getZoom() ?? 0) >= TAKEN_MIN_ZOOM
     if (!onShownStreet && !shownAsTaken) return null
   }
   // Draft members can still carry another turf's stamp (a sub-cut claims
@@ -737,7 +832,7 @@ function paintForDoor(id: string): DoorPaintState | null {
 // the layer). showTakenDoors governs the door-level taken symbols; zoom
 // crossings repaint via the layer's own idle check.
 watch(
-  [draftMemberIds, statusByAddress, partlySignedDoors, expandedSegKey, locatedStreet, turfs, editingTurfId, showTakenDoors],
+  [draftMemberIds, statusByAddress, partlySignedDoors, expandedSegKey, locatedStreet, turfs, editingTurfId, showTakenDoors, pinMode],
   () => doorLayer?.requestRepaint(),
 )
 
@@ -891,6 +986,7 @@ async function initialize() {
   doorLayer = new DoorCanvasLayer(map, {
     minPinZoom: PINS_MIN_ZOOM,
     numbersMinZoom: NUMBERS_MIN_ZOOM,
+    pinMode: () => pinMode.value,
     paintFor: paintForDoor,
   })
   // Settled pan/zoom: repaint only if the view outgrew the painted canvas
@@ -2514,7 +2610,36 @@ onUnmounted(() => {
           <span class="pins-loading-spinner" aria-hidden="true"></span>
           Loading streets…
         </div>
-        <!-- Map layers: other turfs' doors (taken symbols) and city limits. -->
+        <!-- Flip every pin between a colored dot and its house number, same
+             control as Scout. Top-left, above the layer toggle. -->
+        <div class="pin-mode-toggle" role="group" aria-label="Pin style">
+          <button
+            type="button"
+            class="pin-mode-btn"
+            :class="{ active: pinMode === 'dots' }"
+            :aria-pressed="pinMode === 'dots'"
+            aria-label="Show pins as dots"
+            title="Dots"
+            @click="setPinMode('dots')"
+          >
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <circle cx="12" cy="12" r="6" fill="currentColor" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="pin-mode-btn"
+            :class="{ active: pinMode === 'numbers' }"
+            :aria-pressed="pinMode === 'numbers'"
+            aria-label="Show pins as house numbers"
+            title="House numbers"
+            @click="setPinMode('numbers')"
+          >
+            123
+          </button>
+        </div>
+        <!-- Map layers: other turfs' doors (taken symbols) and city limits.
+             Stacked directly beneath the pin-style toggle. -->
         <div class="layer-toggle" role="group" aria-label="Map layers">
           <button
             type="button"
@@ -2676,9 +2801,12 @@ onUnmounted(() => {
         </p>
 
         <template v-if="segments.length">
-          <!-- Streets table: one thin text row per swept stretch. Tapping a
-               row opens the editor below it AND focuses TRIM mode on that
-               street (its doors paint; each map tap drops/restores a house). -->
+          <!-- Streets table: ONE row per street. Multiple chunks on the same
+               street (a trimmed hole splits a run) list their ranges side by
+               side, left to right, as individually tappable chips. Tapping
+               the row (or a chip) opens the editor below AND focuses TRIM
+               mode on that street (its doors paint; each map tap
+               drops/restores a house). -->
           <div class="seg-table" role="table" aria-label="Streets in this turf">
             <div class="seg-thead" role="row">
               <span role="columnheader">Street</span>
@@ -2687,22 +2815,29 @@ onUnmounted(() => {
               <span role="columnheader" aria-label="Remove"></span>
             </div>
             <div
-              v-for="seg in segments"
-              :key="seg.key"
+              v-for="group in streetGroups"
+              :key="group.key"
               class="seg-row"
-              :class="{ open: expandedSegKey === seg.key, empty: !seg.doorCount }"
+              :class="{ open: isGroupOpen(group), empty: !group.doorCount }"
               role="row"
-              @click="toggleSegEditor(seg.key)"
+              @click="toggleGroupEditor(group)"
             >
-              <span class="seg-street-name" role="cell">{{ seg.street_name }}</span>
+              <span class="seg-street-name" role="cell">{{ group.street_name }}</span>
               <span class="seg-range-text" role="cell">
-                {{ seg.range_start }}–{{ seg.range_end }}<template v-if="seg.parity !== 'both'"> · {{ seg.parity }}</template>
+                <button
+                  v-for="seg in group.segs"
+                  :key="seg.key"
+                  type="button"
+                  class="seg-range-chip"
+                  :class="{ active: expandedSegKey === seg.key }"
+                  @click.stop="toggleSegEditor(seg.key)"
+                >{{ rangeLabel(seg) }}</button>
               </span>
-              <span class="seg-count" role="cell">{{ seg.doorCount }}</span>
+              <span class="seg-count" role="cell">{{ group.doorCount }}</span>
               <button
                 class="seg-x"
-                :aria-label="`Remove ${seg.street_name} ${seg.range_start}–${seg.range_end}`"
-                @click.stop="removeSegmentWithUndo(seg)"
+                :aria-label="`Remove ${group.street_name}`"
+                @click.stop="removeGroupWithUndo(group)"
               >
                 ✕
               </button>
@@ -2943,10 +3078,51 @@ onUnmounted(() => {
   z-index: 6;
 }
 
-/* Segmented layers control, top-left on the map. */
-.layer-toggle {
+/* Segmented dots/numbers control, top-left, same chrome as Scout's. */
+.pin-mode-toggle {
   position: absolute;
   top: 0.6rem;
+  left: 0.6rem;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+}
+
+.pin-mode-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pin-mode-btn + .pin-mode-btn {
+  border-left: 1px solid var(--border);
+}
+
+.pin-mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.pin-mode-btn:not(.active):hover {
+  background: var(--surface-2);
+}
+
+/* Segmented layers control, stacked directly beneath the pin-style toggle. */
+.layer-toggle {
+  position: absolute;
+  top: calc(0.6rem + 36px + 0.5rem);
   left: 0.6rem;
   display: flex;
   border: 1px solid var(--border);
@@ -3330,11 +3506,37 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
+/* Multiple chunks on one street list side by side, left to right. */
 .seg-range-text {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.15rem;
   font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.seg-range-chip {
+  padding: 0.05rem 0.3rem;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
   color: var(--text-muted);
+  font: inherit;
+  font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.seg-range-chip:hover {
+  background: var(--surface-2);
+}
+
+.seg-range-chip.active {
+  background: color-mix(in srgb, var(--draft-color) 22%, transparent);
+  color: var(--text);
+  font-weight: 700;
 }
 
 .seg-count {
