@@ -155,6 +155,9 @@ const NUMBERS_MIN_ZOOM = 16
 const PINS_MIN_ZOOM = 15
 /** How close (screen px) a tap must land to a door to count as tapping it. */
 const TAP_RADIUS_PX = 22
+/** How close (screen px) the lasso LINE must pass to a door to brush it —
+ * touching a dot with the stroke selects it, no enclosure needed. */
+const LASSO_BRUSH_PX = 16
 
 // --- Draft turf state ---
 const draftName = ref('')
@@ -377,10 +380,13 @@ const listTurfs = computed(() => {
 })
 
 // Layer toggles, persisted per device like Hunt's pin mode.
-// The cutter has no mine/all split — its shading exists to show the whole
-// existing cut while you carve. It shares Scout's tri-state pref, mapping
-// its one Shade button to off ↔ all (Scout's 'mine' just counts as
-// "shading on" here). Legacy `map-show-areas` boolean seeds the default.
+// The cutter's one "Turf" button (2026-07-24, was "Shade"): shades ONLY the
+// turfs that are OUT today — dispatched to one of today's squads or durably
+// assigned to a canvasser — so the map shows the draft being built against
+// the ground actually being worked, not every cut ever made. It shares
+// Scout's tri-state pref, mapping the button to off ↔ all (Scout's 'mine'
+// just counts as "shading on" here). Legacy `map-show-areas` seeds the
+// default.
 const showAreas = ref(
   readTurfShadeMode('map-turf-shading', readMapPref('map-show-areas', true) ? 'all' : 'off') !==
     'off',
@@ -833,8 +839,17 @@ async function loadCutterData() {
   }
 }
 
-/** Shade every saved turf (except the one being edited — its shape is being
- * redrawn live as the draft). */
+/** Is this turf out on the ground today? Dispatched to a squad whose
+ * squad_date is today, or durably assigned to one canvasser. Sub-turfs
+ * follow their parent's dispatch. */
+function turfActiveToday(t: TurfWithMeta): boolean {
+  const top = t.parent_turf_id ? (turfs.value.find((p) => p.id === t.parent_turf_id) ?? t) : t
+  return top.squad?.squad_date === localToday() || top.assignee_id != null
+}
+
+/** Shade the saved turfs that are ACTIVE TODAY (except the one being edited
+ * — its shape is being redrawn live as the draft). Stale dispatches don't
+ * paint: while cutting, what matters is today's ground. */
 function buildSavedAreas() {
   if (!areasLayer) return
   const doorsByTurf = new Map<string, DoorPoint[]>()
@@ -848,7 +863,7 @@ function buildSavedAreas() {
   }
   areasLayer.setTurfs(
     turfs.value
-      .filter((t) => doorsByTurf.has(t.id))
+      .filter((t) => doorsByTurf.has(t.id) && turfActiveToday(t))
       .map((t) => ({ id: t.id, color: t.color, doors: doorsByTurf.get(t.id)! })),
   )
 }
@@ -963,22 +978,55 @@ interface DoorKnock {
   canvasser: { username: string; display_name: string | null } | null
 }
 
-const doorInfo = ref<{ address: AddressLite; loading: boolean; knocks: DoorKnock[] } | null>(null)
+/** A registered voter at the door, with whether they've EVER signed —
+ * distinct-signed-residents, the same rule the yellow/green door colors use
+ * (doorStatusOutcome), so the bubble explains the paint: two names, one
+ * check = that's why the door is yellow, not green. */
+interface DoorPerson {
+  id: string
+  name: string
+  signed: boolean
+}
+
+const doorInfo = ref<{
+  address: AddressLite
+  loading: boolean
+  knocks: DoorKnock[]
+  roster: DoorPerson[]
+} | null>(null)
 let doorInfoSeq = 0
 
 async function showDoorInfo(addressId: string) {
   const a = addressById.get(addressId)
   if (!a) return
   const seq = ++doorInfoSeq
-  doorInfo.value = { address: a, loading: true, knocks: [] }
-  const { data } = await supabase
-    .from('knock_logs')
-    .select('outcome, occurred_at, person:persons(name), canvasser:profiles(username, display_name)')
-    .eq('household_id', addressId)
-    .order('occurred_at', { ascending: false })
-    .limit(6)
+  doorInfo.value = { address: a, loading: true, knocks: [], roster: [] }
+  const [knocksRes, personsRes, signedRes] = await Promise.all([
+    supabase
+      .from('knock_logs')
+      .select('outcome, occurred_at, person:persons(name), canvasser:profiles(username, display_name)')
+      .eq('household_id', addressId)
+      .order('occurred_at', { ascending: false })
+      .limit(6),
+    supabase.from('persons').select('id, name').eq('household_id', addressId).order('name'),
+    supabase
+      .from('knock_logs')
+      .select('person_id')
+      .eq('household_id', addressId)
+      .eq('outcome', 'signed')
+      .not('person_id', 'is', null),
+  ])
   if (doorInfoSeq !== seq || unmounted) return
-  doorInfo.value = { address: a, loading: false, knocks: (data ?? []) as unknown as DoorKnock[] }
+  const signedIds = new Set((signedRes.data ?? []).map((r) => r.person_id as string))
+  doorInfo.value = {
+    address: a,
+    loading: false,
+    knocks: (knocksRes.data ?? []) as unknown as DoorKnock[],
+    roster: ((personsRes.data ?? []) as { id: string; name: string }[]).map((p) => ({
+      ...p,
+      signed: signedIds.has(p.id),
+    })),
+  }
 }
 
 function knockWhen(iso: string): string {
@@ -1660,18 +1708,31 @@ function onLassoUp() {
   const c = lassoCanvasEl.value
   c?.getContext('2d')?.clearRect(0, 0, c.width, c.height)
   if (path.length < 3) return
-  const ids = doorLayer?.doorsInPolygon(path) ?? []
+  // The loop encloses doors, and the line itself brushes them — touching a
+  // dot with the stroke counts, so a quick scribble over a few pins works.
+  const ids = doorLayer?.doorsInPolygon(path, LASSO_BRUSH_PX) ?? []
   const doors = ids
     .map((id) => addressById.get(id))
     .filter((a): a is AddressLite => !!a)
   if (selectMode.value === 'erase') {
-    const drafted = doors.filter((a) => draftMemberIds.value.has(a.id))
+    // Anything the draft's ranges COVER is erasable — not just claimable
+    // members, or circling a taken door's pill would silently do nothing.
+    const drafted = doors.filter((a) => draftCoveredIds.value.has(a.id))
     if (!drafted.length) {
-      flash('No turf doors inside that loop — circle around the ringed dots.')
+      flash(
+        segments.value.length
+          ? 'No draft doors in that loop — circle dots wearing the draft ring.'
+          : 'Nothing to erase yet — Erase takes doors out of the turf being built. Add streets first, or open a turf and tap Edit.',
+      )
       return
     }
     snapshotDraft()
     const { doorCount, streetCount } = removeDoorsFromDraft(drafted)
+    // If the erased street was only painted because it's the search-located
+    // one, its leftover dots would keep painting and read as "erase did
+    // nothing" — drop the locate focus so removed doors actually vanish.
+    const l = locatedStreet.value
+    if (l && drafted.some((a) => doorOnStreet(a, l))) locatedStreet.value = null
     flash(
       `Lasso: removed ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
     )
@@ -1695,15 +1756,52 @@ function onLassoUp() {
   )
   // Populate the dots: the captured streets usually hold doors that were
   // never geocoded (the lasso can only see mapped ones), so without this
-  // the sweep sits half-blank. Geocode a capped batch per street.
+  // the sweep sits half-blank.
+  const streets: { name: string; city: string }[] = []
   const seen = new Set<string>()
   for (const a of doors) {
     const name = streetNameOf(a.street)
     if (!name) continue
     const key = `${name}|${a.city.toUpperCase()}`
-    if (seen.has(key) || seen.size >= 6) continue
+    if (seen.has(key)) continue
     seen.add(key)
-    void materializeStreetPins(name, a.city, false, true)
+    streets.push({ name, city: a.city })
+  }
+  void geocodeCapturedStreets(streets)
+}
+
+/** After a lasso add, pin down the capture: geocode every door the new
+ * segments COVER that still has no coordinates (validated results only),
+ * dropping each dot as it lands. Focused on the covered ranges — not whole
+ * streets — and with no street cap: the loop is the user's declared area of
+ * interest (2026-07-24; the old 6-street whole-street drip left big
+ * captures half-blank and geocoded houses nobody swept). */
+async function geocodeCapturedStreets(streets: { name: string; city: string }[]) {
+  const missing: AddressLite[] = []
+  for (const s of streets) {
+    const segs = matchingSegments(s.name, s.city)
+    if (!segs.length) continue
+    for (const row of streetRows(s.name, s.city)) {
+      if (row.lat == null && segs.some((g) => matchesSegment(row, g))) missing.push(row)
+    }
+  }
+  if (!missing.length) return
+  await geocodeMissing(
+    missing,
+    (id, loc) => {
+      const a = addressById.get(id)
+      if (a) {
+        a.lat = loc.lat
+        a.lng = loc.lng
+        doorLayer?.upsertDoor(canvasDoorOf(a))
+        doorLayer?.requestRepaint()
+      }
+    },
+    () => unmounted,
+  )
+  if (unmounted) return
+  for (const s of streets) {
+    for (const seg of matchingSegments(s.name, s.city)) computeSegment(seg)
   }
 }
 
@@ -2067,10 +2165,10 @@ onUnmounted(() => {
             class="layer-btn"
             :class="{ active: showAreas }"
             :aria-pressed="showAreas"
-            title="Shade each saved turf's area in its color"
+            title="Shade the turfs that are out today in their colors"
             @click="toggleAreas"
           >
-            Shade
+            Turf
           </button>
           <button
             type="button"
@@ -2137,6 +2235,16 @@ onUnmounted(() => {
             <strong class="door-card-street">{{ doorInfo.address.street }}</strong>
             <span class="muted">{{ doorInfo.address.city }}</span>
             <button class="door-card-x" aria-label="Close house history" @click="doorInfo = null">✕</button>
+          </div>
+          <!-- Who's registered here, ✓ = has signed — two names with one
+               check is exactly why a door paints yellow instead of green. -->
+          <div v-if="!doorInfo.loading && doorInfo.roster.length" class="door-card-roster">
+            <span
+              v-for="p in doorInfo.roster"
+              :key="p.id"
+              class="door-card-person"
+              :class="{ signed: p.signed }"
+            >{{ p.name }}<span v-if="p.signed" aria-hidden="true"> ✓</span></span>
           </div>
           <p v-if="doorInfo.loading" class="muted door-card-note">Loading history…</p>
           <p v-else-if="!doorInfo.knocks.length" class="muted door-card-note">Never knocked.</p>
@@ -2559,6 +2667,31 @@ onUnmounted(() => {
 .door-card-note {
   margin: 0.3rem 0 0;
   font-size: 0.85rem;
+}
+
+/* Registered voters at the door; ✓ = signed. The green matches the Signed
+   outcome hex on purpose — same meaning as the pin colors. */
+.door-card-roster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+}
+
+.door-card-person {
+  font-size: 0.78rem;
+  line-height: 1.2;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.door-card-person.signed {
+  border-color: #2e9e5b;
+  color: #2e9e5b;
+  font-weight: 600;
 }
 
 .door-card-list {

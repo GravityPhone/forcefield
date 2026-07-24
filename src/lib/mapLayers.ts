@@ -1,14 +1,17 @@
 // Shared map overlay layers for Hunt mode, the Squad map, and the turf cutter:
 //
 // - TurfAreasLayer — shades each turf as a translucent colored area. The
-//   shape is ANGULAR on purpose (2026-07-23, user call): member doors mark
-//   cells of a fixed ~44m grid (plus connecting cells along each street run),
-//   and the region's cell-boundary outline becomes the polygon — sharp
-//   rectangular edges hugging exactly the doors that are in the turf, instead
-//   of the old turf.js 45m round-capped buffers whose blobs overlapped
-//   neighboring turfs and read as "this door is in two turfs". The grid is
-//   absolute (anchored to lat/lng 0), so adjacent turfs' shapes tile against
-//   each other without overlapping. Zero dependencies — turf.js is gone.
+//   shape hugs the doors (2026-07-23): member doors mark cells of a fixed
+//   ~44m grid (plus connecting cells along each street run), and the
+//   region's cell-boundary outline becomes the polygon — edges hugging
+//   exactly the doors that are in the turf, instead of the old turf.js 45m
+//   round-capped buffers whose blobs overlapped neighboring turfs and read
+//   as "this door is in two turfs". The grid is absolute (anchored to
+//   lat/lng 0), so adjacent turfs' shapes tile against each other without
+//   overlapping; since 2026-07-24 the corners are rounded by a bounded,
+//   inward-only Chaikin pass (smoothRing) — softer than the raw cell
+//   staircase, still never overlapping a neighbor. Zero dependencies —
+//   turf.js is gone.
 // - CityLimitsLayer — incorporated-place boundaries (city/village limits)
 //   from Census TIGERweb, bundled at public/boundaries/ by
 //   scripts/fetch-city-limits.mjs. The borders around here are heavily
@@ -135,6 +138,35 @@ function traceCellBoundaries(cells: Set<string>): GridRing[] {
   return rings
 }
 
+/** How far (grid cells) a corner may be cut when rounding — bounded so long
+ * straight street edges keep their line and only the corners soften. */
+const CORNER_CUT_CELLS = 0.6
+
+/** Bounded Chaikin corner-cutting on a closed ring (grid coordinates). Plain
+ * Chaikin cuts 25% of each edge, which on a block-long edge would chew a
+ * huge chamfer; clamping the cut to CORNER_CUT_CELLS rounds every corner by
+ * the same small radius instead (2026-07-24 — the raw cell outline read as
+ * "kind of just square"). Cuts only ever move the outline inward, so
+ * adjacent turfs' shapes still can't overlap. */
+function smoothRing(ring: [number, number][], iterations = 2): [number, number][] {
+  let pts = ring
+  for (let it = 0; it < iterations; it++) {
+    const out: [number, number][] = []
+    const n = pts.length
+    for (let i = 0; i < n; i++) {
+      const a = pts[i]
+      const b = pts[(i + 1) % n]
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1])
+      if (!len) continue
+      const t = Math.min(0.25, CORNER_CUT_CELLS / len)
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t])
+      out.push([a[0] + (b[0] - a[0]) * (1 - t), a[1] + (b[1] - a[1]) * (1 - t)])
+    }
+    pts = out
+  }
+  return pts
+}
+
 /** Ray-cast point-in-ring test, grid coordinates. */
 function ringContains(ring: [number, number][], x: number, y: number): boolean {
   let inside = false
@@ -218,7 +250,7 @@ export function turfAreaFor(doors: DoorPoint[]): Feature<MultiPolygon> | null {
   }
 
   const toCoords = (r: GridRing) => {
-    const coords = r.ring.map(([ix, iy]) => [ix * dLng, iy * dLat])
+    const coords = smoothRing(r.ring).map(([ix, iy]) => [ix * dLng, iy * dLat])
     coords.push(coords[0])
     return coords
   }

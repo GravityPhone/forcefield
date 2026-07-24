@@ -202,9 +202,12 @@ export class DoorCanvasLayer {
     return best
   }
 
-  /** Ids of doors inside a closed container-pixel polygon (the lasso). All
-   * doors count here, painted or not — the lasso selects data, not pixels. */
-  doorsInPolygon(path: { x: number; y: number }[]): string[] {
+  /** Ids of doors inside a closed container-pixel polygon (the lasso), plus
+   * — when `brushPx` is set — doors the lasso LINE passes within that many
+   * screen pixels of: brushing over a dot counts, full enclosure isn't
+   * required. All doors count here, painted or not — the lasso selects
+   * data, not pixels. */
+  doorsInPolygon(path: { x: number; y: number }[], brushPx = 0): string[] {
     if (path.length < 3) return []
     const world: [number, number][] = []
     for (const p of path) {
@@ -212,6 +215,8 @@ export class DoorCanvasLayer {
       if (!ll) return []
       world.push([worldX(ll.lng()), worldY(ll.lat())])
     }
+    const zoom = this.map.getZoom()
+    const rw = brushPx && zoom != null ? brushPx / 2 ** zoom : 0
     let wxMin = Infinity
     let wxMax = -Infinity
     let wyMin = Infinity
@@ -231,10 +236,27 @@ export class DoorCanvasLayer {
       }
       return ins
     }
+    // Squared distance from a point to the path (closing segment included —
+    // it's drawn, so it should brush too).
+    const nearPath = (x: number, y: number) => {
+      const r2 = rw * rw
+      for (let i = 0, j = world.length - 1; i < world.length; j = i++) {
+        const [ax, ay] = world[j]
+        const [bx, by] = world[i]
+        const dx = bx - ax
+        const dy = by - ay
+        const len2 = dx * dx + dy * dy
+        const t = len2 ? Math.min(1, Math.max(0, ((x - ax) * dx + (y - ay) * dy) / len2)) : 0
+        const px = x - (ax + dx * t)
+        const py = y - (ay + dy * t)
+        if (px * px + py * py <= r2) return true
+      }
+      return false
+    }
     const out: string[] = []
     for (const d of this.doors.values()) {
-      if (d.wx < wxMin || d.wx > wxMax || d.wy < wyMin || d.wy > wyMax) continue
-      if (inside(d.wx, d.wy)) out.push(d.id)
+      if (d.wx < wxMin - rw || d.wx > wxMax + rw || d.wy < wyMin - rw || d.wy > wyMax + rw) continue
+      if (inside(d.wx, d.wy) || (rw > 0 && nearPath(d.wx, d.wy))) out.push(d.id)
     }
     return out
   }
