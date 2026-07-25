@@ -1545,6 +1545,27 @@ const sheetLoading = ref(false)
 /** Drops a slower earlier fetch that lands after a newer member's. */
 let sheetSeq = 0
 
+/** The sheet's two buttons that close it on the way out. Both capture the id
+ * FIRST: `sheetMember` is a computed off `sheetMemberId`, so reading it after
+ * clearing the id reads null. Written inline as
+ * `sheetMemberId = null; startAssign(sheetMember.id)`, that threw before
+ * startAssign ever ran — the sheet shut and the map just sat there, which is
+ * exactly what "tapping a person and hitting Assign does nothing" was
+ * (2026-07-25). Don't put these back in the template. */
+function assignFromSheet() {
+  const id = sheetMemberId.value
+  if (!id) return
+  sheetMemberId.value = null
+  startAssign(id)
+}
+
+function showMemberOnMap() {
+  const id = sheetMemberId.value
+  if (!id) return
+  sheetMemberId.value = null
+  selectMember(id)
+}
+
 async function openMemberSheet(memberId: string) {
   sheetMemberId.value = memberId
   // Frame OUR TURF, not their last stop (2026-07-25, user call): tapping a
@@ -1876,25 +1897,19 @@ watch(
           :style="{ '--assign-color': memberColor(assigningMember) }"
         >
           <span class="assign-dot" aria-hidden="true"></span>
+          <!-- One line, and only the two things that change: who, and how
+               many (2026-07-25, user call — this was a paragraph of
+               instructions, which is a lot of screen to read past every
+               time). The live hint for whichever tool is armed rides on the
+               map bar, where the tool is. -->
           <p class="assign-text">
             <template v-if="assigningMemberId === auth.profile?.id && claimSelfOnly">
-              Claiming doors for <strong>yourself</strong> —
+              Claiming for <strong>you</strong>
             </template>
             <template v-else>
-              Assigning doors to <strong>{{ memberName(assigningMember) }}</strong> —
+              Assigning to <strong>{{ memberName(assigningMember) }}</strong>
             </template>
-            <template v-if="lassoActive">
-              drag a loop on the map and every door inside comes with it.
-            </template>
-            <template v-else-if="streetTapActive">
-              tap a door and its whole street comes with it.
-            </template>
-            <template v-else>
-              tap doors to add or remove them; tap one door, then another, to take the whole walk
-              between them. Or sweep a lot at once with ◯ Lasso / ☝ Streets on the bar at the
-              bottom of the map.
-            </template>
-            <strong class="assign-count">{{ assignSelected.size }}</strong> selected.
+            · <strong class="assign-count">{{ assignSelected.size }}</strong> doors
           </p>
           <div class="assign-actions">
             <button class="btn btn-sm btn-primary" :disabled="assignSaving" @click="saveAssignment">
@@ -1943,78 +1958,23 @@ watch(
               '--assign-ink': inkOn(memberColor(assigningMember)),
             }"
           >
-            <div class="assign-mapbar-tools" role="group" aria-label="Sweep tools">
-              <button
-                type="button"
-                class="sweep-btn"
-                :class="{ active: lassoActive }"
-                :aria-pressed="lassoActive"
-                title="Draw a loop to take every door inside it"
-                @click="toggleLasso"
-              >
-                ◯ Lasso
-              </button>
-              <button
-                type="button"
-                class="sweep-btn"
-                :class="{ active: streetTapActive }"
-                :aria-pressed="streetTapActive"
-                title="Tap a door to take its whole street"
-                @click="toggleStreetTap"
-              >
-                ☝ Streets
-              </button>
-              <template v-if="lassoActive || streetTapActive">
-                <button
-                  type="button"
-                  class="sweep-btn"
-                  :class="{ active: sweepMode === 'add' }"
-                  :aria-pressed="sweepMode === 'add'"
-                  title="Add the sweep to this member's doors"
-                  @click="sweepMode = 'add'"
-                >
-                  Add
-                </button>
-                <button
-                  type="button"
-                  class="sweep-btn sweep-erase"
-                  :class="{ active: sweepMode === 'erase' }"
-                  :aria-pressed="sweepMode === 'erase'"
-                  title="Take the sweep back out of this member's doors"
-                  @click="sweepMode = 'erase'"
-                >
-                  Erase
-                </button>
+            <span class="assign-mapbar-msg">
+              <template v-if="sweepFlash">{{ sweepFlash }}</template>
+              <template v-else-if="lassoActive">
+                {{ sweepMode === 'erase' ? 'Loop doors to take them back out' : 'Loop doors to add them' }}
               </template>
-              <button
-                v-if="canUndoAssign"
-                type="button"
-                class="sweep-btn sweep-undo"
-                title="Undo the last change to this pile"
-                @click="undoAssign"
-              >
-                ↺ Undo
-              </button>
-            </div>
-            <div class="assign-mapbar-main">
-              <span class="assign-mapbar-msg">
-                <template v-if="sweepFlash">{{ sweepFlash }}</template>
-                <template v-else-if="lassoActive">
-                  {{ sweepMode === 'erase' ? 'Loop doors to take them back out' : 'Loop doors to add them' }}
-                </template>
-                <template v-else-if="streetTapActive">
-                  {{ sweepMode === 'erase' ? 'Tap a door to drop its street' : 'Tap a door to take its street' }}
-                </template>
-                <template v-else>{{ memberName(assigningMember) }}</template>
-              </span>
-              <strong class="assign-mapbar-count">{{ assignSelected.size }}</strong>
-              <button class="btn btn-sm btn-primary" :disabled="assignSaving" @click="saveAssignment">
-                {{ assignSaving ? 'Saving…' : 'Save' }}
-              </button>
-              <button class="btn btn-sm assign-mapbar-cancel" :disabled="assignSaving" @click="cancelAssign">
-                ✕
-              </button>
-            </div>
+              <template v-else-if="streetTapActive">
+                {{ sweepMode === 'erase' ? 'Tap a door to drop its street' : 'Tap a door to take its street' }}
+              </template>
+              <template v-else>{{ memberName(assigningMember) }}</template>
+            </span>
+            <strong class="assign-mapbar-count">{{ assignSelected.size }}</strong>
+            <button class="btn btn-sm btn-primary" :disabled="assignSaving" @click="saveAssignment">
+              {{ assignSaving ? 'Saving…' : 'Save' }}
+            </button>
+            <button class="btn btn-sm assign-mapbar-cancel" :disabled="assignSaving" @click="cancelAssign">
+              ✕
+            </button>
           </div>
           <!-- Flip every pin between a colored dot and its house number —
                the same control Scout and the turf cutter carry, top-left
@@ -2063,12 +2023,77 @@ watch(
               </template>
             </svg>
           </button>
-          <!-- Top-right under fullscreen, where the sweep tools used to sit:
-               the way IN to assigning. Anyone who may divide the crew's turf
-               sees it on the map itself instead of having to know that the
-               tools live behind tapping a person. -->
+          <!-- Undo, left column under the layer buttons — the turf cutter's
+               slot exactly (third row down), so the two maps' chrome reads
+               the same. Last in the column on purpose: appearing never
+               shifts another control. -->
           <button
-            v-if="canAssign && !assigningMemberId"
+            v-if="assigningMemberId && canUndoAssign"
+            type="button"
+            class="map-undo-btn"
+            :disabled="assignSaving"
+            aria-label="Undo the last change to this pile"
+            title="Undo"
+            @click="undoAssign"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path d="M9 14 4 9l5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M4 9h10a6 6 0 0 1 0 12h-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <!-- Right column, second row — the cutter's exact slot for the same
+               two tools (2026-07-25, user call: "identical to the way it is
+               on the turf cutter"). While either is armed, Add/Erase says
+               what it does. -->
+          <div v-if="assigningMemberId" class="lasso-toggle">
+            <button
+              type="button"
+              class="layer-btn"
+              :class="{ active: lassoActive }"
+              :aria-pressed="lassoActive"
+              title="Draw a loop to take every door inside it"
+              @click="toggleLasso"
+            >
+              ◯ Lasso
+            </button>
+            <button
+              type="button"
+              class="layer-btn"
+              :class="{ active: streetTapActive }"
+              :aria-pressed="streetTapActive"
+              title="Tap a door to take its whole street"
+              @click="toggleStreetTap"
+            >
+              ☝ Streets
+            </button>
+            <template v-if="lassoActive || streetTapActive">
+              <button
+                type="button"
+                class="layer-btn"
+                :class="{ active: sweepMode === 'add' }"
+                :aria-pressed="sweepMode === 'add'"
+                title="Add the sweep to this member's doors"
+                @click="sweepMode = 'add'"
+              >
+                Add
+              </button>
+              <button
+                type="button"
+                class="layer-btn lasso-erase"
+                :class="{ active: sweepMode === 'erase' }"
+                :aria-pressed="sweepMode === 'erase'"
+                title="Take the sweep back out of this member's doors"
+                @click="sweepMode = 'erase'"
+              >
+                Erase
+              </button>
+            </template>
+          </div>
+          <!-- The same slot when nobody's pile is open: the way IN to
+               assigning, on the map itself rather than only behind tapping a
+               person. -->
+          <button
+            v-else-if="canAssign"
             type="button"
             class="layer-btn map-assign-btn"
             :title="claimSelfOnly ? 'Pick the doors you\'re taking' : 'Pick doors for someone on the crew'"
@@ -2207,7 +2232,7 @@ watch(
           <button
             v-if="canAssignTo(sheetMember.id)"
             class="btn btn-sm btn-primary"
-            @click="sheetMemberId = null; startAssign(sheetMember.id)"
+            @click="assignFromSheet"
           >
             {{ assignVerb(sheetMember.id) }}
           </button>
@@ -2217,7 +2242,7 @@ watch(
           <button
             v-if="latestGeo(sheetMember.id)"
             class="btn btn-sm ghost-btn"
-            @click="sheetMemberId = null; selectMember(sheetMember!.id)"
+            @click="showMemberOnMap"
           >
             Show on map
           </button>
@@ -2259,10 +2284,7 @@ watch(
          doors" button — tapping a person still opens their sheet, and Assign
          is still in there too. -->
     <BottomSheet v-model:open="assignPickerOpen" title="Assign doors" aria-label="Pick who gets doors">
-      <p class="muted pick-hint">
-        Pick who these doors are for. Then sweep them on the map — a lasso loop, a whole
-        street at a time, or one door at a time.
-      </p>
+      <p class="muted pick-hint">Who are these doors for?</p>
       <ul class="pick-list">
         <li v-for="m in assignableMembers" :key="m.id">
           <button
@@ -2624,14 +2646,54 @@ watch(
 
 /* Sweep tools, top-right under the fullscreen button — same chrome as the
    layer buttons, same spot the turf cutter puts them. */
+/* Right column, second row — shared by the sweep tools and, when no pile is
+   open, the button that opens one. Same coordinates and same segmented look
+   as the turf cutter's .lasso-toggle, on purpose. */
+.lasso-toggle,
 .map-assign-btn {
   position: absolute;
   top: calc(0.6rem + 36px + 0.5rem);
   right: 0.6rem;
+  display: flex;
   border: 1px solid var(--border);
   border-radius: 6px;
+  overflow: hidden;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
   z-index: 6;
+}
+
+.lasso-erase.active {
+  background: #d64545;
+  color: #fff;
+}
+
+/* Left column, third row — under the pin-style and layer toggles, exactly
+   where the cutter keeps its Undo. */
+.map-undo-btn {
+  position: absolute;
+  top: calc(0.6rem + 2 * (36px + 0.5rem));
+  left: 0.6rem;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+}
+
+.map-undo-btn:hover:not(:disabled) {
+  background: var(--surface-2, var(--surface));
+}
+
+.map-undo-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* The lasso capture surface sits over the whole map while armed — it takes
@@ -2661,66 +2723,16 @@ watch(
   margin: 0 auto;
   max-width: 32rem;
   display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  padding: 0.4rem 0.45rem 0.4rem 0.5rem;
-  border-radius: 14px;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.4rem 0.35rem 0.7rem;
+  border-radius: 999px;
   background: rgba(17, 20, 30, 0.9);
   color: #fff;
   font-size: 0.78rem;
   font-weight: 600;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
   z-index: 7;
-}
-
-.assign-mapbar-main {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding-left: 0.2rem;
-}
-
-/* The sweep tools, on the one piece of chrome that's on screen in
-   fullscreen too. Wraps rather than pushing the bar wide — no screen in
-   this app scrolls sideways. */
-.assign-mapbar-tools {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-}
-
-.sweep-btn {
-  min-height: 30px;
-  padding: 0.2rem 0.55rem;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  border-radius: 999px;
-  background: transparent;
-  color: #fff;
-  font: inherit;
-  font-size: calc(0.76rem * var(--ui-scale, 1));
-  font-weight: 700;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.sweep-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-}
-
-.sweep-btn.active {
-  background: #fff;
-  border-color: #fff;
-  color: #111;
-}
-
-.sweep-btn.sweep-erase.active {
-  background: #d64545;
-  border-color: #d64545;
-  color: #fff;
-}
-
-.sweep-undo {
-  margin-left: auto;
 }
 
 .assign-mapbar-msg {
