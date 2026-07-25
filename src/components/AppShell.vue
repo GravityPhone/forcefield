@@ -761,6 +761,13 @@ onUnmounted(() => {
 
 .shell-main {
   flex: 1;
+  min-width: 0;
+  /* Pages scroll vertically, never sideways (2026-07-24, user call — the team
+     feed could be dragged left and right). `clip` rather than `hidden`: it
+     stops the overflow without turning the main element into a scroll
+     container, so position: sticky inside pages keeps working. The admin nav
+     strip has its own overflow-x: auto and is unaffected. */
+  overflow-x: clip;
 }
 
 .page-title {

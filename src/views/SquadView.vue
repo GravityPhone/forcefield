@@ -6,6 +6,7 @@ import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import { fadeUp } from '@/lib/motion'
+import { startOfLocalDayISO } from '@/lib/day'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
@@ -18,6 +19,9 @@ import {
 import type { PinMode, TurfShadeMode } from '@/lib/mapLayers'
 import { DoorCanvasLayer, PINS_MIN_ZOOM } from '@/lib/doorCanvas'
 import type { CanvasDoor, DoorBadge, DoorPaintState } from '@/lib/doorCanvas'
+import { createBadgeFactory } from '@/lib/doorBadges'
+import { attachMapScrollGuard } from '@/lib/mapScroll'
+import type { MapScrollGuard } from '@/lib/mapScroll'
 import { rangeCovers, walkRanges } from '@/lib/doorPath'
 import {
   OUTCOME_HEX,
@@ -292,14 +296,17 @@ async function loadDashboard() {
               .range(from, to),
         ).catch(() => [] as { household_id: string; canvasser_id: string; occurred_at: string }[])
       : Promise.resolve([] as { household_id: string; canvasser_id: string; occurred_at: string }[]),
-    // Last doors each member touched — anywhere, not just in turf, so the
-    // card always answers "where are they right now". Overfetch then dedupe
+    // Last doors each member touched TODAY — anywhere, not just in turf, so
+    // the card answers "where are they right now". Today-only on purpose
+    // (2026-07-24, user call): a squad is one day long, so yesterday's doors
+    // on a card read as activity that isn't happening. Overfetch then dedupe
     // (re-knocking the same door shouldn't eat the whole list).
     ...memberIds.map((id) =>
       supabase
         .from('knock_logs')
         .select('occurred_at, addresses!inner(id, street, lat, lng)')
         .eq('canvasser_id', id)
+        .gte('occurred_at', startOfLocalDayISO())
         .order('occurred_at', { ascending: false })
         .limit(15),
     ),
@@ -560,22 +567,10 @@ async function setTurfShade(mode: 'mine' | 'all') {
  * "All turf" rings other crews' doors in their own colors. */
 const anyTurfColorById = computed(() => new Map(allTurfList.value.map((t) => [t.id, t.color])))
 
-/** Avatar bitmaps for the today-knocker badge, by slug. Images decode async
- * — the canvas repaints when one lands; until then the door shows the
- * member's initial on their own color. */
-const badgeImgCache = new Map<string, HTMLImageElement>()
-function badgeImage(slug: string | null | undefined): HTMLImageElement | null {
-  const url = avatarUrl(slug)
-  if (!slug || !url) return null
-  let img = badgeImgCache.get(slug)
-  if (!img) {
-    img = new Image()
-    img.onload = () => doorLayer?.requestRepaint()
-    img.src = url
-    badgeImgCache.set(slug, img)
-  }
-  return img
-}
+/** Today-knocker avatars, from the shared badge factory every map uses
+ * (src/lib/doorBadges.ts). Images decode async — the canvas repaints when one
+ * lands; until then the door shows the member's initial on their own color. */
+const { badgeFor } = createBadgeFactory(() => doorLayer?.requestRepaint())
 
 /** Paint state for one turf door — the Squad reading of the shared
  * three-band model (halo / membership ring / status fill):
@@ -616,7 +611,12 @@ function paintForDoor(id: string): DoorPaintState | null {
 
   const assignee = assigningMember.value
   if (assignee) {
-    if (!door) return { fill, innerRing, ring: turfColor, emphasis: false, alpha: 0.35 }
+    // Assign mode shows ONE thing: the turf you're dividing. Everything else
+    // — another crew's ground, turf you may not cut — paints nothing at all
+    // (null = invisible AND untappable), so the map is the pile you're
+    // picking from and nothing else. Avatars sit out too: door-picking needs
+    // the selection legible, not decorated.
+    if (!door || poolParentOf(door) === null) return null
     const picked = assignSelected.value.has(id)
     return {
       fill: picked ? memberColor(assignee) : fill,
@@ -624,7 +624,6 @@ function paintForDoor(id: string): DoorPaintState | null {
       ring: picked ? '#ffffff' : turfColor,
       emphasis: picked,
       pulse: picked && id === assignAnchorId.value,
-      alpha: !picked && poolParentOf(door) === null ? 0.35 : 1,
     }
   }
 
@@ -632,14 +631,7 @@ function paintForDoor(id: string): DoorPaintState | null {
 
   const knocker = todayKnockerByDoor.value.get(id)
   const member = knocker ? memberById.value.get(knocker.canvasserId) : undefined
-  let badge: DoorBadge | null = null
-  if (member) {
-    badge = {
-      initial: memberName(member).slice(0, 1).toUpperCase(),
-      img: badgeImage(member.avatar),
-      color: memberColor(member),
-    }
-  }
+  const badge: DoorBadge | null = member ? badgeFor(member) : null
   return {
     fill,
     // Coexists with the badge: the avatar owns the pin's middle, so the
@@ -753,7 +745,14 @@ function updateMemberMarker(member: ChatProfile, plink = false) {
       gmpClickable: true,
       zIndex: 500,
     })
-    marker.addListener('gmp-click', () => selectMember(member.id, false))
+    // Tap someone's icon in the field and you get the person: their run so
+    // far, their profile, their phone number. Zooming to them is what the
+    // card header does — out here you already know where they are, you're
+    // looking at them.
+    marker.addListener('gmp-click', () => {
+      selectedMemberId.value = member.id
+      void openMemberSheet(member.id)
+    })
     markersByMember.set(member.id, marker)
   }
   const marker = markersByMember.get(member.id)!
@@ -797,6 +796,69 @@ function selectMember(memberId: string, scroll = true) {
     map.setZoom(17)
   }
   if (scroll) mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+/** Cell edge for clustering, degrees latitude (~1.1km) — same as Scout's
+ * "frame my turf" geometry. Doors in the same or a touching cell are the same
+ * patch of ground; a wider gap means genuinely separate parts. */
+const CLUSTER_CELL_DEG = 0.01
+
+/** Frame a set of doors: all of it when it's one patch, otherwise the BIGGEST
+ * patch. An assignment split between Richwood and Marysville would otherwise
+ * fit 20km of empty county and read as "the map doesn't know where to start"
+ * — the exact complaint Scout's opening frame solved. */
+function focusDoorSet(doors: { lat: number | null; lng: number | null }[]) {
+  if (!map) return
+  const cells = new Map<string, { lat: number; lng: number }[]>()
+  for (const d of doors) {
+    if (d.lat == null || d.lng == null) continue
+    // Longitude cells widen by 1/cos(lat) so they stay square this far north.
+    const key = `${Math.floor(d.lat / CLUSTER_CELL_DEG)}:${Math.floor(
+      (d.lng * Math.cos((d.lat * Math.PI) / 180)) / CLUSTER_CELL_DEG,
+    )}`
+    const list = cells.get(key)
+    if (list) list.push({ lat: d.lat, lng: d.lng })
+    else cells.set(key, [{ lat: d.lat, lng: d.lng }])
+  }
+  if (!cells.size) return
+  const seen = new Set<string>()
+  let best: { lat: number; lng: number }[] = []
+  for (const key of cells.keys()) {
+    if (seen.has(key)) continue
+    const patch: { lat: number; lng: number }[] = []
+    const stack = [key]
+    seen.add(key)
+    while (stack.length) {
+      const k = stack.pop()!
+      patch.push(...(cells.get(k) ?? []))
+      const [cx, cy] = k.split(':').map(Number)
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const n = `${cx + dx}:${cy + dy}`
+          if (cells.has(n) && !seen.has(n)) {
+            seen.add(n)
+            stack.push(n)
+          }
+        }
+      }
+    }
+    if (patch.length > best.length) best = patch
+  }
+  const bounds = new google.maps.LatLngBounds()
+  for (const d of best) bounds.extend(d)
+  if (!bounds.isEmpty()) map.fitBounds(bounds, 56)
+}
+
+/** Opening shot for assign mode: the ground you're actually dividing — the
+ * doors in the pools you may cut from, biggest patch first. Starting zoomed
+ * out on the whole county means every assign session begins with the same
+ * pinch-and-hunt. */
+function focusAssignPool() {
+  const pool: TurfDoor[] = []
+  for (const d of turfDoors.value.values()) {
+    if (poolParentOf(d) !== null) pool.push(d)
+  }
+  focusDoorSet(pool.length ? pool : [...turfDoors.value.values()])
 }
 
 function focusTurf(turfId: string) {
@@ -985,6 +1047,10 @@ function startAssign(memberId: string) {
   disarmTools()
   sweepFlash.value = ''
   mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  // Land on the ground being divided, not on the county. The map is already
+  // filtered to that turf (paintForDoor), so this frames exactly what's
+  // painted — set up and ready to sweep.
+  focusAssignPool()
 }
 
 function cancelAssign() {
@@ -1428,10 +1494,14 @@ async function openMemberSheet(memberId: string) {
   sheetFeed.value = []
   sheetLoading.value = true
   const seq = ++sheetSeq
+  // Today only, like the cards: this page is one day's crew, and their run
+  // today is the thing anyone's asking about. Their whole history is one tap
+  // further on, at /member/:id.
   const { data } = await supabase
     .from('knock_logs')
     .select('id, outcome, occurred_at, household_id, person:persons(name), addresses(street, city)')
     .eq('canvasser_id', memberId)
+    .gte('occurred_at', startOfLocalDayISO())
     .order('occurred_at', { ascending: false })
     .limit(60)
   if (seq !== sheetSeq) return
@@ -1498,6 +1568,19 @@ async function createSquad() {
 function openSquadChat() {
   if (mySquad.value?.chat_id) chat.openDrawer(mySquad.value.chat_id)
 }
+
+// On this page, the chat drawer IS the squad's chat (2026-07-24, user call):
+// pulling the right-edge handle open here lands in the crew's room rather
+// than the room list. The store field is the whole mechanism — the drawer
+// honors it whenever it's opened without an explicit room — and it's cleared
+// on unmount so every other screen still opens on the list.
+watch(
+  () => mySquad.value?.chat_id ?? null,
+  (id) => {
+    chat.preferredChatId = id
+  },
+  { immediate: true },
+)
 
 async function leaveSquad() {
   const squad = mySquad.value
@@ -1606,8 +1689,30 @@ watch(mapEl, (el) => {
   if (el) void initMap()
 }, { flush: 'post' })
 
+// Drags inside the map are the map's, never the page's; a touch on a map
+// that's scrolled half off screen (reading the member tiles) brings it back
+// into view instead of panning a map you can only half see. Same guard on
+// Scout and the turf cutter. Re-attached if the wrapper is ever replaced.
+let scrollGuard: MapScrollGuard | null = null
+watch(
+  mapWrapEl,
+  (el) => {
+    scrollGuard?.dispose()
+    scrollGuard = el
+      ? attachMapScrollGuard(el, {
+          scrollTarget: () => mapCardEl.value,
+          isFullscreen: () => isFullscreen.value,
+        })
+      : null
+  },
+  { flush: 'post' },
+)
+
 onUnmounted(() => {
   squads.unsubscribeFromRosters()
+  chat.preferredChatId = null
+  scrollGuard?.dispose()
+  scrollGuard = null
   if (knockFeed) void supabase.removeChannel(knockFeed)
   doorLayer?.dispose()
   doorLayer = null
@@ -1698,34 +1803,6 @@ watch(
           each day's crews. The map still follows everyone's knocks meanwhile.
         </p>
 
-        <!-- The leader's day switch: keep the dividing, or let the crew grab
-             their own stretch. Off by default, and gone at midnight with the
-             squad. Everyone else just sees the state as a note. -->
-        <div v-if="canToggleClaim" class="claim-row">
-          <label class="claim-switch">
-            <input
-              type="checkbox"
-              :checked="memberClaimOn"
-              :disabled="claimSaving"
-              @change="toggleMemberClaim"
-            />
-            <span class="claim-track" aria-hidden="true"><span class="claim-knob"></span></span>
-            <span class="claim-label">
-              <strong>Crew claims their own doors</strong>
-              <span class="muted claim-hint">
-                {{
-                  memberClaimOn
-                    ? 'On — anyone on this crew can cut their own share out of the turf.'
-                    : 'Off — you hand out the doors. Turn it on when it’s chaotic out there.'
-                }}
-              </span>
-            </span>
-          </label>
-        </div>
-        <p v-else-if="memberClaimOn && canAssign" class="muted claim-note">
-          Your squad leader turned on <strong>crew claiming</strong> — pick your own doors on
-          your card below, then flip Scout to “My doors”.
-        </p>
         <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>
       </div>
 
@@ -1943,26 +2020,25 @@ watch(
         </div>
       </div>
 
-      <!-- Member cards. Three tap targets, each its own thing: the header
-           zooms the map to that person, the recent list opens their full run,
-           and the action row is the buttons. -->
+      <!-- Member cards: ONE tap target each (2026-07-24, user call). Tapping
+           the person opens their sheet, and the buttons — profile, call,
+           assign, show on map — live there. A tile half a phone wide can't
+           carry a button row and still show anything worth reading. -->
       <div class="member-grid">
-        <div
+        <button
           v-for="(m, i) in orderedMembers"
           :key="m.id"
           v-motion="fadeUp(Math.min(i, 8) * 45)"
+          type="button"
           class="member-card"
           :class="{ selected: selectedMemberId === m.id, assigning: assigningMemberId === m.id }"
           :style="{
             '--member-color': memberColor(m),
           }"
+          :aria-label="`Open ${memberName(m)}`"
+          @click="openMemberSheet(m.id)"
         >
-          <button
-            type="button"
-            class="member-top"
-            :aria-label="`Zoom the map to ${memberName(m)}`"
-            @click="selectMember(m.id)"
-          >
+          <span class="member-top">
             <span class="member-avatar" :style="!avatarUrl(m.avatar) ? { background: memberColor(m) } : {}">
               <img v-if="avatarUrl(m.avatar)" :src="avatarUrl(m.avatar)" alt="" />
               <template v-else>{{ memberName(m).slice(0, 1).toUpperCase() }}</template>
@@ -1979,47 +2055,39 @@ watch(
             <span v-if="squadTurfs.length" class="member-count" title="Turf doors knocked">
               {{ knockedCount(m.id) }}
             </span>
-          </button>
+          </span>
 
-          <!-- The last five, and the way to the rest of them. -->
-          <button
-            type="button"
-            class="recent-block"
-            :aria-label="`See ${memberName(m)}'s knocks`"
-            @click="openMemberSheet(m.id)"
-          >
-            <ul v-if="recentByMember.get(m.id)?.length" class="recent-list">
-              <li v-for="r in recentByMember.get(m.id)" :key="r.addressId">
+          <!-- Their last few doors TODAY — the squad is one day long, so
+               that's all a card ever shows. -->
+          <span class="recent-block">
+            <span v-if="recentByMember.get(m.id)?.length" class="recent-list">
+              <span v-for="r in recentByMember.get(m.id)" :key="r.addressId" class="recent-item">
                 <span class="recent-street">{{ prettyStreet(r.street) }}</span>
                 <span class="recent-time muted">{{ knockTime(r.occurredAt) }}</span>
-              </li>
-            </ul>
-            <p v-else class="muted no-knocks">No doors knocked yet.</p>
-            <span class="recent-more">
-              {{ recentByMember.get(m.id)?.length ? 'See all their knocks' : 'Open their card' }} ›
+              </span>
             </span>
-          </button>
+            <span v-else class="muted no-knocks">No doors yet today.</span>
+          </span>
 
-          <div class="member-actions">
-            <button class="btn btn-sm ghost-btn" @click="openMemberProfile(m.id)">Profile</button>
-            <a
-              v-if="m.phone && m.id !== auth.profile?.id"
-              class="btn btn-sm ghost-btn"
-              :href="telHref(m.phone)"
-              :aria-label="`Call ${memberName(m)}`"
-            >
-              Call
-            </a>
-            <button
-              v-if="canAssignTo(m.id)"
-              class="btn btn-sm assign-btn"
-              @click="startAssign(m.id)"
-            >
-              {{ assigningMemberId === m.id ? 'Picking…' : assignVerb(m.id) }}
-            </button>
-          </div>
-        </div>
+          <span v-if="assigningMemberId === m.id" class="picking-tag">Picking doors…</span>
+        </button>
       </div>
+
+      <!-- The day switch, last thing on the page (2026-07-24, user call):
+           one button, one label, no explaining. Squad leaders, campaign
+           managers, admins and whoever started the crew can flip it; it dies
+           with the squad at midnight. -->
+      <button
+        v-if="canToggleClaim"
+        type="button"
+        class="claim-btn"
+        :class="{ on: memberClaimOn }"
+        :aria-pressed="memberClaimOn"
+        :disabled="claimSaving"
+        @click="toggleMemberClaim"
+      >
+        Squad members claim their own doors
+      </button>
     </div>
 
     <p v-else class="muted">Loading your squad…</p>
@@ -2050,8 +2118,22 @@ watch(
 
       <div v-if="sheetMember" class="sheet-body">
         <div class="sheet-actions">
-          <button class="btn btn-sm btn-primary" @click="openMemberProfile(sheetMember.id)">
+          <button
+            v-if="canAssignTo(sheetMember.id)"
+            class="btn btn-sm btn-primary"
+            @click="sheetMemberId = null; startAssign(sheetMember.id)"
+          >
+            {{ assignVerb(sheetMember.id) }}
+          </button>
+          <button class="btn btn-sm ghost-btn" @click="openMemberProfile(sheetMember.id)">
             View profile
+          </button>
+          <button
+            v-if="latestGeo(sheetMember.id)"
+            class="btn btn-sm ghost-btn"
+            @click="sheetMemberId = null; selectMember(sheetMember!.id)"
+          >
+            Show on map
           </button>
           <a
             v-if="sheetMember.phone && sheetMember.id !== auth.profile?.id"
@@ -2060,17 +2142,10 @@ watch(
           >
             Call
           </a>
-          <button
-            v-if="canAssignTo(sheetMember.id)"
-            class="btn btn-sm ghost-btn"
-            @click="sheetMemberId = null; startAssign(sheetMember.id)"
-          >
-            {{ assignVerb(sheetMember.id) }}
-          </button>
         </div>
 
         <p v-if="sheetLoading" class="muted">Loading their knocks…</p>
-        <p v-else-if="!sheetFeed.length" class="muted">No knocks logged yet.</p>
+        <p v-else-if="!sheetFeed.length" class="muted">No doors knocked today.</p>
         <ul v-else class="feed-list">
           <li v-for="row in sheetFeed" :key="row.id">
             <button
@@ -2267,80 +2342,33 @@ watch(
   font-size: 0.9rem;
 }
 
-/* --- "Crew claims their own doors" switch --- */
+/* --- "Squad members claim their own doors": one button, bottom of the page.
+   Pressed = on. No hint copy — the label is the whole explanation. --- */
 
-.claim-row {
-  border-top: 1px solid var(--border);
-  padding-top: 0.55rem;
-}
-
-.claim-switch {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.6rem;
-  cursor: pointer;
-}
-
-.claim-switch input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.claim-track {
-  flex-shrink: 0;
-  margin-top: 0.1rem;
-  width: 42px;
-  height: 24px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text) 18%, transparent);
-  border: 1px solid var(--border);
-  transition: background 0.15s ease;
-  display: flex;
-  align-items: center;
-  padding: 2px;
-}
-
-.claim-knob {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
+.claim-btn {
+  width: 100%;
+  min-height: 44px;
+  padding: 0.6rem 0.9rem;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text);
   background: var(--surface);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
-  transition: transform 0.15s ease;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.claim-switch input:checked + .claim-track {
+.claim-btn.on {
   background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
-.claim-switch input:checked + .claim-track .claim-knob {
-  transform: translateX(18px);
-}
-
-.claim-switch input:focus-visible + .claim-track {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.claim-label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  font-size: 0.9rem;
-  min-width: 0;
-}
-
-.claim-hint {
-  font-size: 0.82rem;
-}
-
-.claim-note {
-  margin: 0;
-  font-size: 0.86rem;
-  border-top: 1px solid var(--border);
-  padding-top: 0.55rem;
+.claim-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 /* --- Map --- */
@@ -2606,42 +2634,13 @@ watch(
   white-space: nowrap;
 }
 
-.member-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  flex-wrap: wrap;
-  margin-top: auto;
-}
-
-.assign-btn,
+/* Sheet buttons (the card has none of its own anymore). */
 .ghost-btn {
-  border: 1.5px solid var(--member-color, var(--border));
-  color: var(--member-color, var(--text));
+  border: 1.5px solid var(--border);
+  color: var(--text);
   background: transparent;
   font-weight: 700;
   text-decoration: none;
-}
-
-.ghost-btn {
-  border-color: var(--border);
-  color: var(--text);
-}
-
-/* Tiles are half a phone wide — the buttons have to be too. */
-.member-card .member-actions .btn {
-  padding: 0.25rem 0.5rem;
-  min-height: 30px;
-  font-size: 0.74rem;
-}
-
-.assign-btn {
-  margin-left: auto;
-}
-
-.member-card.assigning .assign-btn {
-  background: var(--member-color);
-  color: #fff;
 }
 
 /* --- Member cards --- */
@@ -2683,6 +2682,24 @@ watch(
   border: 2px solid color-mix(in srgb, var(--member-color) 45%, var(--border));
   border-left: 6px solid var(--member-color);
   transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  /* The tile is a <button> now: browsers' UA styles center a button's flex
+     children and clamp its wrapping, both wrong for a card. */
+  align-items: stretch;
+  white-space: normal;
+}
+
+.member-card:hover .member-name {
+  text-decoration: underline;
+}
+
+/* The card being picked for right now says so where the button used to be. */
+.picking-tag {
+  margin-top: auto;
+  font-size: 0.74rem;
+  font-weight: 800;
+  color: var(--member-color);
 }
 
 .member-card.selected {
@@ -2690,28 +2707,14 @@ watch(
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--member-color) 35%, transparent);
 }
 
-/* Header, recent list and actions are three separate targets — the header
-   zooms the map, the list opens the member sheet. A whole-card click handler
-   made every button a stop-propagation fight. */
+/* The whole tile is one button now (2026-07-24) — header and recent list are
+   plain spans inside it, and every action lives in the sheet it opens. */
 .member-top {
   display: flex;
   align-items: center;
   gap: 0.55rem;
   min-width: 0;
   width: 100%;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  border-radius: 8px;
-}
-
-.member-top:hover .member-name,
-.recent-block:hover .recent-more {
-  text-decoration: underline;
 }
 
 .member-id {
@@ -2750,24 +2753,10 @@ watch(
   flex-direction: column;
   gap: 0.25rem;
   width: 100%;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
   padding: 0.4rem 0.45rem;
   border: 1px dashed color-mix(in srgb, var(--member-color) 40%, var(--border));
   border-radius: 8px;
   background: color-mix(in srgb, var(--surface) 70%, transparent);
-}
-
-.recent-block:hover {
-  background: var(--surface);
-}
-
-.recent-more {
-  font-size: 0.76rem;
-  font-weight: 700;
-  color: var(--member-color);
 }
 
 .member-avatar {
@@ -2820,20 +2809,18 @@ watch(
 }
 
 .recent-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
 }
 
-.recent-list li {
+.recent-item {
   display: flex;
   justify-content: space-between;
   gap: 0.4rem;
   font-size: 0.74rem;
   line-height: 1.35;
+  min-width: 0;
 }
 
 .recent-street {

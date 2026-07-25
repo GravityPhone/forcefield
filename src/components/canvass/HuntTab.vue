@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { Geolocation } from '@capacitor/geolocation'
 import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
@@ -15,8 +16,13 @@ import {
 } from '@/lib/mapLayers'
 import type { DoorPoint, PinMode, TurfShadeMode } from '@/lib/mapLayers'
 import { DoorCanvasLayer, PINS_MIN_ZOOM } from '@/lib/doorCanvas'
-import type { DoorPaintState } from '@/lib/doorCanvas'
-import { geocodeAndCache } from '@/lib/geocode'
+import type { DoorBadge, DoorPaintState } from '@/lib/doorCanvas'
+import { createBadgeFactory } from '@/lib/doorBadges'
+import type { BadgePerson } from '@/lib/doorBadges'
+import { attachMapScrollGuard } from '@/lib/mapScroll'
+import type { MapScrollGuard } from '@/lib/mapScroll'
+import { geocodeAndCache, normalizeStreetName, streetAtPoint } from '@/lib/geocode'
+import { avatarUrl } from '@/lib/avatars'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { localToday, startOfLocalDayISO } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
@@ -28,7 +34,7 @@ import {
   doorStatusOutcome,
   knockButtonHex,
 } from '@/lib/outcomes'
-import { inkOn } from '@/lib/memberColors'
+import { inkOn, memberColor } from '@/lib/memberColors'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import OutcomeIndicatorGrid from './OutcomeIndicatorGrid.vue'
 import { fadeUp } from '@/lib/motion'
@@ -128,6 +134,14 @@ const summaryByHousehold = ref<Map<string, HouseholdKnockSummary>>(new Map())
  * already here today" signal on pins and result rows, so crews working the
  * same turf don't double-knock. Kept live via the realtime feed below. */
 const knockedToday = ref<Set<string>>(new Set())
+/** door id -> who knocked it most recently TODAY (`at` = epoch ms). Their
+ * avatar rides in the middle of the pin while the door keeps its outcome
+ * color — the same badge the Squad map wears, because "who's been where" is
+ * worth seeing on every map, not just your crew's. */
+const todayKnockerByDoor = ref<Map<string, { canvasserId: string; at: number }>>(new Map())
+/** Profiles for the people in that map — fetched by id, so it's a handful of
+ * rows (today's active canvassers), not the org. */
+const knockerById = ref<Map<string, BadgePerson>>(new Map())
 /** Every turf — yours (assigned directly or via a squad you're in today)
  * get a colored ring on member pins and a jump-to chip. */
 interface TurfLite {
@@ -180,20 +194,15 @@ watch(
   { immediate: true },
 )
 
-/** Ties page scroll position to intent, so getting to the top doesn't mean
- * hunting for a strip of bare background to grab: typing a search means you
- * want the results below, so jump there; tapping the map background means
- * you want the map, so jump back up. Tapping a pin (locateAddress) doesn't
- * scroll at all — the located-address bubble sits right above the map, so
- * it's already in view without moving the page. */
+/** Ties page scroll position to intent: typing a search means you want the
+ * results below, so jump there. Going the other way — back up to a map that's
+ * half off screen — is the scroll guard's job now (src/lib/mapScroll.ts): the
+ * first touch on a partly-visible map brings it into view instead of panning
+ * it. Tapping a pin doesn't scroll at all; the located-address bubble sits
+ * right above the map, already in view. */
 function scrollHuntToBottom() {
   const el = document.scrollingElement ?? document.documentElement
   el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-}
-
-function scrollHuntToTop() {
-  const el = document.scrollingElement ?? document.documentElement
-  el.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 /** Only geocoded addresses get pins — a growing-over-time set (Talk mode,
@@ -308,27 +317,67 @@ function isMyDoor(addressId: string, ids: Set<string> = myTurfIds.value): boolea
   return !!turfId && ids.has(turfId)
 }
 
-async function fetchKnockedToday(): Promise<Set<string>> {
-  const rows = await fetchAllRows<{ household_id: string }>((from, to) =>
+interface TodayKnocks {
+  doors: Set<string>
+  knockerByDoor: Map<string, { canvasserId: string; at: number }>
+}
+
+/** Today's knocks org-wide: which doors (the "somebody's already been here"
+ * halo) AND who was last at each one (the avatar badge). Epoch-ms compare,
+ * not ISO strings — PostgREST's timestamptz formatting doesn't sort
+ * lexicographically against Date.toISOString(). */
+async function fetchKnockedToday(): Promise<TodayKnocks> {
+  const rows = await fetchAllRows<{
+    household_id: string
+    canvasser_id: string
+    occurred_at: string
+  }>((from, to) =>
     supabase
       .from('knock_logs')
-      .select('household_id')
+      .select('household_id, canvasser_id, occurred_at')
       .gte('occurred_at', startOfLocalDayISO())
       .not('household_id', 'is', null)
       .order('id')
       .range(from, to),
   )
-  return new Set(rows.map((r) => r.household_id))
+  const doors = new Set<string>()
+  const knockerByDoor = new Map<string, { canvasserId: string; at: number }>()
+  for (const r of rows) {
+    doors.add(r.household_id)
+    const at = Date.parse(r.occurred_at)
+    const prev = knockerByDoor.get(r.household_id)
+    if (!prev || prev.at <= at) knockerByDoor.set(r.household_id, { canvasserId: r.canvasser_id, at })
+  }
+  return { doors, knockerByDoor }
+}
+
+/** Top up the badge profiles for whoever is on the map today. Best-effort:
+ * a missing profile just means that door shows no avatar. */
+async function ensureKnockerProfiles(ids: Iterable<string>) {
+  const want = [...new Set([...ids].filter((id) => id && !knockerById.value.has(id)))]
+  if (!want.length) return
+  const { data } = await supabase
+    .from('profiles')
+    .select('id, username, display_name, avatar, color')
+    .in('id', want)
+  if (!data?.length) return
+  const next = new Map(knockerById.value)
+  for (const p of data as BadgePerson[]) next.set(p.id, p)
+  knockerById.value = next
 }
 
 function applyStatusAndSummary(
   statusData: HouseholdLatestKnock[] | null,
   summaryData: HouseholdKnockSummary[] | null,
-  todayData?: Set<string>,
+  todayData?: TodayKnocks,
 ) {
   statusByHousehold.value = new Map((statusData ?? []).map((s) => [s.household_id, s]))
   summaryByHousehold.value = new Map((summaryData ?? []).map((s) => [s.household_id, s]))
-  if (todayData) knockedToday.value = todayData
+  if (todayData) {
+    knockedToday.value = todayData.doors
+    todayKnockerByDoor.value = todayData.knockerByDoor
+    void ensureKnockerProfiles([...todayData.knockerByDoor.values()].map((k) => k.canvasserId))
+  }
 }
 
 /** Paint state for one door on the shared canvas layer. The turf layer is a
@@ -379,6 +428,7 @@ function paintForDoor(id: string): DoorPaintState | null {
     return null
   }
   const halo = knockedToday.value.has(id) ? TODAY_HALO : null
+  const badge = todayBadge(id)
   const turfColor = turfColorFor(id)
   if (turfColor) {
     return {
@@ -388,7 +438,8 @@ function paintForDoor(id: string): DoorPaintState | null {
       // Palette hues run light (#eab308) to dark (#7c3aed), so the house
       // number has to pick its own contrast.
       ink: inkOn(turfColor),
-      emphasis: isLocated,
+      emphasis: isLocated || !!badge,
+      badge,
     }
   }
   const row = statusByHousehold.value.get(id)
@@ -399,8 +450,39 @@ function paintForDoor(id: string): DoorPaintState | null {
     innerRing: partly ? OUTCOME_HEX.maybe : null,
     ring: isLocated ? LOCATED_RING : null,
     halo,
-    emphasis: isLocated,
+    // A door somebody covered today draws bigger and above its neighbors —
+    // that's the day's story, and it's what you're scanning for.
+    emphasis: isLocated || !!badge,
+    badge,
   }
+}
+
+/** Avatar bitmaps for the badges, cached and repainting as they decode. */
+const { badgeFor } = createBadgeFactory(() => doorLayer?.requestRepaint())
+
+/** The badge for a door: whoever in the org last knocked it TODAY. Null once
+ * the day rolls over — this is a "who's out right now" layer, not history. */
+function todayBadge(id: string): DoorBadge | null {
+  const knocker = todayKnockerByDoor.value.get(id)
+  const person = knocker ? knockerById.value.get(knocker.canvasserId) : undefined
+  return person ? badgeFor(person) : null
+}
+
+/** Who knocked this door today, for the located card's tap-through. */
+function todayKnocker(id: string): BadgePerson | null {
+  const knocker = todayKnockerByDoor.value.get(id)
+  return (knocker && knockerById.value.get(knocker.canvasserId)) ?? null
+}
+
+function knockerName(p: BadgePerson): string {
+  return p.display_name || p.username
+}
+
+/** Tap someone's icon, see who they are — the field's "who's that?" answered
+ * without leaving the door you're looking at. */
+const router = useRouter()
+function openKnockerProfile(id: string) {
+  void router.push({ name: 'member', params: { id } })
 }
 
 /** The turf color this door should wear, or null to leave it on status
@@ -434,6 +516,8 @@ watch(
   [
     statusByHousehold,
     knockedToday,
+    todayKnockerByDoor,
+    knockerById,
     myTurfIds,
     myOwnTurfIds,
     allTurfColorById,
@@ -466,20 +550,56 @@ function addDoor(a: AddressWithRoster) {
   doorLayer?.requestRepaint()
 }
 
-/** Map taps: a door if one is under the finger (and we're zoomed in enough
- * for that to mean a specific door — at town zoom a 22px tap circle covers
- * half a street), otherwise "let me see the map", which scrolls the page up
- * to it. Pins have no elements of their own now, so this one listener
- * handles both cases. */
+/** Map taps put the street you touched into the list below (2026-07-24, user
+ * call: "when we tap either a pin or a street, it needs to populate that
+ * street at the bottom and type in the street name"):
+ *
+ *  - a PIN under the finger: locate that door, and fill the search box with
+ *    its street so the whole street is listed underneath in walk order —
+ *    exactly what the Talk→Scout handoff does.
+ *  - anywhere ELSE: reverse-geocode the point to a street name (the turf
+ *    cutter's ☝ tool, same normalization to the voter file's spelling) and
+ *    search that. Tapping a road with no pins on it yet still gets you its
+ *    houses.
+ *
+ * Getting back to the map isn't this listener's job anymore — the scroll
+ * guard (src/lib/mapScroll.ts) brings a half-off-screen map back before the
+ * tap ever reaches it. */
 function onMapClick(e: google.maps.MapMouseEvent) {
   const zoomedIn = (map?.getZoom() ?? 0) >= PINS_MIN_ZOOM
   const id = zoomedIn && e.latLng ? doorLayer?.doorAt(e.latLng) : null
   const address = id ? addressById.get(id) : null
   if (address) {
+    searchStreet(streetNameOf(address.street))
     void locateAddress(address)
     return
   }
-  scrollHuntToTop()
+  if (e.latLng) void searchStreetAtPoint(e.latLng)
+}
+
+/** Fill the search box with a street name as though it were typed, so the
+ * list below the map becomes that street's houses. */
+function searchStreet(name: string) {
+  if (!name) return
+  onListInput(name.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()))
+}
+
+/** Reverse-geocode a tapped point to a street. Google spells streets its own
+ * way ("South Clinton Street"), the voter file spells them USPS-style
+ * ("S CLINTON ST") — normalizeStreetName is the bridge, same as the cutter's
+ * street tool. One lookup at a time; a second tap while one is in flight is
+ * ignored rather than queued. */
+let streetTapBusy = false
+async function searchStreetAtPoint(latLng: google.maps.LatLng) {
+  if (streetTapBusy) return
+  streetTapBusy = true
+  try {
+    const hit = await streetAtPoint(latLng.lat(), latLng.lng())
+    const name = hit?.names.map(normalizeStreetName).find((n) => n.length > 2)
+    if (name) searchStreet(name)
+  } finally {
+    streetTapBusy = false
+  }
 }
 
 /** Where the map should open: the door this canvasser most recently knocked
@@ -740,8 +860,21 @@ function subscribeToKnockFeed() {
         signed_count: (prev?.signed_count ?? 0) + (knock.outcome === 'signed' ? 1 : 0),
         person_count: prev?.person_count ?? householdSize(addressById.get(knock.household_id)) ?? 0,
       })
-      if (new Date(knock.occurred_at) >= new Date(startOfLocalDayISO())) {
+      const at = Date.parse(knock.occurred_at)
+      if (at >= Date.parse(startOfLocalDayISO())) {
         knockedToday.value.add(knock.household_id)
+        const prevKnocker = todayKnockerByDoor.value.get(knock.household_id)
+        if (!prevKnocker || prevKnocker.at <= at) {
+          todayKnockerByDoor.value.set(knock.household_id, {
+            canvasserId: knock.canvasser_id,
+            at,
+          })
+        }
+        // First time we've seen this person today: fetch their avatar, then
+        // repaint (the badge appears a moment after the pop — fine).
+        if (!knockerById.value.has(knock.canvasser_id)) {
+          void ensureKnockerProfiles([knock.canvasser_id]).then(() => doorLayer?.requestRepaint())
+        }
       }
       // Both writes above are in-place, so repaint explicitly (the watcher
       // above only sees whole-Map replacements). The "plink" is the one-shot
@@ -1067,6 +1200,11 @@ function onFullscreenChange() {
   }, 0)
 }
 
+// Drags inside the map are the map's, never the page's — and a touch on a
+// map that's half off screen brings it back into view instead of panning a
+// map you can only half see. Same guard on all three maps.
+let scrollGuard: MapScrollGuard | null = null
+
 onMounted(() => {
   if (resultsListEl.value) {
     resizeObserver = new ResizeObserver(recomputeThumb)
@@ -1074,12 +1212,19 @@ onMounted(() => {
   }
   recomputeThumb()
   subscribeToKnockFeed()
+  if (mapWrapEl.value) {
+    scrollGuard = attachMapScrollGuard(mapWrapEl.value, {
+      isFullscreen: () => isFullscreen.value,
+    })
+  }
   document.addEventListener('fullscreenchange', onFullscreenChange)
   document.addEventListener('webkitfullscreenchange', onFullscreenChange)
 })
 
 onUnmounted(() => {
   resizeObserver?.disconnect()
+  scrollGuard?.dispose()
+  scrollGuard = null
   if (knockFeed) {
     void supabase.removeChannel(knockFeed)
     knockFeed = null
@@ -1107,7 +1252,27 @@ onUnmounted(() => {
         <span class="result-name">
           {{ locatedAddress.street }}{{ locatedAddress.unit ? ' ' + locatedAddress.unit : '' }}
         </span>
-        <span v-if="wasKnockedToday(locatedAddress.id)" class="today-badge">Knocked today</span>
+        <!-- Whose avatar is riding on this pin — tap it for their profile.
+             The map shows the face; this is where the name lives. -->
+        <button
+          v-if="todayKnocker(locatedAddress.id)"
+          type="button"
+          class="knocker-chip"
+          :style="{ '--knocker-color': memberColor(todayKnocker(locatedAddress.id)!) }"
+          :aria-label="`See ${knockerName(todayKnocker(locatedAddress.id)!)}'s profile`"
+          @click="openKnockerProfile(todayKnocker(locatedAddress.id)!.id)"
+        >
+          <span class="knocker-avatar">
+            <img
+              v-if="avatarUrl(todayKnocker(locatedAddress.id)!.avatar ?? null)"
+              :src="avatarUrl(todayKnocker(locatedAddress.id)!.avatar ?? null)"
+              alt=""
+            />
+            <template v-else>{{ knockerName(todayKnocker(locatedAddress.id)!).slice(0, 1).toUpperCase() }}</template>
+          </span>
+          {{ knockerName(todayKnocker(locatedAddress.id)!) }} knocked here today
+        </button>
+        <span v-else-if="wasKnockedToday(locatedAddress.id)" class="today-badge">Knocked today</span>
       </span>
       <OutcomeIndicatorGrid
         :summary="summaryFor(locatedAddress.id)"
@@ -1707,6 +1872,45 @@ onUnmounted(() => {
   color: #fff;
   background: #111;
   border-radius: 999px;
+}
+
+/* Named version of the avatar on the pin — same person, tappable. */
+.knocker-chip {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.12rem 0.5rem 0.12rem 0.15rem;
+  border: 1px solid var(--knocker-color, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--knocker-color, var(--text)) 12%, var(--surface));
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.knocker-avatar {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--knocker-color, var(--accent));
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-size: 0.7rem;
+}
+
+.knocker-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 1px;
 }
 
 .empty {

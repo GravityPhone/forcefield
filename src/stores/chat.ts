@@ -43,6 +43,10 @@ interface ChatState {
   unread: Record<string, number>
   /** The slide-in chat drawer, reachable from every screen. */
   drawerOpen: boolean
+  /** Room the current screen is "about" — the Squad page sets its crew's
+   * room here, so pulling the drawer open there lands in the squad chat
+   * instead of the room list. Cleared when that screen unmounts. */
+  preferredChatId: string | null
 }
 
 const MESSAGE_PAGE = 100
@@ -76,6 +80,7 @@ export const useChatStore = defineStore('chat', {
     orgMembers: [],
     unread: {},
     drawerOpen: false,
+    preferredChatId: null,
   }),
 
   getters: {
@@ -102,9 +107,13 @@ export const useChatStore = defineStore('chat', {
 
     // --- Drawer ---
 
+    /** Open the drawer, optionally straight into a room. With no room named,
+     * the screen's own room wins if it set one (the Squad page) — otherwise
+     * the drawer lands on the list, which is the default everywhere else. */
     openDrawer(chatId?: string) {
       this.drawerOpen = true
-      if (chatId) void this.openChat(chatId)
+      const target = chatId ?? this.preferredChatId
+      if (target) void this.openChat(target)
     },
 
     closeDrawer() {

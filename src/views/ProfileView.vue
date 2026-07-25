@@ -7,6 +7,8 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { avatarName, avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
+import { hapticTap } from '@/lib/native'
+import { canvassGameOpen, useTapStreak } from '@/lib/easterEgg'
 import { ROLE_LABELS } from '@/types'
 
 const auth = useAuthStore()
@@ -42,6 +44,31 @@ const PHONE_RE = /^\+?[0-9() .-]{7,20}$/
 const previewName = computed(
   () => displayName.value.trim() || auth.profile?.username || '',
 )
+
+// --- Easter egg: tap your own name 25 times in a row → Clipboard Canvass.
+// The name is inert otherwise, so nothing can swallow a tap mid-streak (the
+// old chat-handle version opened the drawer on tap 1 and lost the rest).
+const NAME_TAP_GOAL = 25
+const { streak: nameTaps, tap: tapName } = useTapStreak(NAME_TAP_GOAL, () => {
+  hapticTap('medium')
+  canvassGameOpen.value = true
+})
+
+function onNameTap() {
+  tapName()
+  if (nameTaps.value > 6) hapticTap('light')
+}
+
+/** A wobble that grows with the streak — the only hint you're getting warm.
+ * Sign alternates per tap so consecutive taps read as a jiggle, and the
+ * whole thing snaps back to nothing the moment the streak lapses. */
+const nameWobble = computed(() => {
+  const n = nameTaps.value
+  if (n < 6) return undefined
+  const tilt = (n % 2 ? 1 : -1) * Math.min(4, (n - 5) * 0.4)
+  const pop = 1 + Math.min(0.14, (n - 5) * 0.012)
+  return { transform: `rotate(${tilt}deg) scale(${pop})` }
+})
 
 onMounted(async () => {
   if (!auth.profile) return
@@ -143,7 +170,9 @@ async function save() {
           <template v-else>{{ previewName.slice(0, 1).toUpperCase() }}</template>
         </button>
         <span class="identity-text">
-          <span class="identity-name">{{ previewName }}</span>
+          <!-- Tapping this does nothing visible — 25 times in a row is the
+               easter egg (see onNameTap). -->
+          <span class="identity-name" :style="nameWobble" @click="onNameTap">{{ previewName }}</span>
           <span class="muted identity-role">{{ ROLE_LABELS[auth.profile.role] }}</span>
         </span>
       </div>
@@ -308,6 +337,15 @@ async function save() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* Tap target for the easter egg: no selection flicker, no double-tap
+   * pause, no highlight — it should feel like plain text right up until it
+   * starts wobbling. Origin left so the wobble doesn't shove a long name. */
+  transform-origin: left center;
+  transition: transform 0.09s ease-out;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .identity-role {

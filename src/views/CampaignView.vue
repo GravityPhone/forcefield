@@ -2,11 +2,10 @@
 import AppShell from '@/components/AppShell.vue'
 import CampaignProgress from '@/components/CampaignProgress.vue'
 import {
+  CAMPAIGN_BODY,
   CAMPAIGN_FACTS,
   CAMPAIGN_HEADLINE,
-  CAMPAIGN_SECTIONS,
   DEMO_NOTICE,
-  OBJECTIONS,
   TALKING_POINTS,
   THE_ASK,
 } from '@/lib/campaignContent'
@@ -24,19 +23,18 @@ import {
 <template>
   <AppShell title="The Campaign">
     <div class="campaign-page">
-      <!-- Demo notice first, so nobody reads the example copy below as a real
+      <!-- Demo notice first, so nobody reads the placeholder below as a real
            campaign's position. Remove this card when real content lands. -->
       <div class="card demo-note">
-        <h3>This is a demo</h3>
-        <p v-for="(p, i) in DEMO_NOTICE" :key="i">{{ p }}</p>
+        <p>{{ DEMO_NOTICE }}</p>
       </div>
 
+      <!-- One headline, then filler. No sub-headings: there's nothing here
+           yet to organize, and inventing section titles for placeholder text
+           only makes it look like something it isn't. -->
       <div class="card">
         <h2 class="headline">{{ CAMPAIGN_HEADLINE }}</h2>
-        <section v-for="s in CAMPAIGN_SECTIONS" :key="s.heading" class="section">
-          <h3>{{ s.heading }}</h3>
-          <p v-for="(p, i) in s.body" :key="i">{{ p }}</p>
-        </section>
+        <p v-for="(p, i) in CAMPAIGN_BODY" :key="i">{{ p }}</p>
       </div>
 
       <!-- The ask: pulled out on its own so it's findable in two seconds on a
@@ -55,20 +53,6 @@ import {
             <p>{{ p.body }}</p>
           </article>
         </div>
-      </div>
-
-      <div class="card">
-        <h3>If they say…</h3>
-        <p class="muted section-sub">
-          Answer once, kindly, then log the outcome and move on. Nobody signs because they
-          lost an argument.
-        </p>
-        <dl class="objections">
-          <template v-for="o in OBJECTIONS" :key="o.says">
-            <dt>{{ o.says }}</dt>
-            <dd>{{ o.reply }}</dd>
-          </template>
-        </dl>
       </div>
 
       <div class="card">
@@ -161,27 +145,16 @@ import {
   font-size: 0.9rem;
 }
 
-.objections,
 .facts {
   margin: 0.7rem 0 0;
 }
 
-.objections dt,
 .facts dt {
   font-weight: 700;
 }
 
-.objections dt {
-  margin-top: 0.8rem;
-}
-
-.objections dt:first-child,
 .facts dt:first-child {
   margin-top: 0;
-}
-
-.objections dd {
-  margin: 0.25rem 0 0;
 }
 
 /* Facts read as a two-column list on anything wider than a phone. */

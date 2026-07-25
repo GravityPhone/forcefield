@@ -60,7 +60,11 @@ import {
   PINS_MIN_ZOOM,
   TAP_RADIUS_PX,
 } from '@/lib/doorCanvas'
-import type { DoorPaintState } from '@/lib/doorCanvas'
+import type { DoorBadge, DoorPaintState } from '@/lib/doorCanvas'
+import { createBadgeFactory } from '@/lib/doorBadges'
+import type { BadgePerson } from '@/lib/doorBadges'
+import { attachMapScrollGuard } from '@/lib/mapScroll'
+import type { MapScrollGuard } from '@/lib/mapScroll'
 import {
   geocodeAndCache,
   geocodeMissing,
@@ -69,8 +73,7 @@ import {
   stripLeadingDirectional,
 } from '@/lib/geocode'
 import type { StreetAtPoint } from '@/lib/geocode'
-import { avatarUrl } from '@/lib/avatars'
-import { localToday } from '@/lib/day'
+import { localToday, startOfLocalDayISO } from '@/lib/day'
 import { memberColor } from '@/lib/memberColors'
 import {
   OUTCOME_HEX,
@@ -762,22 +765,18 @@ const OPEN_OUTLINE = '#8a90a5'
 const OPEN_INK = '#1d2433'
 const DRAFT_RING = '#1d2433'
 
-/** Avatar bitmaps for the taken-door badge, by slug. Images decode async —
- * the layer repaints when one lands; until then the canvas shows the
- * initial. */
-const badgeImgCache = new Map<string, HTMLImageElement>()
-function badgeImage(slug: string | null | undefined): HTMLImageElement | null {
-  const url = avatarUrl(slug)
-  if (!slug || !url) return null
-  let img = badgeImgCache.get(slug)
-  if (!img) {
-    img = new Image()
-    img.onload = () => doorLayer?.requestRepaint()
-    img.src = url
-    badgeImgCache.set(slug, img)
-  }
-  return img
-}
+/** Avatars on doors, from the factory every map shares
+ * (src/lib/doorBadges.ts): `badgeFor` builds the today-knocker chip, `image`
+ * feeds the taken-door symbol, which draws its own shape (white disc, red
+ * ring) and so wants the raw bitmap rather than a colored badge. Images
+ * decode async — the layer repaints when one lands. */
+const { badgeFor, image: badgeImage } = createBadgeFactory(() => doorLayer?.requestRepaint())
+
+/** door id -> the id of whoever last knocked it today, and those people's
+ * profiles — the avatar badge every map wears. Filled by fetchTodayKnockers
+ * alongside the knock statuses: both are "what happened at these doors". */
+const todayKnockerByDoor = ref<Map<string, string>>(new Map())
+const knockerById = ref<Map<string, BadgePerson>>(new Map())
 
 /** A turf's identity color for the OVERVIEW rings: the assignee's own accent
  * (the same color their Squad card / chat name wears) when it's one
@@ -840,8 +839,14 @@ function paintForDoor(id: string): DoorPaintState | null {
     fill = FILL_SIGNED
     innerRing = RING_PARTLY
   } else if (eff === 'didnt_sign' || eff === 'skip' || eff === 'hostile') fill = FILL_CLOSED
+  // Whoever knocked this door TODAY rides in the middle of it, same as Scout
+  // and Squad — the door keeps saying what happened, the avatar says who was
+  // there. Never on a taken symbol above: that door is already carrying a
+  // different person's face for a different reason.
+  const badge = todayBadge(id)
   return {
     fill,
+    badge,
     // The outer ring says WHOSE this door is: the uniform dark ring while
     // it's joining the draft you're building, or (overview) the owning
     // turf's identity color.
@@ -849,16 +854,26 @@ function paintForDoor(id: string): DoorPaintState | null {
     innerRing,
     outline: fill === FILL_OPEN ? OPEN_OUTLINE : null,
     ink: fill === FILL_OPEN ? OPEN_INK : '#fff',
-    // Draft members draw bigger and above their neighbors.
-    emphasis: inDraft,
+    // Draft members draw bigger and above their neighbors — so does a door
+    // somebody covered today.
+    emphasis: inDraft || !!badge,
   }
+}
+
+/** The badge for a door: whoever in the org last knocked it TODAY. Loaded
+ * with the knock statuses (same lazy trigger), so it costs nothing until the
+ * cutter first paints status-colored doors. */
+function todayBadge(id: string): DoorBadge | null {
+  const knocker = todayKnockerByDoor.value.get(id)
+  const person = knocker ? knockerById.value.get(knocker) : undefined
+  return person ? badgeFor(person) : null
 }
 
 // Any paint-relevant state change repaints the one canvas (rAF-coalesced in
 // the layer). showTakenDoors governs the door-level taken symbols; zoom
 // crossings repaint via the layer's own idle check.
 watch(
-  [draftMemberIds, statusByAddress, partlySignedDoors, expandedSegKey, locatedStreet, turfs, editingTurfId, showTakenDoors, pinMode, draftOpen],
+  [draftMemberIds, statusByAddress, partlySignedDoors, expandedSegKey, locatedStreet, turfs, editingTurfId, showTakenDoors, pinMode, draftOpen, todayKnockerByDoor, knockerById],
   () => doorLayer?.requestRepaint(),
 )
 
@@ -927,9 +942,46 @@ function ensureKnockStatuses() {
   void fetchKnockStatuses()
 }
 
+/** Today's knocks org-wide (a few hundred rows, not the whole history) plus
+ * the profiles behind them. Best-effort — no badges is a fine failure. */
+async function fetchTodayKnockers() {
+  try {
+    const rows = await fetchAllRows<{
+      household_id: string
+      canvasser_id: string
+      occurred_at: string
+    }>((from, to) =>
+      supabase
+        .from('knock_logs')
+        .select('household_id, canvasser_id, occurred_at')
+        .gte('occurred_at', startOfLocalDayISO())
+        .not('household_id', 'is', null)
+        .order('id')
+        .range(from, to),
+    )
+    const latest = new Map<string, { canvasserId: string; at: number }>()
+    for (const r of rows) {
+      const at = Date.parse(r.occurred_at)
+      const prev = latest.get(r.household_id)
+      if (!prev || prev.at <= at) latest.set(r.household_id, { canvasserId: r.canvasser_id, at })
+    }
+    const ids = [...new Set([...latest.values()].map((v) => v.canvasserId))]
+    if (!ids.length) return
+    const { data } = await supabase
+      .from('profiles')
+      .select('id, username, display_name, avatar, color')
+      .in('id', ids)
+    knockerById.value = new Map(((data ?? []) as BadgePerson[]).map((p) => [p.id, p]))
+    todayKnockerByDoor.value = new Map([...latest].map(([door, v]) => [door, v.canvasserId]))
+  } catch {
+    /* no badges this session */
+  }
+}
+
 /** Latest outcome per door, for the status-colored dot fills. Best-effort:
  * a failed fetch keeps whatever colors we already had. */
 async function fetchKnockStatuses() {
+  void fetchTodayKnockers()
   try {
     const rows = await fetchAllRows<HouseholdLatestKnock>((from, to) =>
       supabase.from('household_latest_knock').select('*').order('household_id').range(from, to),
@@ -2595,10 +2647,20 @@ function jumpTo(where: 'top' | 'bottom') {
   el.scrollTo({ top: where === 'top' ? 0 : el.scrollHeight, behavior: 'smooth' })
 }
 
+// Drags inside the map are the map's, never the page's; a touch on a map
+// that's scrolled half off screen brings it back into view first. Shared with
+// Scout and the Squad map (src/lib/mapScroll.ts).
+let scrollGuard: MapScrollGuard | null = null
+
 onMounted(() => {
   if (!initStarted) {
     initStarted = true
     void initialize()
+  }
+  if (mapWrapEl.value) {
+    scrollGuard = attachMapScrollGuard(mapWrapEl.value, {
+      isFullscreen: () => isFullscreen.value,
+    })
   }
   document.addEventListener('fullscreenchange', onFullscreenChange)
   document.addEventListener('webkitfullscreenchange', onFullscreenChange)
@@ -2615,6 +2677,8 @@ watch([draftOpen, segments, streetMatches, selectedTurfId], () => void nextTick(
 
 onUnmounted(() => {
   unmounted = true
+  scrollGuard?.dispose()
+  scrollGuard = null
   doorLayer?.dispose()
   cityLayer?.dispose()
   document.removeEventListener('fullscreenchange', onFullscreenChange)

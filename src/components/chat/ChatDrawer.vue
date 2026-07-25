@@ -12,7 +12,6 @@ import { vacStyles } from '@/lib/themes'
 import { avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
 import { hapticTap } from '@/lib/native'
-import { canvassGameOpen } from '@/lib/easterEgg'
 import type { ChatProfile } from '@/types'
 
 const chat = useChatStore()
@@ -81,42 +80,14 @@ function onHandleMove(e: PointerEvent) {
   }
 }
 
-// --- Easter egg: 25 rapid taps on the handle launch Clipboard Canvass.
-// Tap 1 behaves normally (opens the drawer); once a rapid streak is going
-// (taps < 600ms apart) the drawer is held closed so the remaining taps
-// keep landing on the (always-visible) handle. ---
-
-const TAP_STREAK_WINDOW = 600
-const TAP_STREAK_GOAL = 25
-let tapStreak = 0
-let lastTapAt = 0
-let streakTimer: ReturnType<typeof setTimeout> | undefined
-
-function registerHandleTap(): number {
-  const now = Date.now()
-  tapStreak = now - lastTapAt < TAP_STREAK_WINDOW ? tapStreak + 1 : 1
-  lastTapAt = now
-  clearTimeout(streakTimer)
-  streakTimer = setTimeout(() => {
-    tapStreak = 0
-  }, TAP_STREAK_WINDOW)
-  return tapStreak
-}
+// (The Clipboard Canvass easter egg used to hang off rapid taps here — it
+// moved to your own name on /profile 2026-07-24; see lib/easterEgg.ts for
+// why the handle was a bad host for it.)
 
 function onHandleUp() {
   if (dragMode === 'none') {
     hapticTap('light')
-    const streak = registerHandleTap()
-    if (streak >= TAP_STREAK_GOAL) {
-      clearTimeout(streakTimer)
-      tapStreak = 0
-      chat.closeDrawer()
-      canvassGameOpen.value = true
-    } else if (streak > 1) {
-      chat.closeDrawer()
-    } else {
-      chat.drawerOpen ? chat.closeDrawer() : chat.openDrawer()
-    }
+    chat.drawerOpen ? chat.closeDrawer() : chat.openDrawer()
   } else if (dragMode === 'move') {
     localStorage.setItem(HANDLE_POS_KEY, String(Math.round(handleTopPct.value)))
   } else if (dragMode === 'open') {
@@ -200,7 +171,12 @@ watch(
 watch(
   () => chat.drawerOpen,
   (open) => {
-    if (open && chat.activeChatId && view.value === 'room') chat.markRead(chat.activeChatId)
+    if (!open) return
+    // A screen that IS a room (the Squad page) opens straight into it — even
+    // when that room is already the active one, in which case the
+    // activeChatId watcher above never fires.
+    if (chat.preferredChatId && chat.activeChatId === chat.preferredChatId) view.value = 'room'
+    if (chat.activeChatId && view.value === 'room') chat.markRead(chat.activeChatId)
   },
 )
 

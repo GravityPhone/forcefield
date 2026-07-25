@@ -35,6 +35,17 @@ body {
    * sometimes reopened with a stale zoom level). Maps still pinch — their
    * canvases set their own touch-action and zoom via the JS camera. */
   touch-action: pan-x pan-y;
+  /* HARD RULE (2026-07-24, user call): no screen in this app ever scrolls
+   * side to side. Anything wider than the viewport gets clipped rather than
+   * turning the page into a thing you can drag sideways off its own layout.
+   * `clip` not `hidden` on purpose — hidden would make these scroll
+   * containers, which breaks position: sticky inside pages; clip just
+   * clips. Deliberate inner scrollers (the desktop nav strip, wide chart
+   * tables) set their own overflow-x and are unaffected — the rule is about
+   * the PAGE, not about a table you meant to swipe. Fixed-position chrome
+   * (chat drawer + handle, bottom nav) is not clipped by this. */
+  overflow-x: clip;
+  max-width: 100%;
 }
 
 html {
@@ -157,6 +168,9 @@ html.pref-reduce-motion *::after {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
+  /* Second line of the no-sideways-scroll rule: views mounted outside
+   * AppShell (the landing/login screen) don't get .shell-main's clip. */
+  overflow-x: clip;
 }
 
 h1, h2, h3 {

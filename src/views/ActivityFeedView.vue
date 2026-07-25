@@ -490,10 +490,17 @@ function ms(item: FeedItem): MilestoneItem {
 </template>
 
 <style scoped>
+/* The feed scrolls ONE way — down (2026-07-24, user call). Nothing here is
+   wide enough to be worth a sideways scroll, and at larger text sizes a
+   single long word used to push the whole page off screen. Every row is
+   allowed to wrap instead; min-width:0 lets flex children actually shrink,
+   which is what makes the wrapping possible. */
 .stack {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .state {
@@ -512,6 +519,7 @@ function ms(item: FeedItem): MilestoneItem {
   align-items: center;
   gap: 0.6rem;
   padding: 0.7rem 0.9rem;
+  flex-wrap: wrap;
 }
 
 .totals-text {
@@ -699,6 +707,7 @@ function ms(item: FeedItem): MilestoneItem {
   flex-direction: column;
   gap: 0.05rem;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .row-what {
@@ -708,6 +717,7 @@ function ms(item: FeedItem): MilestoneItem {
 
 .row-meta {
   font-size: 0.78rem;
+  overflow-wrap: anywhere;
 }
 
 .outcome-chip {
