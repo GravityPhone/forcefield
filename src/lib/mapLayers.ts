@@ -96,16 +96,20 @@ export class CityLimitsLayer {
  * nothing is SHADED any more — these pick which doors are painted and what
  * colors they wear:
  *
- * - 'off'   every door, plain status colors.
- * - 'mine'  filter to your crew's turf (Squad rings it in turf colors).
+ * - 'off'   every door, plain status colors. THE DEFAULT on every map
+ *           (2026-07-25, user call): nothing toggled means you see the whole
+ *           county exactly as the outcome colors describe it, and a layer is
+ *           something you reach for rather than something you switch off.
+ * - 'mine'  filter to your crew's whole assignment — the turf your squad is
+ *           out on today, sub-turfs and all (lib/myTurf.ts owns that rule).
+ *           Not your personal share; that's 'doors'.
  * - 'doors' Scout only: filter to the doors assigned to YOU personally — the
  *           share you claimed (or were handed) on the squad page. The
  *           narrowest reading of the map there is: this is my list.
  * - 'all'   every turf's doors in its own color.
  *
  * Scout and the cutter share one key (`map-turf-shading`); the Squad map
- * keeps its own — its default is the crew's turf, so a plain squad-page load
- * never pays for the org-wide door download that "All turf" needs there. The
+ * keeps its own, since only it has to fetch the campaign-wide door set. The
  * Squad map never writes 'doors', but reads tolerate it (a stored value from
  * one map must never wedge another). */
 export type TurfShadeMode = 'off' | 'mine' | 'doors' | 'all'

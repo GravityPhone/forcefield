@@ -30,7 +30,10 @@ function confirmPrevious() {
 // a household loaded. Signed / Didn't Sign / Maybe are a real answer from a
 // real person — those stay disabled until someone's actually picked from
 // the roster, even once an address is loaded.
-// Whether to offer the "My doors" switch at all — it needs turf to filter to.
+// Whether to offer the "My turf" switch at all — it needs turf to filter to.
+// (Labeled "My turf", not "My doors": it filters to the CREW's assignment,
+// which is what myTurfIds means. "My doors" is Scout's narrower filter — the
+// share with your name on it.)
 // Loaded once here so the switch is on screen before the first Next.
 onMounted(() => void talk.ensureMyTurf())
 const haveMyTurf = computed(() => talk.myTurfIds.size > 0)
@@ -87,13 +90,13 @@ function disabledFor(requiresPerson: boolean): boolean {
           !haveMyTurf
             ? 'No turf is yours today — a manager sends turf out to each day’s crews'
             : talk.myDoorsOnly
-              ? 'Only walking doors assigned to you — tap for every door'
-              : 'Walking every door — tap to stick to yours'
+              ? 'Only walking your crew’s turf — tap for every door'
+              : 'Walking every door — tap to stick to your turf'
         "
         @click="toggleMyDoors"
       >
         <span class="mine-box" aria-hidden="true">{{ talk.myDoorsOnly && haveMyTurf ? '✓' : '' }}</span>
-        <span class="mine-label">My doors</span>
+        <span class="mine-label">My turf</span>
       </button>
     </div>
   </div>

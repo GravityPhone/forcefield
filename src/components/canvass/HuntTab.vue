@@ -116,13 +116,15 @@ function setPinMode(mode: PinMode) {
 // on the doors makes overlap impossible to draw.
 //
 // Still for EVERYONE — a canvasser with no assignment gets to see how the
-// ground is cut. Tri-state: "My turf" rings only yours, "All turf" rings
-// every turf in its own color, tapping the active one leaves plain status
-// pins. Key unchanged; the legacy `map-show-areas` boolean still seeds the
-// default so an old "off" choice sticks.
-const turfShade = ref<TurfShadeMode>(
-  readTurfShadeMode('map-turf-shading', readMapPref('map-show-areas', true) ? 'all' : 'off'),
-)
+// ground is cut. "My turf" filters to yours, "All turf" colors every turf in
+// its own color, tapping the active one leaves plain status pins.
+//
+// OFF is the default (2026-07-25, user call — the standing rule for every map
+// in the app): nothing toggled means every door in the county on its regular
+// outcome colors. A layer is something you reach for, not the state you have
+// to escape from. (The legacy `map-show-areas` seed went with it — it defaulted
+// to the whole-campaign coloring, which is the opposite of this.)
+const turfShade = ref<TurfShadeMode>(readTurfShadeMode('map-turf-shading', 'off'))
 const showCity = ref(readMapPref('map-show-city', false))
 
 function setTurfShade(mode: 'mine' | 'doors' | 'all') {
@@ -240,25 +242,15 @@ async function fetchMapData() {
   return addresses
 }
 
-/** All turfs (for the door rings), plus which of them are mine — dispatched
- * to me directly or to a squad I'm in today. A sub-turf of mine (my slice of
- * a crew's split) counts only while its parent is still pointed at one of my
- * today-squads — or at a person, which is durable. Turf left pointing at a
- * past day's squad is nobody's until the campaign manager re-dispatches it. */
+/** All turfs (for the door rings), plus which of them are mine — my crew's
+ * whole assignment today, sub-turfs included (see lib/myTurf.ts, which owns
+ * the rule and shares it with the squad page and Talk's walk filter). */
 async function fetchTurfs() {
   if (!auth.profile) return
-  const { all, mine, squadIds: mySquadIds } = await fetchMyTurf(auth.profile.id)
+  const { all, mine, squadmateIds: crew } = await fetchMyTurf(auth.profile.id)
   allTurfs.value = all
   myTurfIds.value = mine
-  if (mySquadIds.size) {
-    const { data } = await supabase
-      .from('squad_members')
-      .select('user_id')
-      .in('squad_id', [...mySquadIds])
-    squadmateIds.value = new Set((data ?? []).map((r) => r.user_id as string))
-  } else {
-    squadmateIds.value = new Set()
-  }
+  squadmateIds.value = crew
 }
 
 /** Every turf's color — "All turf" paints every crew's doors in their own

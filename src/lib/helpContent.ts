@@ -75,7 +75,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Next / Back',
         target: 'talk-advance',
-        body: 'Next: next door on the walk.\nBack: doors you knocked, newest first.\nNeither needs an outcome logged first.\nMy doors: limits both to doors assigned to you today.',
+        body: 'Next: next door on the walk.\nBack: doors you knocked, newest first.\nNeither needs an outcome logged first.\nMy turf: limits both to your crew’s turf today.',
       },
       {
         heading: 'Up next',
@@ -91,7 +91,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Layers',
         target: 'scout-layers',
-        body: 'My doors: only doors assigned to you.\nMy turf: your crew’s ground.\nAll turf: every turf in its own color.\nCity: village limits.\nTap a lit button to clear it. My doors and My turf also fly there.',
+        body: 'Nothing lit: every door, status colors.\nMy doors: only doors assigned to you.\nMy turf: your crew’s ground, splits included.\nAll turf: every turf in its own color.\nCity: village limits.\nTap a lit button to clear it. My doors and My turf also fly there.',
       },
       {
         heading: 'Search',
@@ -115,7 +115,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'The map',
         target: 'squad-layers',
-        body: 'Fill: knock status, same colors as Scout.\nAvatar: who knocked that door today.\nOur turf / All turf: ring doors in their turf’s color.\nTap a door to open it in Talk.',
+        body: 'Fill: knock status, same colors as Scout.\nAvatar: who knocked that door today.\nNothing lit: every door, status colors.\nOur turf: only our doors.\nAll turf: every turf in its own color.\nTap a door to open it in Talk.',
         swatches: DOOR_COLORS,
       },
       {

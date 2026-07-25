@@ -203,12 +203,12 @@ const PARTLY_SIGNED_OPTIONS = [
           {{ chipLabel(u.address) }}
         </button>
       </div>
-      <!-- With "My doors" on, an empty grid usually means the rest of the
+      <!-- With "My turf" on, an empty grid usually means the rest of the
            street isn't yours — not that the street ran out. Say which. -->
       <span v-else class="muted up-none">
         {{
           talk.myDoorsOnly && talk.myTurfIds.size
-            ? 'no more of your doors on this street'
+            ? 'no more of your turf on this street'
             : 'end of the street'
         }}
       </span>
