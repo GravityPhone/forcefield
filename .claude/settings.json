@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Claude_Preview__preview_screenshot",
+      "mcp__Claude_Preview__preview_snapshot",
+      "Bash(npm run type-check)",
+      "mcp__Claude_Preview__preview_console_logs",
+      "mcp__Claude_Preview__preview_network",
+      "mcp__Claude_Preview__preview_logs",
+      "Bash(netlify api listSiteDeploys *)",
+      "mcp__Claude_Preview__preview_list",
+      "Bash(netlify status)",
+      "mcp__Claude_Preview__preview_inspect"
+    ]
+  }
+}

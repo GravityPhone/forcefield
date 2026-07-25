@@ -1,8 +1,11 @@
-/** Parsing for the AI chat's ```infographic fenced blocks. The assistant
- * embeds a small JSON spec (documented in the chat function's system prompt);
- * the chat view splits each reply into text and infographic segments and
- * renders the latter with InfographicCard.vue. A block that fails to parse
- * falls back to a text segment so nothing silently disappears. */
+/** Parsing for the AI chat's fenced blocks — ```infographic (a chart spec) and
+ * ```turfplan (a suggested turf; see turfPlan.ts). The assistant embeds a small
+ * JSON spec, documented in the chat function's system prompt; the chat view
+ * splits each reply into segments and renders each with its own card. A block
+ * that fails to parse falls back to a text segment so nothing silently
+ * disappears. */
+
+import { parseTurfPlan, type TurfPlanSpec } from './turfPlan'
 
 export interface InfographicDatum {
   label: string
@@ -19,6 +22,7 @@ export interface InfographicSpec {
 export type MessageSegment =
   | { kind: 'text'; text: string }
   | { kind: 'infographic'; spec: InfographicSpec }
+  | { kind: 'turfplan'; spec: TurfPlanSpec }
 
 /** Chart palette for data points without an explicit color. Starts from the
  * app's pin blue / outcome hues so charts feel native. */
@@ -65,7 +69,7 @@ function parseInfographic(raw: string): InfographicSpec | null {
   }
 }
 
-const BLOCK_RE = /```infographic\s*\n?([\s\S]*?)```/g
+const BLOCK_RE = /```(infographic|turfplan)\s*\n?([\s\S]*?)```/g
 
 /** Split an assistant reply into renderable segments. */
 export function splitSegments(text: string): MessageSegment[] {
@@ -74,9 +78,16 @@ export function splitSegments(text: string): MessageSegment[] {
   for (const match of text.matchAll(BLOCK_RE)) {
     const before = text.slice(last, match.index)
     if (before.trim()) segments.push({ kind: 'text', text: before })
-    const spec = parseInfographic(match[1].trim())
-    if (spec) segments.push({ kind: 'infographic', spec })
-    else if (match[1].trim()) segments.push({ kind: 'text', text: match[1].trim() })
+    const body = match[2].trim()
+    if (match[1] === 'turfplan') {
+      const plan = parseTurfPlan(body)
+      if (plan) segments.push({ kind: 'turfplan', spec: plan })
+      else if (body) segments.push({ kind: 'text', text: body })
+    } else {
+      const spec = parseInfographic(body)
+      if (spec) segments.push({ kind: 'infographic', spec })
+      else if (body) segments.push({ kind: 'text', text: body })
+    }
     last = match.index + match[0].length
   }
   const rest = text.slice(last)

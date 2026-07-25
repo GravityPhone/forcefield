@@ -2,8 +2,11 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
 import InfographicCard from '@/components/chat/InfographicCard.vue'
+import TurfPlanCard from '@/components/chat/TurfPlanCard.vue'
 import { extractFollowups } from '@/lib/followups'
 import { splitSegments, type InfographicSpec } from '@/lib/infographic'
+import type { TurfPlanSpec } from '@/lib/turfPlan'
+import { useRouter } from 'vue-router'
 import { renderMarkdownLite } from '@/lib/markdownLite'
 import { apiBase } from '@/lib/native'
 import { supabase } from '@/lib/supabase'
@@ -21,9 +24,13 @@ interface ChatMessage {
   suggestions?: string[]
 }
 
-type RenderSegment = { kind: 'text'; html: string } | { kind: 'infographic'; spec: InfographicSpec }
+type RenderSegment =
+  | { kind: 'text'; html: string }
+  | { kind: 'infographic'; spec: InfographicSpec }
+  | { kind: 'turfplan'; spec: TurfPlanSpec }
 
 const auth = useAuthStore()
+const router = useRouter()
 // Loaded once per visit from admin_settings (the account-level, cross-device
 // store) rather than re-fetched per message.
 const apiKey = ref<string | null>(null)
@@ -96,6 +103,18 @@ function segmentsFor(text: string): RenderSegment[] {
   return splitSegments(text).map((seg) =>
     seg.kind === 'text' ? { kind: 'text' as const, html: renderMarkdownLite(seg.text) } : seg,
   )
+}
+
+/** [[Grove St]] in a reply renders as a .street-link button inside v-html, so
+ * the click is delegated from the wrapper rather than bound per element.
+ * Lands on Scout with the search prefilled — the same place the Talk→Scout
+ * handoff goes, just reached from a sentence instead of a door. */
+function openStreetFromClick(event: MouseEvent) {
+  const el = (event.target as HTMLElement | null)?.closest<HTMLElement>('.street-link')
+  const street = el?.dataset.street?.trim()
+  if (!street) return
+  event.preventDefault()
+  void router.push({ path: '/canvass', query: { street } })
 }
 
 /** Rewind: pull this message back into the input and drop it plus everything
@@ -250,7 +269,15 @@ async function send() {
           <div class="bubble">
             <template v-if="m.role === 'assistant' && !m.error">
               <template v-for="(seg, i) in segmentsFor(m.text)" :key="i">
-                <div v-if="seg.kind === 'text'" class="md" v-html="seg.html" />
+                <!-- [[Street]] links inside v-html can't carry @click, so the
+                     wrapper delegates — see openStreetFromClick. -->
+                <div
+                  v-if="seg.kind === 'text'"
+                  class="md"
+                  v-html="seg.html"
+                  @click="openStreetFromClick"
+                />
+                <TurfPlanCard v-else-if="seg.kind === 'turfplan'" :spec="seg.spec" />
                 <InfographicCard v-else :spec="seg.spec" />
               </template>
               <div v-if="m.activity?.length" class="activity">
@@ -405,6 +432,25 @@ async function send() {
   padding: 0.05rem 0.3rem;
   border-radius: 4px;
   font-size: 0.85em;
+}
+
+/* [[Street Name]] — inline in prose, so it has to sit on the text baseline
+   and wrap like a word rather than behaving like a block button. */
+.md :deep(.street-link) {
+  display: inline;
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.md :deep(.street-link:hover) {
+  text-decoration-thickness: 2px;
 }
 
 /* Tool-activity trace under an answer — what the assistant actually did. */

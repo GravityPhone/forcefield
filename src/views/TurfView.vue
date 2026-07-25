@@ -83,6 +83,8 @@ import {
 } from '@/lib/outcomes'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
+import { decodeTurfPlan } from '@/lib/turfPlan'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useSquadsStore } from '@/stores/squads'
 import { PARITY_LABELS } from '@/types'
@@ -275,7 +277,13 @@ function removeGroupWithUndo(g: StreetGroup) {
   for (const seg of g.segs) removeSegment(seg)
 }
 
+const route = useRoute()
+const router = useRouter()
 const editingTurfId = ref<string | null>(null)
+/** Set when this draft was pre-built from an AI chat suggestion (?plan=…).
+ * Drives the banner on the draft card — the draft is otherwise completely
+ * ordinary, and only a human pressing Save ever writes anything. */
+const planNote = ref('')
 /** Is the cutting UI open at all? (2026-07-24 later still, user call: "you
  * should have to actually select create new turf".) Closed = the page is a
  * pure turf OVERVIEW — no draft card, and the map colors other turfs by
@@ -1141,6 +1149,8 @@ async function loadCutterData() {
     indexAddresses(rows)
     doorLayer?.setDoors(locatedCanvasDoors())
     refreshStaleTurfs()
+    // Needs the street index above to resolve names to house numbers.
+    applyIncomingPlan()
   } catch {
     loadError.value = 'Could not load the street data. Check your connection and reload.'
   } finally {
@@ -1589,7 +1599,63 @@ function closeDraft() {
 function startNewTurf() {
   clearDraft()
   undoStack.value = []
+  planNote.value = ''
   draftOpen.value = true
+  void nextTick(focusDraft)
+}
+
+/** A plan handed over from the AI chat (/turf?plan=…). The assistant can't cut
+ * turf — it's read-only — so it hands us a draft instead: streets it found in
+ * a real query, pre-built here into an ordinary draft that a human reviews and
+ * saves. Nothing is claimed until they press Save.
+ *
+ * Runs after indexAddresses(), because resolving a street name to its house
+ * numbers needs the in-memory street index. */
+function applyIncomingPlan() {
+  const raw = route.query.plan
+  if (typeof raw !== 'string' || !raw) return
+  const plan = decodeTurfPlan(raw)
+  // Consume the param either way: a bad plan shouldn't re-prompt on reload,
+  // and a good one must not re-apply over whatever gets done next.
+  const consume = () => void router.replace({ path: '/turf', query: {} })
+  if (!plan) return consume()
+
+  // Never silently discard work in progress — an unsaved draft or an open
+  // edit is someone's afternoon. Cancel leaves the plan in the URL so they
+  // can finish, then reload to pick it up.
+  const busy = draftOpen.value && (segments.value.length > 0 || editingTurfId.value)
+  if (
+    busy &&
+    !window.confirm("Discard the turf you're working on and start the assistant's suggested plan?")
+  ) {
+    return
+  }
+  consume()
+
+  startNewTurf()
+  if (plan.name) draftName.value = plan.name
+  planNote.value = plan.note ?? ''
+
+  const missing: string[] = []
+  for (const s of plan.streets) {
+    const streetName = s.street.toUpperCase()
+    const rows = streetRows(streetName, s.city)
+    if (!rows.length) {
+      missing.push(s.street)
+      continue
+    }
+    const nums = rows.map((r) => houseNumber(r.street)).filter((n) => Number.isFinite(n))
+    if (!nums.length) {
+      missing.push(s.street)
+      continue
+    }
+    addSegment(streetName, s.city, s.from ?? Math.min(...nums), s.to ?? Math.max(...nums), 'both')
+  }
+  // Name what didn't land rather than quietly dropping it — the assistant can
+  // misspell a street, and a short draft with no explanation reads as a bug.
+  if (missing.length) {
+    flash(`Couldn't find ${missing.join(', ')} in the address list — the rest is in your draft.`)
+  }
   void nextTick(focusDraft)
 }
 
@@ -2738,6 +2804,18 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- This draft was pre-built from an AI chat suggestion. Say so on
+           screen: the assistant proposed the ground, but it's an ordinary
+           draft and nothing is claimed until a human saves it. -->
+      <div v-if="draftOpen && planNote" class="plan-banner">
+        <strong>Suggested by the assistant</strong>
+        <span class="plan-banner-note">{{ planNote }}</span>
+        <span class="muted"
+          >Review the streets below, change anything, then Save. Nothing is claimed until you
+          do.</span
+        >
+      </div>
+
       <!-- Find a street by name: tap a match to zoom to it and see its
            doors; the located row grows the explicit "Add to turf" button.
            Cutting only — in overview there's no draft for a street to
@@ -3721,6 +3799,24 @@ onUnmounted(() => {
 }
 
 /* --- Street search --- */
+
+/* Banner on a draft the AI chat pre-built (?plan=…). */
+.plan-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  font-size: 0.85rem;
+}
+
+.plan-banner-note {
+  color: var(--text);
+}
 
 .street-search {
   width: 100%;

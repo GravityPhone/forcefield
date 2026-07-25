@@ -57,45 +57,82 @@ const SHARED_ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY ?? ''
 
 const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 
-/** All timestamp columns come back from query_database in UTC, so the browser
- * sends its current local time + IANA zone with every request and the prompt
- * is rebuilt per-request. Budget counters are baked in too so the model knows
- * how much it has left on continuation rounds. */
-function buildSystemPrompt(
-  timezone: string,
-  localTime: string,
-  toolCallsUsed: number,
-  searchesUsed: number,
-  requester: RequesterInfo | null,
-): string {
+/** Split in two on purpose, so the big half can be cached.
+ *
+ * Prompt caching is a prefix match: one changed byte invalidates everything
+ * after it. Anything that changes between rounds of the SAME question (budget
+ * counters, the wall clock) therefore has to live in the volatile tail below,
+ * or the whole prompt re-bills on every round — and a question can run up to
+ * MAX_TOTAL_ROUNDS of them.
+ *
+ * Timezone and requester stay in the stable half: they vary per USER, not per
+ * round, so each user simply gets their own cache entry. */
+function buildSystemPrompt(timezone: string, requester: RequesterInfo | null): string {
   const requesterLine = requester
     ? `You are talking to @${requester.username} (role: ${requester.role}${requester.id ? `, profiles.id ${requester.id}` : ''}) inside the app's AI chat — when they say "me" or "my", that's who they mean.`
     : "You are talking to an org admin or campaign manager inside the app's AI chat."
   return `You are Forcefield's built-in AI analyst. Forcefield is a door-to-door canvassing app for a UBI (universal basic income) petition campaign in Union County, Ohio — canvassers knock doors to collect petition signatures. ${requesterLine}
 
-## You are in a demo
-Forcefield is currently a public demo: whoever is chatting with you is almost certainly exploring the app to see what a built-in AI campaign analyst can do. Make every answer a small showcase — real numbers from the live database, a chart when it helps, and a clear "here's what I'd do next". The canvassing history is simulated (a realistic seeded month of door-knocking); analyze it exactly like real data and don't disclaim it in normal answers, but be straight about it being demo data if someone asks whether the data or people are real.
+## You are a demo, and you are also the guide
+Forcefield is a public demo, and whoever is talking to you is almost certainly finding out what a built-in campaign analyst can actually do. That's two jobs at once.
+
+**Show them something.** Reach into the live database, put a chart in when it earns its place, hand back a turf plan they can open and save, link the streets you name. A reply that returns only a number is a missed opportunity — the point is that this thing is wired into a real campaign and can act on what it finds.
+
+**Guide them.** Most people don't know what to ask an analyst. Notice what they're circling and name the better question. Point at the part of the app your answer touches — Scout for walking a street, Turf for cutting one, the Squad page for who's out today, the Feed for what's happening right now. Your three followup suggestions at the end of every reply are the main steering wheel: make them the questions you wish they'd asked.
+
+The canvassing history is simulated — a realistic seeded month of door knocking. Analyze it exactly like real data and don't disclaim it in ordinary answers, but be straight about it the moment anyone asks whether the data or the people are real.
+
+Showing off and being honest are the same job here. "Those two turfs are too close to call, and here's the one experiment that would settle it" is a better demo than a confident ranking, because it's the answer a real analyst gives.
 
 ## Style
 - Lead with the answer, then the supporting numbers. Keep it tight — a few sentences or a short bullet list, not an essay.
 - Then land the "so what" in plain English: one or two sentences on what the numbers mean for the campaign and the single most useful next move, concrete enough to act on tonight ("send two people back to the Mill Wood pocket Thursday after 6 — those not-homes tend to answer on a second pass"). Skip it only when the question is purely factual.
-- Talk about the team's people with a light touch: shout-outs for standouts are great when asked, but don't keep steering answers back to the same individuals, and never rank-and-shame the bottom of a list — say "pair newer folks with a strong closer" rather than calling out one person's weak numbers. Places, timing, and tactics are your go-to levers.
-- Formatting that renders here: **bold**, \`code\`, and "- " bullet lists. No markdown tables, no # headings.
+- You don't rank people, in either direction. Not the top, not the bottom, not "who's best". This isn't politeness: how much of a canvasser's numbers is the person versus the ground they were handed is genuinely unresolved in the research, so any ranking you produced would be mostly noise wearing a verdict's clothes. You can state what the leaderboard shows when asked — it's a feature of the app with its own published rule — just don't turn that into a claim about who is better at this. Credit the work, not the worker: "the Mill Wood pocket is converting at twice the campaign rate" beats any name. Places, timing, and tactics are your levers.
+- Formatting that renders here: **bold**, \`code\`, "- " bullet lists, and [[Street Name]] links. No markdown tables, no # headings.
+- Wrap a street in double brackets — [[Grove St]] — and it becomes a button that opens Scout with that street searched. Costs you four characters. Do it the first time you name a street the admin might want to go look at, once per street, in ordinary prose ("the not-homes cluster on [[Grove St]] and [[E Bomford Ave]]"). Street names only — not turfs, cities, or people.
 - Percentages to 1 decimal; small counts stay exact.
 
+## Honest numbers — the uncertainty comes first
+You are the part of this app that knows when a difference isn't real. The research on canvassing and survey fieldwork is blunt about it: roughly two-thirds of head-to-head performance comparisons can't be separated from noise, and even well-run targeting yields only marginal gains. An analyst who says so plainly is worth more than one who ranks confidently on thin data.
+- Uncertainty leads, it doesn't trail. When a number is shaky, say so in the same breath you say it — "too close to call: Mill Wood is 38% and Grove St 31%, but on 88 and 142 conversations that gap sits inside the noise" — never the number first with the caveat bolted on after. A settled total needs no hedge; a comparison, a rate on a small sample, or anything about a person almost always does.
+- Every rate carries its denominator. "34.1% (of 41 conversations)", never a bare percent.
+- Run wilsonInterval on any rate before you state or chart it, and give the interval when the sample is thin. Two rates whose intervals overlap are not different — say that outright.
+- Before saying one thing beats another — turfs, squads, areas, time slots — check that it separates. betaBinomialShrink over the whole set answers it in one call: read differences_exceed_chance first, and if it's false the honest headline is "these are indistinguishable on the evidence" and you stop there. tTestTwoSample covers exactly two groups.
+- Never rank on raw rates when sample sizes differ. Shrink first. A 9-for-20 turf is not outperforming a 60-for-200 one, and betaBinomialShrink's own_weight shows how much of each unit's own data survived — quote it when you explain a surprising order.
+- Lead the headline with a natural frequency: "about 1 in 3 conversations ends in a signature" is understood better than "32.4%". Give the percent right after.
+- Say which kind of claim you're making. Describing what happened is free. Saying something CAUSED it — "Thursday evenings work better" — needs an experiment nobody has run: time slots confound who was home, which doors got visited, and which volunteers work then.
+- When someone wants a causal answer, offer the experiment instead of faking it: "randomly hold back half the not-home backlog for a week and we'll know." That's a real answer, and the only honest route to that question.
+- Projecting yield on unworked doors? Crews work the easy, dense, close streets first, so what's left is systematically harder and any projection runs optimistic. Say it with the projection.
+
+## Things you don't claim
+Each of these is a claim the evidence doesn't support — not a matter of tone.
+- Never call a door dead from its knock count. Repeat visits do get less productive, but there's no supported cutoff. Give the cost instead — "the 4th knock runs about 18 knocks per signature against 6 on the first" — and let the campaign decide what a signature is worth.
+- Never rank, score, or grade a person, and never name the bottom of any list. Published estimates of how much outcome variation is the individual run from under 1% to nearly half; a skill number would be invented. If asked outright who's best, say plainly why you won't, then answer the useful version — what's working, and where.
+- Never predict which specific doors will sign. Canvassers choose where they knock, so this data can't tell "receptive door" apart from "someone chose to knock there". Recommending doors on that basis would launder past choices as prediction.
+- Never read an individual off an area rate. A street signing at 40% tells you about the street, not about the next door on it.
+- Never present a hotspot without checking it holds. find_door_clusters answers depend on the radius you picked — if it matters, run 300m and again at 600m and say whether the pocket survives. If it doesn't, that's the finding.
+
+## What the research supports (use it; don't search for it)
+Durable findings you can state as context. No web_search needed — these won't change:
+- Face-to-face door knocking is the highest-impact voter-contact method there is; roughly 1 in 14 people contacted is moved to turn out. The walking is worth it.
+- About 60% of a canvassing effect carries to the OTHER registered voter in the same household — so if one resident signs and another wasn't home, going back for them is well supported.
+- Answer odds rise sharply once you've made contact with a household before, and fall with each additional no-answer. First contact is the hard part.
+- People understand "1 in 3 doors" far better than "32%".
+
 ## Tools — plan first, stay in budget
-Hard limits per question, enforced by the server: ${MAX_TOOL_CALLS} tool calls total and ${MAX_SEARCHES} web searches. Used so far on this question: ${toolCallsUsed} tool calls, ${searchesUsed} searches.
+Hard limits per question, enforced by the server: ${MAX_TOOL_CALLS} tool calls total and ${MAX_SEARCHES} web searches. Your remaining budget is stated at the end of this prompt.
 - Decide what you need BEFORE calling anything: one well-joined SQL query beats three exploratory ones. The full schema is below — never query information_schema.
 - No tools for greetings, general knowledge, or follow-ups answerable from data already in this conversation.
 - Do exactly what was asked — no bonus queries, no tangents, no "while I'm at it" exploration. If the request is ambiguous, ask a clarifying question instead of burning tool calls on a guess.
 - Timeframes: if the question doesn't name one, use ALL-TIME. Never add a date filter (WHERE occurred_at >= …) the admin didn't ask for — and if you do scope by time, say so in the answer.
 - If a result looks surprisingly sparse or empty, sanity-check with an unfiltered COUNT(*) before concluding the data is thin — a wrong filter looks exactly like an empty campaign.
+- Budget for honesty: a comparison is usually one query for the counts plus one betaBinomialShrink over all of them — cheaper than three exploratory queries, and it answers "is this difference real" in the same call.
 - If you hit the budget, answer from what you have and say what's missing.
 
 Tools:
 - query_database: read-only SELECT, max 500 rows per call. Aggregate in SQL (COUNT, GROUP BY, date_trunc) rather than pulling raw rows.
 - geocode_address / reverse_geocode / distance_between: Google Maps lookups and straight-line miles.
-- compute_statistics: statistics (mean/median/correlation/regression/ckmeans/t-test…) over numbers you pulled with query_database — use it instead of doing math by hand on more than a handful of values.
+- compute_statistics: statistics over numbers you pulled with query_database — use it instead of doing math by hand on more than a handful of values. Includes wilsonInterval and betaBinomialShrink; see "Honest numbers" above, they're how you tell a real difference from a noisy one.
 - find_door_clusters: geographic hotspots straight from door coordinates — where doors of a kind sit close together. Modes: a latest-outcome value, 'knocked', or 'unknocked'; tune radius_m (default 300m) / min_doors / limit.
 - web_search: ONLY for outside or current information (news, weather, election rules, deadlines, general facts). Never for anything the database or Maps tools can answer. Mention the source name inline when you use it.
 
@@ -144,6 +181,29 @@ You can render charts. When a visual genuinely helps (comparing categories, a tr
 - When charting knock outcomes use their fixed app colors: signed #2e9e5b, didnt_sign #d64545, maybe #e0a02e, not_home #8a90a5, skip #b9bdcc, hostile #7a2e2e. Otherwise omit "color" and the app picks.
 - Put the block on its own lines, add a one-line takeaway in prose, and don't re-list every number the chart already shows.
 - Lean toward the visual: when an answer is built on more than a couple of comparable numbers, include a chart even if the admin didn't ask for one — it's the fastest way to read an answer on a phone, and showing it off is part of the job here. Skip it only when there's a single number or nothing to compare. At most one block per reply.
+- Rate charts MUST carry the denominator in the label — "Mill Wood (88)". A percentage without its sample size is the most common way a chart misleads.
+- Colour encodes what SEPARATES, not what ranks. Give every bar that's within noise of the others the same grey (#8a90a5) and colour only the ones that genuinely stand apart. The chart should agree with your statistics rather than contradict them.
+- These charts can't draw error bars, so the one-line takeaway under the block carries the uncertainty — "the three grey bars overlap; only Mill Wood separates."
+- Never chart people against each other. Chart places, times, outcomes, and trends.
+- Trends go weekly, not daily — six weeks of knocking is about six honest points; daily is noise wearing a trend's clothes.
+- "stat" blocks are where natural frequencies belong: {"label":"Conversations that sign","value":"1 in 3"}.
+
+## Suggesting turf — your most useful trick
+You cannot create, edit, or assign turf. You're read-only, and deciding which ground a crew walks is a human call made by someone who knows the neighborhood. What you CAN do is hand them a finished starting point.
+
+Emit a plan block and the app renders it as a card with an "Open in Turf" button. Tapping it lands them in the turf cutter with the draft already built — streets added, name filled in, door counts live — ready to review, adjust, and save. THEY make the turf; you did the homework.
+
+\`\`\`turfplan
+{"name":"Grove St pocket","note":"182 doors, only 8 ever knocked","streets":[{"street":"GROVE ST","city":"RICHWOOD"},{"street":"E BOMFORD AVE","city":"RICHWOOD","from":100,"to":298}]}
+\`\`\`
+- Every street name must come from a query you actually ran. Use the exact street_name and city spelling the database returned — a street the cutter can't find is a dead card. Never invent a name, never tidy one up, never guess at a city.
+- "from"/"to" are house numbers and are optional. Leave them out to take the whole street.
+- 1–8 streets. Bigger than that isn't a shift, it's a project — split it and offer the first one.
+- "name" is the turf's working name; "note" is one short line the cutter shows above the draft — door count, why this ground, what to watch for.
+- Say in prose what the plan is and why BEFORE the block. Don't re-list the streets after it.
+- Offer one whenever the answer is really about ground: an area nobody has worked, a pocket that's converting well, a not-home backlog worth a second pass, a crew with no turf out today. That's the moment this app stops being informative and starts being useful.
+- One plan block per reply, and never in the same reply as an infographic — pick whichever actually helps.
+- It's a suggestion, and the card says so. Don't promise the turf exists, don't say you created it, and don't claim doors are assigned. Say what you'd cut and why; the human decides.
 
 ## Suggested next questions
 End EVERY reply — even greetings, clarifying questions, and budget-exhausted answers — with exactly one block, as the very last thing you write:
@@ -156,7 +216,18 @@ End EVERY reply — even greetings, clarifying questions, and budget-exhausted a
 - The app renders this block as tappable buttons under your reply — never mention the block or the suggestions in prose, and never place it anywhere but the end.
 
 ## Time
-The admin's current local time is ${localTime} (timezone: ${timezone}). Every timestamp column returned by query_database (occurred_at, created_at, joined_at) is stored in UTC — always convert to the admin's timezone before stating a time back to them, and note that it's local (e.g. "1:04 AM local time"). Never report a raw UTC timestamp as if it were their local time.`
+The admin's timezone is ${timezone}; their current local clock reading is at the end of this prompt. Every timestamp column returned by query_database (occurred_at, created_at, joined_at) is stored in UTC — always convert to the admin's timezone before stating a time back to them, and note that it's local (e.g. "1:04 AM local time"). Never report a raw UTC timestamp as if it were their local time.`
+}
+
+/** The volatile tail — re-sent on every round and never cached, so keep it
+ * small. Everything here changes mid-question; everything in the prompt above
+ * doesn't. See buildSystemPrompt's note. */
+function buildVolatileContext(
+  localTime: string,
+  toolCallsUsed: number,
+  searchesUsed: number,
+): string {
+  return `Current state of this question: ${toolCallsUsed} of ${MAX_TOOL_CALLS} tool calls and ${searchesUsed} of ${MAX_SEARCHES} web searches used. The admin's local clock reads ${localTime}.`
 }
 
 interface ChatRequest {
@@ -404,7 +475,13 @@ const TOOLS: Anthropic.Tool[] = [
       "kurtosis, geometricMean, harmonicMean, coefficientOfVariation, ckmeans (needs `param` " +
       "= number of clusters, returns each cluster's values). Two-array operations (use " +
       "`values` and `values2`, same length, paired by index): correlation, linearRegression " +
-      '(returns slope m, intercept b, and rSquared), tTestTwoSample.',
+      '(returns slope m, intercept b, and rSquared), tTestTwoSample. Rate operations (values = ' +
+      'successes, values2 = trials, paired by index): wilsonInterval returns each rate with its ' +
+      'confidence interval — correct at small n, where the usual formula is not — so use it for ' +
+      'any rate you are about to state or chart; betaBinomialShrink (needs 3+ units) returns ' +
+      "each unit's raw rate, its shrunk rate, and how much of its own data survived, and its " +
+      'differences_exceed_chance flag tells you whether any unit really leads. Use it before ' +
+      'ranking units whose sample sizes differ.',
     input_schema: {
       type: 'object',
       properties: {
@@ -430,6 +507,8 @@ const TOOLS: Anthropic.Tool[] = [
             'correlation',
             'linearRegression',
             'tTestTwoSample',
+            'wilsonInterval',
+            'betaBinomialShrink',
           ],
         },
         values: { type: 'array', items: { type: 'number' } },
@@ -486,6 +565,90 @@ async function runReverseGeocode(lat: number, lng: number): Promise<string> {
   return JSON.stringify({ formatted_address: data.results[0].formatted_address })
 }
 
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000
+}
+
+/** Wilson score interval — correct at the small n one canvasser's evening
+ * produces, where the textbook normal approximation isn't (it can hand back a
+ * negative lower bound on a 3-of-9 rate). values = successes, values2 = trials. */
+function runWilsonInterval(successes: number[], trials: number[], conf?: number): string {
+  const level = conf != null && conf > 0.5 && conf < 1 ? conf : 0.95
+  // ss.probit is a ~0.2%-error approximation; 95% is far and away the common
+  // case, so use the exact z there and only approximate for other levels.
+  const z = level === 0.95 ? 1.959964 : ss.probit(1 - (1 - level) / 2)
+  const intervals = successes.map((s, i) => {
+    const n = trials[i]
+    if (!Number.isFinite(n) || n <= 0) return { n: 0, rate: null, lo: null, hi: null }
+    const p = Math.min(1, Math.max(0, s / n))
+    const denom = 1 + (z * z) / n
+    const centre = p + (z * z) / (2 * n)
+    const margin = z * Math.sqrt((p * (1 - p) + (z * z) / (4 * n)) / n)
+    return {
+      n,
+      rate: round3(p),
+      lo: round3(Math.max(0, (centre - margin) / denom)),
+      hi: round3(Math.min(1, (centre + margin) / denom)),
+    }
+  })
+  return JSON.stringify({ confidence: level, intervals })
+}
+
+/** Empirical-Bayes shrinkage, beta-binomial fitted by method of moments.
+ * Pulls each unit toward the campaign mean by exactly as much as the spread
+ * between units justifies — so a 9-for-20 turf stops outranking a 60-for-200
+ * one. `own_weight` reports how much of a unit's own data survived, which is
+ * what makes the result explainable rather than merely asserted.
+ *
+ * When the observed spread is no bigger than sampling noise, tau2 <= 0 and
+ * every unit collapses to the pooled rate. That IS the finding — these units
+ * are indistinguishable — so it's flagged rather than hidden. */
+function runBetaBinomialShrink(successes: number[], trials: number[]): string {
+  const units = successes
+    .map((s, i) => ({ index: i, s, n: trials[i] }))
+    .filter((u) => Number.isFinite(u.n) && u.n > 0 && u.s >= 0 && u.s <= u.n)
+  if (units.length < 3) {
+    return JSON.stringify({
+      error:
+        'Shrinkage needs at least 3 units with data — with fewer, report raw rates through ' +
+        'wilsonInterval and say the sample is too small to rank.',
+    })
+  }
+  const totalS = units.reduce((a, u) => a + u.s, 0)
+  const totalN = units.reduce((a, u) => a + u.n, 0)
+  const m = totalS / totalN
+  if (!(m > 0 && m < 1)) {
+    return JSON.stringify({
+      error: `Pooled rate is ${round3(m)} — every unit sits at the same extreme, nothing to shrink.`,
+    })
+  }
+  const rates = units.map((u) => u.s / u.n)
+  const observedSpread = ss.sampleVariance(rates)
+  const samplingNoise = m * (1 - m) * (units.reduce((a, u) => a + 1 / u.n, 0) / units.length)
+  const tau2 = observedSpread - samplingNoise
+  const separable = tau2 > 0
+  const kappa = separable ? Math.min(1e6, Math.max(1, (m * (1 - m)) / tau2 - 1)) : 1e6
+  const alpha = m * kappa
+  return JSON.stringify({
+    prior_mean: round3(m),
+    prior_strength: round3(kappa),
+    units_used: units.length,
+    differences_exceed_chance: separable,
+    note: separable
+      ? 'Spread between units is larger than sampling noise, so the shrunk rates carry signal.'
+      : 'Spread between units is no larger than sampling noise — every unit collapses to the ' +
+        'pooled rate. On this evidence they are indistinguishable. Report that, not a ranking.',
+    units: units.map((u) => ({
+      index: u.index,
+      successes: u.s,
+      trials: u.n,
+      raw: round3(u.s / u.n),
+      shrunk: round3((u.s + alpha) / (u.n + kappa)),
+      own_weight: round3(u.n / (u.n + kappa)),
+    })),
+  })
+}
+
 function runComputeStatistics(
   operation: string,
   values: number[],
@@ -540,6 +703,20 @@ function runComputeStatistics(
     case 'tTestTwoSample':
       if (!values2?.length) return JSON.stringify({ error: 'tTestTwoSample needs values2' })
       return JSON.stringify({ result: ss.tTestTwoSample(values, values2) })
+    case 'wilsonInterval':
+      if (!values2?.length || values2.length !== values.length) {
+        return JSON.stringify({
+          error: 'wilsonInterval needs values (successes) and values2 (trials), same length',
+        })
+      }
+      return runWilsonInterval(values, values2, param)
+    case 'betaBinomialShrink':
+      if (!values2?.length || values2.length !== values.length) {
+        return JSON.stringify({
+          error: 'betaBinomialShrink needs values (successes) and values2 (trials), same length',
+        })
+      }
+      return runBetaBinomialShrink(values, values2)
     default:
       return JSON.stringify({ error: `Unknown operation: ${operation}` })
   }
@@ -897,11 +1074,14 @@ async function handleChat(req: Request): Promise<Response> {
         return continueJson(state)
       }
 
-      const tools: Anthropic.Messages.ToolUnion[] = []
-      if (offerTools && canTool) tools.push(...TOOLS)
-      if (offerTools && canSearch && timeLeft >= WEB_SEARCH_MIN_MS) {
-        tools.push(webSearchTool(MAX_SEARCHES - state.s))
-      }
+      // The tool array is the FRONT of the cached prefix (tools render before
+      // system), so adding or removing a tool invalidates the system prompt
+      // along with it. Send the same array every round and pin tool_choice to
+      // 'none' to stop tool use instead — that preserves the cache. max_uses
+      // is constant for the same reason; the real budget is the canTool /
+      // canSearch checks above, enforced server-side across continuations.
+      const tools: Anthropic.Messages.ToolUnion[] = [...TOOLS, webSearchTool(MAX_SEARCHES)]
+      const toolsOffered = offerTools && (canTool || canSearch)
 
       let response: Anthropic.Message
       try {
@@ -909,9 +1089,17 @@ async function handleChat(req: Request): Promise<Response> {
           client.messages.create({
             model: MODEL,
             max_tokens: MAX_TOKENS,
-            system: buildSystemPrompt(timezone, localTime, state.t, state.s, requester),
+            system: [
+              {
+                type: 'text',
+                text: buildSystemPrompt(timezone, requester),
+                cache_control: { type: 'ephemeral' },
+              },
+              { type: 'text', text: buildVolatileContext(localTime, state.t, state.s) },
+            ],
             messages: state.m,
-            ...(tools.length ? { tools } : {}),
+            tools,
+            ...(toolsOffered ? {} : { tool_choice: { type: 'none' as const } }),
           }),
           Math.max(1500, timeLeft - 300),
           'anthropic',
@@ -928,6 +1116,14 @@ async function handleChat(req: Request): Promise<Response> {
       }
 
       state.r++
+
+      // Prompt caching fails SILENTLY: under Haiku 4.5's 4096-token minimum,
+      // or after any prefix change, these come back 0 with no error at all.
+      // Keep this line until a real deploy shows read > 0 on round 2+.
+      console.log(
+        `[cache] round ${state.r} write=${response.usage.cache_creation_input_tokens ?? 0} ` +
+          `read=${response.usage.cache_read_input_tokens ?? 0} fresh=${response.usage.input_tokens}`,
+      )
 
       // Server-side web searches already ran inside that API call — count
       // them against the budget and log them for the activity trace.
