@@ -8,7 +8,7 @@ import UserPicker from '@/components/chat/UserPicker.vue'
 import { fadeUp } from '@/lib/motion'
 import { startOfLocalDayISO } from '@/lib/day'
 import { fetchAllRows, supabase } from '@/lib/supabase'
-import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
+import { attachPoiTapGuard, loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
   readMapPref,
@@ -24,7 +24,6 @@ import type { CanvasDoor, DoorBadge, DoorPaintState } from '@/lib/doorCanvas'
 import { createBadgeFactory } from '@/lib/doorBadges'
 import { attachMapScrollGuard } from '@/lib/mapScroll'
 import type { MapScrollGuard } from '@/lib/mapScroll'
-import { rangeCovers, walkRanges } from '@/lib/doorPath'
 import {
   OUTCOME_HEX,
   OUTCOME_LABELS,
@@ -57,12 +56,19 @@ const chat = useChatStore()
 const squads = useSquadsStore()
 const talk = useTalkStore()
 
-// --- Which squad is "mine" (you can be in several crews in one day) ---
-
-const selectedSquadId = ref<string | null>(null)
-// /squad?squad=<id> (the Squads page's "Open" button) picks that squad when
-// you're in several; an id that isn't yours falls back to your first squad.
-if (typeof route.query.squad === 'string') selectedSquadId.value = route.query.squad
+// --- Which squad is "mine" ---
+//
+// ONE squad per person (2026-07-25, user call): "every person can only be in
+// one squad, but they can leave and make new squads and join squads at will."
+// So there's no picking to do — this page is simply your crew. The old
+// multi-squad switcher and its ?squad= override are gone.
+//
+// ?squad= is still ACCEPTED, because a campaign manager opening a crew from
+// /squads is a real path and a CM may be looking at a squad that isn't
+// theirs. It just no longer arbitrates between several of your own.
+const selectedSquadId = ref<string | null>(
+  typeof route.query.squad === 'string' ? route.query.squad : null,
+)
 const mySquad = computed<SquadListItem | null>(() => {
   const mine = squads.mySquads
   return mine.find((s) => s.id === selectedSquadId.value) ?? mine[0] ?? null
@@ -506,6 +512,7 @@ async function initMap() {
     fullscreenControl: false,
     gestureHandling: 'greedy',
   })
+  attachPoiTapGuard(map)
   doorLayer = new DoorCanvasLayer(map, {
     pinMode: () => pinMode.value,
     paintFor: paintForDoor,
@@ -754,7 +761,6 @@ function paintForDoor(id: string): DoorPaintState | null {
         fill: memberColor(assignee),
         ring: '#ffffff',
         emphasis: true,
-        pulse: id === assignAnchorId.value,
       }
     }
     const owner = ownerOf(door.turf_id)
@@ -1123,8 +1129,6 @@ async function onLiveKnock(knock: KnockLog) {
 
 const assigningMemberId = ref<string | null>(null)
 const assignSelected = ref<ReadonlySet<string>>(new Set())
-/** The last door selected by tap — the start of a two-tap walk sweep. */
-const assignAnchorId = ref<string | null>(null)
 const assignSaving = ref(false)
 const assignError = ref('')
 
@@ -1148,7 +1152,6 @@ function undoAssign() {
   if (!prev) return
   assignUndo.value = stack
   assignSelected.value = prev
-  assignAnchorId.value = null
   sweepFlash.value = ''
 }
 
@@ -1179,7 +1182,6 @@ watch(
     orgStatusByDoor,
     assigningMemberId,
     assignSelected,
-    assignAnchorId,
   ],
   () => doorLayer?.requestRepaint(),
 )
@@ -1215,7 +1217,6 @@ function startAssign(memberId: string) {
     }
   }
   assignSelected.value = pre
-  assignAnchorId.value = null
   assignUndo.value = []
   disarmTools()
   sweepFlash.value = ''
@@ -1229,7 +1230,6 @@ function startAssign(memberId: string) {
 function cancelAssign() {
   assigningMemberId.value = null
   assignSelected.value = new Set()
-  assignAnchorId.value = null
   assignUndo.value = []
   assignError.value = ''
   disarmTools()
@@ -1261,39 +1261,21 @@ function startAssignFromMap() {
   assignPickerOpen.value = true
 }
 
-/** Tap an unselected door: it joins the pile and becomes the walk anchor.
- * Tap ANOTHER unselected door while one is anchored: every door along the
- * walk between them joins too (same street = the range between; different
- * streets = up the first street to the corner, then along the second).
- * Tap a selected door: just that door leaves the pile. */
+/** One tap, one door, in or out. That's the whole gesture.
+ *
+ * The two-tap walk sweep (tap A, tap B, take everything between) is GONE as
+ * of 2026-07-25 (user call, both maps): "the tap one and then sweep the whole
+ * street is no longer a feature." It was invisible — nothing on screen said a
+ * door had become an anchor — so the second tap could rope in a hundred
+ * houses you never asked for. The lasso and the Streets tool do bulk
+ * selection now, visibly, and you refine with the lasso afterward. */
 function toggleAssignDoor(addressId: string) {
   const door = turfDoors.value.get(addressId)
   if (!door || poolParentOf(door) === null) return
   snapshotAssign()
   const next = new Set(assignSelected.value)
-
-  if (next.has(addressId)) {
-    next.delete(addressId)
-    assignAnchorId.value = null
-    assignSelected.value = next
-    return
-  }
-
-  const anchor = assignAnchorId.value ? turfDoors.value.get(assignAnchorId.value) : null
-  if (anchor && next.has(anchor.id) && anchor.id !== addressId) {
-    const ranges = walkRanges(anchor, door, turfDoors.value.values())
-    for (const d of turfDoors.value.values()) {
-      if (next.has(d.id) || poolParentOf(d) === null) continue
-      if (ranges.some((r) => rangeCovers(r, d))) next.add(d.id)
-    }
-    next.add(addressId)
-    assignAnchorId.value = null
-    assignSelected.value = next
-    return
-  }
-
-  next.add(addressId)
-  assignAnchorId.value = addressId
+  if (next.has(addressId)) next.delete(addressId)
+  else next.add(addressId)
   assignSelected.value = next
 }
 
@@ -1475,7 +1457,6 @@ function applySweep(ids: string[], what: string) {
     }
     snapshotAssign()
     assignSelected.value = next
-    assignAnchorId.value = null
     flashSweep(`${what}: removed ${removed} door${removed === 1 ? '' : 's'}.`)
     return
   }
@@ -1502,7 +1483,6 @@ function applySweep(ids: string[], what: string) {
   }
   snapshotAssign()
   assignSelected.value = next
-  assignAnchorId.value = null
   flashSweep(
     skipped
       ? `${what}: added ${added} door${added === 1 ? '' : 's'} · ${skipped} skipped (not yours to divide).`
@@ -1648,7 +1628,6 @@ async function saveAssignment() {
     }
     assigningMemberId.value = null
     assignSelected.value = new Set()
-    assignAnchorId.value = null
     disarmTools()
     sweepFlash.value = ''
     await loadDashboard()
@@ -1994,15 +1973,8 @@ watch(
           <span class="muted">{{ mySquad.members.length }} member{{ mySquad.members.length === 1 ? '' : 's' }} today</span>
         </div>
         <div class="squad-actions">
-          <select
-            v-if="squads.mySquads.length > 1"
-            class="squad-switch"
-            :value="mySquad.id"
-            aria-label="Switch squad"
-            @change="selectedSquadId = ($event.target as HTMLSelectElement).value"
-          >
-            <option v-for="s in squads.mySquads" :key="s.id" :value="s.id">{{ s.name }}</option>
-          </select>
+          <!-- No squad switcher: one crew at a time (2026-07-25). Leave and
+               join another if you're on the wrong one. -->
           <button v-if="mySquad.chat_id" class="btn btn-sm btn-primary" @click="openSquadChat">Chat</button>
           <button class="btn btn-sm btn-ghost" @click="leaveSquad">Leave</button>
         </div>

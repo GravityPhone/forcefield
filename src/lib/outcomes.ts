@@ -17,10 +17,15 @@ import type { KnockOutcome } from '@/types'
  * themselves — picked per hex by contrast, not by theme. */
 export const OUTCOMES: { value: KnockOutcome; label: string; hex: string; ink: string; requiresPerson: boolean }[] = [
   { value: 'signed', label: 'Signed', hex: '#2e9e5b', ink: '#181c26', requiresPerson: true },
-  { value: 'didnt_sign', label: "Didn't Sign", hex: '#d64545', ink: '#ffffff', requiresPerson: true },
+  // The stored value stays `didnt_sign` — only the label changed (2026-07-25,
+  // user call): "Not Interested" is what the canvasser actually heard, and it
+  // reads as "don't come back here" rather than as a scorekeeping loss. No
+  // behavior moved with it; this outcome closes a door for the walk exactly as
+  // it always did (CLOSED_OUTCOMES in streetWalk.ts).
+  { value: 'didnt_sign', label: 'Not Interested', hex: '#d64545', ink: '#ffffff', requiresPerson: true },
   { value: 'maybe', label: 'Maybe', hex: '#e0a02e', ink: '#181c26', requiresPerson: true },
   { value: 'not_home', label: 'Not Home', hex: '#8a90a5', ink: '#181c26', requiresPerson: false },
-  // Skip and Hostile share Didn't Sign's red ON PURPOSE (2026-07-14): to a
+  // Skip and Hostile share Not Interested's red ON PURPOSE (2026-07-14): to a
   // canvasser all three mean the same thing — "this door is a no, don't come
   // back". The labels/positions tell them apart where it matters.
   { value: 'skip', label: 'Skip', hex: '#d64545', ink: '#ffffff', requiresPerson: false },

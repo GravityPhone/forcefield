@@ -14,7 +14,7 @@
  * plain card. Sections are written to read fine either way.
  *
  * REGISTER (2026-07-25, user call): dry manual, not prose. Fragments over
- * sentences, no second person where a label will do, no rationale — the app
+ * sentences, no second person where a label will do, no rationale. The app
  * is meant to be intuitive enough that help is a reference, not a lesson.
  * Bodies render with `white-space: pre-line`, so `\n` is a real line break
  * and a step can be a short list. Anything that is purely a color mapping
@@ -24,7 +24,7 @@
 export interface HelpSwatch {
   /** Main fill. */
   fill: string
-  /** Band inside the fill — the partly-signed green-with-yellow door. */
+  /** Band inside the fill: the partly-signed green-with-yellow door. */
   band?: string
   /** Ring outside the dot — the "knocked today" halo. */
   halo?: string
@@ -34,7 +34,7 @@ export interface HelpSwatch {
 export interface HelpSection {
   heading?: string
   body: string
-  /** Matches `data-help="<key>"` in the view. Optional — see above. */
+  /** Matches `data-help="<key>"` in the view. Optional, see above. */
   target?: string
   /** Color key, rendered as labelled dots under the body. */
   swatches?: HelpSwatch[]
@@ -45,15 +45,15 @@ export interface HelpTopic {
   sections: HelpSection[]
 }
 
-/** The door-pin color model, identical on Scout, Squad and the cutter — so
+/** The door-pin color model, identical on Scout, Squad and the cutter, so
  * it's written once and shown wherever doors are painted. Hexes mirror
  * outcomes.ts (fixed literals, never themed). */
 const DOOR_COLORS: HelpSwatch[] = [
   { fill: '#2f6fed', label: 'Not knocked' },
   { fill: '#2e9e5b', label: 'Everyone signed' },
-  { fill: '#2e9e5b', band: '#e0a02e', label: 'Some signed — names left' },
-  { fill: '#e0a02e', label: 'Maybe — nobody signed yet' },
-  { fill: '#d64545', label: 'Didn’t sign / skip / hostile' },
+  { fill: '#2e9e5b', band: '#e0a02e', label: 'Some signed, names left' },
+  { fill: '#e0a02e', label: 'Maybe, nobody signed yet' },
+  { fill: '#d64545', label: 'Not interested, skip or hostile' },
   { fill: '#8a90a5', label: 'Not home' },
   { fill: '#2f6fed', halo: '#111111', label: 'Dark ring: knocked today' },
 ]
@@ -65,17 +65,22 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Modes',
         target: 'canvass-tabs',
-        body: 'Scout: the map.\nTalk: the door — roster, past visits, outcome buttons.\nTap a pin in Scout to open that door in Talk.',
+        body: 'Scout: the map.\nTalk: the door. Roster, past visits, outcome buttons.\nTap a pin in Scout to open that door in Talk.',
+      },
+      {
+        heading: 'My doors',
+        target: 'talk-mydoors',
+        body: 'Every door your crew holds today, grouped by street.\nType letters to filter streets. Type digits to find a house number.\nTap a house to open it.',
       },
       {
         heading: 'Outcomes',
         target: 'talk-outcomes',
-        body: 'Signed, Didn’t Sign, Maybe — pick a person first.\nNot Home, Skip, Hostile — household only.',
+        body: 'Signed, Not Interested, Maybe: pick a person first.\nNot Home, Skip, Hostile: household only.',
       },
       {
-        heading: 'Next / Back',
+        heading: 'Next and Back',
         target: 'talk-advance',
-        body: 'Next: next door on the walk.\nBack: doors you knocked, newest first.\nNeither needs an outcome logged first.\nMy turf: limits both to your crew’s turf today.',
+        body: 'Next: next door on the walk.\nBack: doors you knocked, newest first.\nNeither needs an outcome logged first.\nMy turf: limits both to your crew’s turf today. On by default.',
       },
       {
         heading: 'Up next',
@@ -85,18 +90,18 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Pin colors',
         target: 'scout-map',
-        body: 'An avatar on a pin: who knocked it today.\nThese colors are fixed — themes never change them.',
+        body: 'An avatar on a pin: who knocked it today.\nThese colors are fixed. Themes never change them.',
         swatches: DOOR_COLORS,
       },
       {
         heading: 'Layers',
         target: 'scout-layers',
-        body: 'Nothing lit: every door, status colors.\nMy doors: only doors assigned to you.\nMy turf: your crew’s ground, splits included.\nAll turf: every turf in its own color.\nCity: village limits.\nTap a lit button to clear it. My doors and My turf also fly there.',
+        body: 'Nothing lit: every door, status colors.\nMy doors: only doors assigned to you.\nMy turf: your crew’s ground, splits included.\nAll turf: every turf in its own color. Tap a door to see which crew has it.\nCity: village limits.\nTap a lit button to clear it. My doors and My turf also fly there.',
       },
       {
         heading: 'Search',
         target: 'scout-search',
-        body: 'Streets first, then people.\nTap a street for its houses in walk order; tap a person for their door.\nTapping the map searches the street you touched.',
+        body: 'Streets first, then people.\nTap a street for its houses in walk order. Tap a person for their door.\nTapping the map searches the street you touched.',
       },
       {
         heading: 'No signal',
@@ -110,7 +115,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'squad-map',
-        body: 'A squad is one day of crew: shared chat, page and turf. Resets at midnight.',
+        body: 'A squad is one day of crew: shared chat, page and turf. Resets at midnight.\nOne squad at a time. Leave and join another whenever.',
       },
       {
         heading: 'The map',
@@ -131,12 +136,12 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'The crew',
         target: 'squad-members',
-        body: 'One tile per member: emoji, color, doors knocked, today’s doors.\nTap a tile for the sheet — assign, profile, show on map, call.',
+        body: 'One tile per member: emoji, color, doors knocked, today’s doors.\nTap a tile for the sheet: assign, profile, show on map, call.',
       },
       {
         heading: 'Assign doors',
         target: 'squad-assign',
-        body: 'Pick a person, then pick doors:\n• tap pins one at a time\n• tap two doors to take the stretch between\n• ◯ Lasso — drag a loop\n• ☝ Streets — tap a door for its whole street\nAdd/Erase sets direction. Undo reverts one sweep. Save.',
+        body: 'Pick a person, then pick doors:\n• tap pins one at a time\n• ◯ Lasso: drag a loop\n• ☝ Streets: tap a door for its whole street\nAdd and Erase set direction. Undo reverts one sweep. Save.',
       },
       {
         heading: 'Claiming',
@@ -152,16 +157,16 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
   },
 
   '/squads': {
-    title: 'Squads',
+    title: 'All squads',
     sections: [
       {
         target: 'squads-card',
-        body: 'Today’s crews. They reset at midnight.\nSquads you’re in sort to the top — Open goes to the full squad page.',
+        body: 'Every crew out today. They reset at midnight.\nYour own sorts to the top. Open goes to the full squad page.',
       },
       {
         heading: 'Starting one',
         target: 'squads-new',
-        body: 'Name the crew; add people now or let them join. Chat is created with it.',
+        body: 'Name the crew. Add people now or let them join. Chat is created with it.',
       },
     ],
   },
@@ -176,7 +181,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Milestones',
         target: 'feed-options',
-        body: 'Personal door counts, squad doors and signatures, whole-team totals.\nDoors count once per household, signatures once per person.\nManagers set the steps here.',
+        body: 'Personal doors and knocks, squad doors, knocks and signatures, whole-team totals.\nDoors count once per household. Signatures count once per person. Knocks count every attempt.\nManagers set the steps here. Zero switches a step off.',
       },
     ],
   },
@@ -194,7 +199,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'board-canvassers',
-        body: 'Standings since midnight. Canvassers and squads rank separately.',
+        body: 'Standings since midnight. Canvassers and squads rank separately.\nYour own row is highlighted. The chip beside each heading gives your place and jumps to it.',
       },
       {
         target: 'board-options',
@@ -236,7 +241,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'profile-identity',
-        body: 'Your intro, shown on your roster entry. Every field is optional.',
+        body: 'Your intro, shown on your roster entry. Every field is optional.\nUnder your role: how long you have been knocking, counted from your first knock.',
       },
       {
         heading: 'Display name',
@@ -278,7 +283,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       },
       {
         target: 'appearance-text',
-        body: 'Text size scales the app. Tabs, map buttons and typing fields stay put. Fonts are system faces.',
+        body: 'Text size scales the app. Tabs, map buttons and typing fields stay put.\nEach font card is drawn in its own face. All of them ship with the device, so nothing downloads.',
       },
     ],
   },
@@ -289,7 +294,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Cutting',
         target: 'turf-create',
-        body: '+ Create new turf, take streets, assign to a squad or one canvasser.\nTurf is durable, squads are not — re-point it at today’s crew each morning ("Not out today" flags stale turf).',
+        body: '+ Create new turf, take streets, assign to a squad or one canvasser.\nWhile a cut is open, the bar at the top of the page names the turf and counts its doors.\nTurf lasts. Squads do not: re-point turf at today’s crew each morning.',
       },
       {
         heading: 'Search, then add',
@@ -299,22 +304,28 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Map tools',
         target: 'turf-tools',
-        body: '◯ Lasso: drag a loop; catches dots inside it or under the line.\n☝ Streets: tap a road to take or drop the whole street.\nAdd/Erase sets direction. Undo steps back one gesture.',
+        body: '◯ Lasso: drag a loop. Catches dots inside it or under the line.\n☝ Streets: tap a road to take or drop the whole street.\nAdd and Erase set direction, on the row underneath.\nTake: sweeps pull doors out of whoever holds them, with no prompt. The old turf gives them up when you save.\nUndo steps back one gesture.',
       },
       {
         heading: 'Streets table',
         target: 'turf-streets',
-        body: 'One row per street: ranges, door count, ✕ to drop.\nTap a row to edit from/to and both/even/odd, and to trim single houses on the map.',
+        body: 'One row per street: ranges, door count, ✕ to drop.\nTap a row to edit from and to, set both, even or odd, and trim single houses on the map.',
       },
       {
         heading: 'Reading the map',
         target: 'turf-map',
-        body: 'Fill: knock status. Ring: owning turf.\nCrossed-out symbol: a door another turf already holds — it stays out of your save.\nTap a dot for its residents (✓ = signed) and recent knocks.',
+        body: 'Every door shows from the moment the page opens, colored by knock status.\nThe Turf layer adds ownership on top: a colored ring per door, and a rough outline around each turf.\nWhile cutting, doors another turf holds cross out in that turf’s color.\nTap a dot for its residents and recent knocks.',
+        swatches: DOOR_COLORS,
       },
       {
-        heading: 'Sub-turfs',
+        heading: 'Dispatch',
+        target: 'turf-dispatch',
+        body: 'Every turf out today, with the crew on it. Change the crew from the row.\nTap a name to zoom the map to it.',
+      },
+      {
+        heading: 'One turf at a time',
         target: 'turf-list',
-        body: 'Squad leaders split their own turf into member shares — easiest from the Squad page. Re-dispatching a turf dissolves those splits.',
+        body: 'The picker lists whole turfs. Per-member shares are cut on the Squad page.\nTo see one person’s doors, open them from the roster and tap View their doors.\nCombine moves this turf’s doors into another and deletes this one.',
       },
     ],
   },
@@ -324,7 +335,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'admin-cards',
-        body: 'Org setup only: roles, campaigns and teams, voter import.\nDay-to-day controls live on the screens they affect.',
+        body: 'Admin only. Campaigns, the teams under them, and voter import.\nCampaign managers run one campaign and open on Analytics instead.',
       },
     ],
   },
@@ -334,7 +345,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'roles-filters',
-        body: 'Admin: the org. Campaign Manager: day-to-day. Squad Leader and Canvasser: doors.\nNew sign-ups start as Canvasser.',
+        body: 'Admin: the whole server. Campaign Manager: one campaign, day to day. Squad Leader and Canvasser: doors.\nNew sign-ups start as Canvasser.',
       },
       {
         target: 'roles-list',
@@ -345,7 +356,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
   },
 
   '/admin/campaigns': {
-    title: 'Campaigns & teams',
+    title: 'Campaigns and teams',
     sections: [
       { target: 'campaigns-list', body: 'Each team works exactly one campaign.' },
       { target: 'campaigns-teams', body: 'People land on a team from the Roles page.' },
@@ -361,7 +372,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       },
       {
         target: 'settings-sources',
-        body: 'CSV import and VAN sync aren’t built. Addresses come from the imported county subset.',
+        body: 'CSV import and VAN sync are not built. Addresses come from the imported county subset.',
       },
     ],
   },
@@ -371,7 +382,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'aichat-input',
-        body: 'Ask in plain English. Read-only database access, enforced at the database.',
+        body: 'Ask in plain English. Read-only database access, enforced at the database.\nStreet names in an answer are links. They open the turf cutter on that street.',
       },
       { target: 'aichat-suggestions', body: 'Three follow-ups after each answer. Tap to send.' },
     ],
@@ -385,9 +396,9 @@ export function helpFor(path: string): HelpTopic | null {
 /**
  * Per-TAB help for /admin/analytics. The Analytics view passes the active
  * tab's topic into AppShell (helpTopic prop), so the header "?" always
- * teaches the tab on screen. This is the ONLY place analytics gets explained
- * — chart subtitles stay at 2–3 word hints, never sentences. Same dry
- * register as above: definitions and interactions, no coaching.
+ * teaches the tab on screen. This is the ONLY place analytics gets explained:
+ * chart subtitles stay at two or three word hints, never sentences. Same dry
+ * register as above, definitions and interactions, no coaching.
  */
 export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
   overview: {
@@ -410,7 +421,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Interactions',
         target: 'analytics-scope',
-        body: 'Day chips re-cut the tab.\nTap a legend name to hide that series; the chart re-scales.\nTable: the exact numbers.',
+        body: 'Day chips re-cut the tab.\nTap a legend name to hide that series. The chart re-scales.\nTable: the exact numbers.',
       },
     ],
   },
@@ -423,9 +434,9 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
         body: 'Tap a chip or a bar to focus one area. Turfs and canvassers inside link to their own tabs.',
       },
       {
-        heading: 'Whiskers & marker',
+        heading: 'Whiskers and marker',
         target: 'areas-rate',
-        body: 'Whisker: 95% confidence range — long whisker, small sample.\nDashed line: campaign average.\nAreas below the knock floor are off the charts, on the table.',
+        body: 'Whisker: 95% confidence range. Long whisker means a small sample.\nDashed line: campaign average.\nAreas below the knock floor are off the charts, on the table.',
       },
       {
         heading: 'The two rates',
@@ -458,7 +469,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'squads-table',
-        body: 'One row per squad name, across every day it ran. "No squad" = solo knocking.\nTap a row for its run, turf and members.',
+        body: 'One row per squad name, across every day it ran. "No squad" means solo knocking.\nTap a row for its run, turf and members.',
       },
       {
         target: 'squads-chart',
@@ -472,7 +483,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'odds-attempts',
-        body: 'Attempt N: the door’s Nth visit (knocks within ten minutes count as one).\nAnswer odds usually rise with attempts. Dashed line: overall average.',
+        body: 'Attempt N: the door’s Nth visit. Knocks within ten minutes count as one.\nAnswer odds usually rise with attempts. Dashed line: overall average.',
       },
       {
         target: 'odds-heatmap',
@@ -480,7 +491,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       },
       {
         target: 'odds-funnel',
-        body: 'Unique doors per stage: knocked → answered → conversation → signed. Each percentage is of the stage before it.',
+        body: 'Unique doors per stage: knocked, answered, conversation, signed. Each percentage is of the stage before it.',
       },
     ],
   },
@@ -490,7 +501,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'canvassers-scatter',
-        body: 'One dot per canvasser: right = more knocks, up = better close rate.\nFaint line: team trend. Floor: 20+ conversations. The table has everyone.',
+        body: 'One dot per canvasser. Right: more knocks. Up: better close rate.\nFaint line: team trend. Floor: 20 or more conversations. The table has everyone.',
       },
       {
         target: 'canvassers-table',

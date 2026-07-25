@@ -41,11 +41,22 @@ function setPrefs(patch: Partial<DisplayPrefs>) {
   void theme.setPrefs(patch)
 }
 
+// Order = sans, then serif, then the two novelty faces. Matches FONT_STACKS.
 const FONT_CHOICES: { id: FontId; label: string }[] = [
   { id: 'system', label: 'System' },
   { id: 'rounded', label: 'Rounded' },
-  { id: 'mono', label: 'Typewriter' },
+  { id: 'grotesque', label: 'Grotesque' },
+  { id: 'geometric', label: 'Geometric' },
+  { id: 'condensed', label: 'Condensed' },
+  { id: 'legible', label: 'Legible' },
+  { id: 'trebuchet', label: 'Trebuchet' },
   { id: 'serif', label: 'Serif' },
+  { id: 'book', label: 'Book' },
+  { id: 'garamond', label: 'Garamond' },
+  { id: 'slab', label: 'Slab' },
+  { id: 'mono', label: 'Typewriter' },
+  { id: 'marker', label: 'Marker' },
+  { id: 'poster', label: 'Poster' },
 ]
 
 const CORNER_CHOICES: { id: DisplayPrefs['corners']; label: string }[] = [
@@ -114,8 +125,8 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
       </div>
     </section>
 
-    <!-- ============ Background flair ============ -->
-    <h2 class="section-heading">Background flair</h2>
+    <!-- ============ Background ============ -->
+    <h2 class="section-heading">Background</h2>
     <div class="pattern-grid" data-help="appearance-patterns">
       <button
         v-for="p in PATTERNS"
@@ -174,27 +185,29 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
       </div>
     </div>
 
-    <!-- A dropdown, not a row of chips (2026-07-24, user call): four faces
-         already crowd a phone row, the list is the kind of thing that grows,
-         and the closed control gets to show the chosen face itself. -->
+    <!-- A GRID of specimens, not a dropdown (2026-07-25, user call: "I want
+         the font picker to actually display what the fonts look like"). A
+         native <select> only styles its options per-face on some browsers,
+         and on a phone it hands rendering to the OS picker entirely — so the
+         one thing you need to see was the one thing it wouldn't show. Each
+         card renders its own name AND a house number in its own face, since
+         addresses are what this app mostly sets. -->
     <div class="pref-block">
-      <label class="pref-title" for="font-pick">Font</label>
-      <select
-        id="font-pick"
-        class="font-pick"
-        :value="theme.prefs.font"
-        :style="{ fontFamily: FONT_STACKS[theme.prefs.font] }"
-        @change="setPrefs({ font: ($event.target as HTMLSelectElement).value as FontId })"
-      >
-        <option
+      <span class="pref-title">Font</span>
+      <div class="font-grid">
+        <button
           v-for="f in FONT_CHOICES"
           :key="f.id"
-          :value="f.id"
+          class="font-card"
+          :class="{ active: theme.prefs.font === f.id }"
           :style="{ fontFamily: FONT_STACKS[f.id] }"
+          @click="setPrefs({ font: f.id })"
         >
-          {{ f.label }}
-        </option>
-      </select>
+          <span class="font-name">{{ f.label }}</span>
+          <span class="font-sample">123 Walnut St</span>
+          <span v-if="theme.prefs.font === f.id" class="badge font-badge">On</span>
+        </button>
+      </div>
     </div>
 
     <button
@@ -218,8 +231,8 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
       <span class="switch" aria-hidden="true"></span>
     </button>
 
-    <!-- ============ Layout & motion ============ -->
-    <h2 class="section-heading">Layout &amp; motion</h2>
+    <!-- ============ Layout ============ -->
+    <h2 class="section-heading">Layout</h2>
 
     <div class="pref-block">
       <span class="pref-title">Corners</span>
@@ -235,26 +248,6 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
         </button>
       </div>
     </div>
-
-    <button
-      class="switch-row"
-      role="switch"
-      :aria-checked="theme.prefs.compact"
-      @click="setPrefs({ compact: !theme.prefs.compact })"
-    >
-      <span class="switch-title">Compact spacing</span>
-      <span class="switch" aria-hidden="true"></span>
-    </button>
-
-    <button
-      class="switch-row"
-      role="switch"
-      :aria-checked="theme.prefs.reduceMotion"
-      @click="setPrefs({ reduceMotion: !theme.prefs.reduceMotion })"
-    >
-      <span class="switch-title">Reduce motion</span>
-      <span class="switch" aria-hidden="true"></span>
-    </button>
 
     <!-- ============ Emoji & color moved ============ -->
     <router-link class="moved-note" to="/profile">
@@ -455,21 +448,59 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
 }
 
 /* The font dropdown wears the app's control shape and the chosen face. */
-.font-pick {
-  width: 100%;
-  min-height: 48px;
-  padding: 0.45rem 0.8rem;
+/* Font specimens. Cards deliberately do NOT set font-family themselves —
+ * the inline style on each button does, so everything inside inherits the
+ * face being previewed. */
+.font-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.6rem;
+}
+
+.font-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  min-height: 68px;
+  padding: 0.55rem 0.7rem;
   border: 2px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
   color: var(--text);
-  font-weight: 700;
   cursor: pointer;
+  text-align: left;
+  overflow: hidden;
 }
 
-.font-pick:focus-visible {
+.font-card.active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.font-card:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.font-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+/* A house number, because that's what this app mostly renders. */
+.font-sample {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.font-badge {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
 }
 
 .seg-btn {

@@ -69,18 +69,25 @@ const barItems = computed<NavItem[]>(() => {
   // Admins run the org, not a campaign — no Bulletin/Leaders/Squads/Feed
   // for them (the /activity route itself is open to any logged-in role).
   if (auth.profile.role === 'admin') {
+    // The dashboard is the admin's own screen since 2026-07-25 — campaigns
+    // and the teams under them — so it leads their bar.
     return [
+      { to: '/admin', label: 'Dashboard', icon: 'dashboard' },
       { to: '/admin/roles', label: 'Roles', icon: 'shield' },
-      { to: '/admin/campaigns', label: 'Campaigns', icon: 'dashboard' },
+      { to: '/admin/campaigns', label: 'Campaigns', icon: 'flag' },
     ]
   }
   if (auth.profile.role === 'campaign_manager') {
     // Turf is a first-class tab: cutting and dispatching happen daily, not
-    // from a dashboard detour.
+    // from a dashboard detour. The Dashboard tab went away 2026-07-25 with
+    // the route itself — Analytics took its slot and its home-screen job.
     return [
-      { to: '/admin', label: 'Dashboard', icon: 'dashboard' },
+      { to: '/admin/analytics', label: 'Analytics', icon: 'chart' },
       { to: '/canvass', label: 'Canvass', icon: 'pin' },
-      { to: '/squads', label: 'Squads', icon: 'squads' },
+      // Your OWN crew, same as everybody else's Squad tab (2026-07-25, user
+      // call): one squad per person, so the tab opens it rather than a
+      // chooser. The all-crews roster moved to More as "All squads".
+      { to: '/squad', label: 'Squad', icon: 'squads' },
       { to: '/turf', label: 'Turf', icon: 'map' },
       { to: '/activity', label: 'Feed', icon: 'pulse' },
       { to: '/leaderboard', label: 'Leaders', icon: 'trophy' },
@@ -120,8 +127,10 @@ const moreItems = computed<NavItem[]>(() => {
   }
   if (auth.profile.role === 'campaign_manager') {
     return [
-      { to: '/admin/analytics', label: 'Analytics', icon: 'chart' },
+      // Analytics is the bottom bar's first tab now, not a More item.
       { to: '/admin/roles', label: 'Roles', icon: 'shield' },
+      // Every crew out today — the Squad tab is the manager's own crew now.
+      { to: '/squads', label: 'All squads', icon: 'squads' },
       roster,
       myKnocks,
       { to: '/admin/chat', label: 'AI Chat', icon: 'sparkle' },
@@ -309,13 +318,13 @@ onUnmounted(() => {
     <div v-if="auth.profile" class="admin-nav-wrap">
       <nav ref="navEl" class="admin-nav" @scroll="updateNavScrollHints">
         <template v-if="auth.profile.role === 'admin'">
+          <router-link to="/admin">Dashboard</router-link>
           <router-link to="/admin/roles">Roles</router-link>
           <router-link to="/admin/campaigns">Campaigns</router-link>
           <router-link to="/admin/analytics">Analytics</router-link>
           <router-link to="/roster">Roster</router-link>
         </template>
         <template v-else-if="auth.profile.role === 'campaign_manager'">
-          <router-link to="/admin">Dashboard</router-link>
           <!-- Managers go out canvassing themselves, not just run the org. -->
           <router-link to="/canvass">Canvass</router-link>
           <router-link to="/admin/analytics">Analytics</router-link>
@@ -329,8 +338,8 @@ onUnmounted(() => {
              Managers assign rosters across all squads (/squads); everyone
              else lives on their own squad's page (/squad). -->
         <template v-if="auth.profile.role !== 'admin'">
-          <router-link v-if="auth.profile.role === 'campaign_manager'" to="/squads">Squads</router-link>
-          <router-link v-else to="/squad">Squad</router-link>
+          <router-link to="/squad">Squad</router-link>
+          <router-link v-if="auth.profile.role === 'campaign_manager'" to="/squads">All squads</router-link>
           <router-link to="/roster">Roster</router-link>
           <router-link to="/history">My knocks</router-link>
           <router-link to="/bulletin">Bulletin</router-link>

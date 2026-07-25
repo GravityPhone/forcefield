@@ -98,9 +98,13 @@ export const useTalkStore = defineStore('talk', {
     walkDirection: (localStorage.getItem(WALK_DIRECTION_KEY) as WalkDirection) || 'ascending',
     walkParity: (localStorage.getItem(WALK_PARITY_KEY) as WalkParity) || 'both',
     knockPartlySigned: localStorage.getItem(KNOCK_PARTLY_SIGNED_KEY) !== 'false',
-    // Off by default: with it on, someone who hasn't been handed turf yet
-    // would tap Next and go nowhere, with no clue why.
-    myDoorsOnly: localStorage.getItem(MY_DOORS_ONLY_KEY) === 'true',
+    // ON by default since 2026-07-25 (user call): staying on your own doors
+    // is the normal way to walk, and wandering off them is the exception you
+    // reach for. Safe as a default because walkOptions() only actually
+    // filters when myTurfIds is non-empty — somebody with no turf still gets
+    // the whole street, rather than a Next button that goes nowhere. Only an
+    // explicit 'false' turns it off.
+    myDoorsOnly: localStorage.getItem(MY_DOORS_ONLY_KEY) !== 'false',
     myTurfIds: new Set(),
     myTurfLoaded: false,
     upcoming: null,

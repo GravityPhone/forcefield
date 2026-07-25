@@ -107,14 +107,19 @@ function segmentsFor(text: string): RenderSegment[] {
 
 /** [[Grove St]] in a reply renders as a .street-link button inside v-html, so
  * the click is delegated from the wrapper rather than bound per element.
- * Lands on Scout with the search prefilled — the same place the Talk→Scout
- * handoff goes, just reached from a sentence instead of a door. */
+ *
+ * Lands on the TURF CUTTER since 2026-07-25 (user call), not Scout. The
+ * question behind "tell me about Grove St" is a manager's question — how is
+ * this street doing and who has it — and the cutter is the only screen that
+ * answers the second half: it paints every door on its knock status and names
+ * the owning turf when you tap one. Scout is the canvasser's walking view and
+ * knows nothing about who a street belongs to. */
 function openStreetFromClick(event: MouseEvent) {
   const el = (event.target as HTMLElement | null)?.closest<HTMLElement>('.street-link')
   const street = el?.dataset.street?.trim()
   if (!street) return
   event.preventDefault()
-  void router.push({ path: '/canvass', query: { street } })
+  void router.push({ path: '/turf', query: { street } })
 }
 
 /** Rewind: pull this message back into the input and drop it plus everything

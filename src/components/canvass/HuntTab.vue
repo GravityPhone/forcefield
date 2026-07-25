@@ -3,7 +3,7 @@ import { computed, nextTick, onActivated, onMounted, onUnmounted, ref, watch } f
 import { useRoute, useRouter } from 'vue-router'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { Geolocation } from '@capacitor/geolocation'
-import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
+import { attachPoiTapGuard, loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
   CityLimitsLayer,
@@ -38,7 +38,7 @@ import {
   knockButtonHex,
 } from '@/lib/outcomes'
 import { inkOn, memberColor } from '@/lib/memberColors'
-import { houseNumber, streetNameOf } from '@/lib/streetWalk'
+import { houseNumber, streetNameOf, titleCase } from '@/lib/streetWalk'
 import OutcomeIndicatorGrid from './OutcomeIndicatorGrid.vue'
 import { fadeUp } from '@/lib/motion'
 import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockLog, KnockOutcome, Person } from '@/types'
@@ -256,6 +256,28 @@ async function fetchTurfs() {
 /** Every turf's color — "All turf" paints every crew's doors in their own
  * colors. No extra fetch: fetchTurfs already pulls every row. */
 const allTurfColorById = computed(() => new Map(allTurfs.value.map((t) => [t.id, t.color])))
+
+const turfById = computed(() => new Map(allTurfs.value.map((t) => [t.id, t])))
+
+/** Which turf holds the located door, and which crew has it — shown on the
+ * located card while the All-turf layer is on (2026-07-25, user call: "if
+ * you have all turf toggled, no matter what your role is, you should be able
+ * to see what squad has that turf by clicking it").
+ *
+ * Gated on the layer because that's the mode where whose-is-whose is the
+ * question you're asking; the rest of the time the card stays about the
+ * door. A sub-turf reports its PARENT's crew — day squads are dispatched to
+ * top-level turf, and a per-member slice inherits it. */
+const locatedTurfLabel = computed<string | null>(() => {
+  if (turfShade.value !== 'all') return null
+  const id = locatedAddress.value?.id
+  const turfId = id ? turfByAddress.value.get(id) : null
+  const t = turfId ? turfById.value.get(turfId) : null
+  if (!t) return null
+  const top = t.parent_turf_id ? (turfById.value.get(t.parent_turf_id) ?? t) : t
+  const crew = top.squad?.name
+  return crew ? `${t.name} · ${crew}` : `${t.name} · no crew today`
+})
 
 /** Turf assigned to ME personally, as opposed to my crew's shared ground:
  * the share a squad leader cut for me (or I claimed for myself) on the squad
@@ -534,11 +556,6 @@ function registerDoor(a: AddressWithRoster) {
 // over ~22k doors, which is small enough to scan linearly on every keystroke
 // — hence no debounce on the street half of the search.
 
-/** "WALNUT ST" → "Walnut St", for anything a person reads. */
-function titleCase(s: string): string {
-  return s.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase())
-}
-
 function streetKey(name: string, city: string | null | undefined): string {
   return `${name}|${city ?? ''}`
 }
@@ -709,6 +726,7 @@ async function initialize() {
     // one-finger panning is what canvassers actually want here.
     gestureHandling: 'greedy',
   })
+  attachPoiTapGuard(map)
   map.addListener('click', (e: google.maps.MapMouseEvent) => onMapClick(e))
   map.addListener('dragstart', () => {
     userMovedMap = true
@@ -1197,10 +1215,25 @@ function wasKnockedToday(addressId: string | null | undefined): boolean {
   return !!addressId && knockedToday.value.has(addressId)
 }
 
-const locatedStatusClass = computed(() => {
-  const s = summaryFor(locatedAddress.value?.id)
-  if (!s || s.total_knocks === 0) return 'card-not-knocked'
-  return s.reached ? 'card-reached' : 'card-not-reached'
+/** The located card's left stripe now says exactly what the door's PIN says
+ * (2026-07-25 bug fix). It used to run off `household_knock_summary.reached`
+ * — "any outcome besides not_home" — which is a different axis entirely from
+ * the map's color model: a Not Home door is simply not-reached, so it drew
+ * the amber "not reached" stripe while its pin sat there gray. Two things on
+ * one screen disagreeing about one door.
+ *
+ * Same source as paintForDoor, same rules, including the partly-signed
+ * green-with-a-yellow-band. */
+const locatedStripe = computed<{ color: string; band: string | null }>(() => {
+  const id = locatedAddress.value?.id
+  if (!id) return { color: PIN_DEFAULT_HEX, band: null }
+  const row = statusByHousehold.value.get(id)
+  const partly = doorPartlySigned(row?.outcome, row?.signed_count, row?.person_count)
+  const outcome = doorOutcomeFor(id)
+  return {
+    color: partly ? OUTCOME_HEX.signed : outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX,
+    band: partly ? OUTCOME_HEX.maybe : null,
+  }
 })
 
 // --- Locate: pan/zoom the map, highlight the pin, fill in every house on
@@ -1423,6 +1456,31 @@ function onGripPointerDown(event: PointerEvent) {
  * its row, but on a 100-house street that row was somewhere off in the scroll.
  * Scrolls the LIST only — never the page, which would yank you off the map you
  * were just reading. */
+/** Tap the row that's ALREADY located and the map comes up (2026-07-25, user
+ * call). One tap keeps doing what it did — highlight the row, move the map,
+ * leave the page where you're reading. The second tap is the one that says
+ * "right, show me", and it lands the map at the top of the screen with the
+ * located card and its knock button directly under it. */
+function scrollMapIntoView() {
+  mapWrapEl.value?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+}
+
+function onDoorRowTap(a: AddressWithRoster) {
+  if (a.id === locatedAddressId.value) {
+    scrollMapIntoView()
+    return
+  }
+  void locateAddress(a, { openStreet: false })
+}
+
+function onPersonRowTap(p: PersonHit) {
+  if (p.household_id && p.household_id === locatedAddressId.value) {
+    scrollMapIntoView()
+    return
+  }
+  openPerson(p)
+}
+
 function scrollActiveIntoView() {
   const el = resultsListEl.value
   if (!el) return
@@ -1517,6 +1575,16 @@ onMounted(() => {
 // claimed. That was the whole "we need to refresh the map on the Canvass
 // page" report (2026-07-25). onActivated is the hook that actually fires.
 onActivated(() => {
+  // A ?street= deep link has to be handled HERE too, not just in onMounted.
+  // Keep-alive means the second and every later arrival skips onMounted
+  // entirely, so the query sat there unconsumed and the search box stayed
+  // empty — that was the "it didn't actually fill in the street name" report
+  // (2026-07-25). Runs before the refresh so the search isn't racing a
+  // county-sized refetch.
+  if (typeof route.query.street === 'string' && route.query.street.trim()) {
+    talk.activeTab = 'hunt'
+    if (initStarted) syncFromQuery()
+  }
   // Nothing to refresh if the map was never opened — a canvasser who only
   // ever uses Talk shouldn't pay for two county-sized reads on every return.
   if (!initStarted) return
@@ -1550,7 +1618,15 @@ onUnmounted(() => {
   <div class="hunt">
     <!-- Whatever was last clicked — a pin on the map or a result below —
          always surfaces here, whether or not it matches the current search. -->
-    <div v-if="locatedAddress" v-motion="fadeUp()" class="card located-card" :class="locatedStatusClass">
+    <div
+      v-if="locatedAddress"
+      v-motion="fadeUp()"
+      class="card located-card"
+      :style="{
+        borderLeftColor: locatedStripe.color,
+        boxShadow: locatedStripe.band ? `inset 3px 0 0 0 ${locatedStripe.band}` : undefined,
+      }"
+    >
       <span class="result-left">
         <span class="result-name">
           {{ locatedAddress.street }}{{ locatedAddress.unit ? ' ' + locatedAddress.unit : '' }}
@@ -1576,6 +1652,8 @@ onUnmounted(() => {
           {{ knockerName(todayKnocker(locatedAddress.id)!) }} knocked here today
         </button>
         <span v-else-if="wasKnockedToday(locatedAddress.id)" class="today-badge">Knocked today</span>
+        <!-- Whose ground this is, while the All-turf layer is on. -->
+        <span v-if="locatedTurfLabel" class="turf-tag">{{ locatedTurfLabel }}</span>
       </span>
       <OutcomeIndicatorGrid
         :summary="summaryFor(locatedAddress.id)"
@@ -1772,7 +1850,7 @@ onUnmounted(() => {
             :key="'h-' + a.id"
             class="result-row"
             :class="{ 'result-active': a.id === locatedAddressId }"
-            @click="locateAddress(a, { openStreet: false })"
+            @click="onDoorRowTap(a)"
           >
             <span class="result-left">
               <span class="result-name">{{ a.street }}{{ a.unit ? ' ' + a.unit : '' }}</span>
@@ -1823,7 +1901,7 @@ onUnmounted(() => {
                 :key="'p-' + p.id"
                 class="result-row"
                 :class="{ 'result-active': p.household_id === locatedAddressId }"
-                @click="openPerson(p)"
+                @click="onPersonRowTap(p)"
               >
                 <span class="result-left">
                   <span class="result-name">{{ p.name }}</span>
@@ -2088,18 +2166,23 @@ onUnmounted(() => {
   background: color-mix(in srgb, var(--located-accent) 6%, var(--surface));
 }
 
-/* Left stripe still carries knock status (muted/green/amber) — a separate
- * signal from the violet "this is focused" framing above. */
-.located-card.card-not-knocked {
-  border-left-color: var(--text-muted);
-}
+/* Left stripe carries knock status, painted inline from locatedStripe with
+ * the SAME hexes as the map pin (outcomes.ts literals, never themed). The old
+ * reached/not-reached/not-knocked classes are gone — they described a
+ * different question than the pin did. The violet frame above is separate: it
+ * means "this is the door you're looking at". */
 
-.located-card.card-reached {
-  border-left-color: var(--success);
-}
-
-.located-card.card-not-reached {
-  border-left-color: var(--warning);
+.turf-tag {
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .located-card .result-name {

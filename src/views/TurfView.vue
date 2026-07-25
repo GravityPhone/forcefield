@@ -50,10 +50,17 @@ import { Geolocation } from '@capacitor/geolocation'
 import AppShell from '@/components/AppShell.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import type { SelectOption } from '@/components/ui/AppSelect.vue'
-import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
+import { attachPoiTapGuard, loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
-import { CityLimitsLayer, readMapPref, readPinMode, writeMapPref, writePinMode } from '@/lib/mapLayers'
-import type { PinMode } from '@/lib/mapLayers'
+import {
+  CityLimitsLayer,
+  TurfOutlineLayer,
+  readMapPref,
+  readPinMode,
+  writeMapPref,
+  writePinMode,
+} from '@/lib/mapLayers'
+import type { PinMode, TurfOutline } from '@/lib/mapLayers'
 import {
   DoorCanvasLayer,
   NUMBERS_MIN_ZOOM,
@@ -82,7 +89,7 @@ import {
   doorStatusOutcome,
 } from '@/lib/outcomes'
 import { fetchAllRows, supabase } from '@/lib/supabase'
-import { houseNumber, streetNameOf } from '@/lib/streetWalk'
+import { houseNumber, streetNameOf, titleCase } from '@/lib/streetWalk'
 import { decodeTurfPlan } from '@/lib/turfPlan'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
@@ -297,6 +304,7 @@ const assignChoice = ref('none')
 
 let map: google.maps.Map | null = null
 let cityLayer: CityLimitsLayer | null = null
+let outlineLayer: TurfOutlineLayer | null = null
 let doorLayer: DoorCanvasLayer | null = null
 let initStarted = false
 
@@ -534,6 +542,31 @@ const showCity = ref(readMapPref('map-show-city', false))
 function toggleTakenDoors() {
   showTakenDoors.value = !showTakenDoors.value
   writeMapPref('cutter-turf-layer', showTakenDoors.value)
+  outlineLayer?.setVisible(showTakenDoors.value)
+}
+
+/** Rough footprint per top-level turf out today, stroked in that turf's
+ * identity color. Sub-turfs are folded into their parent: their doors count
+ * toward the parent's shape rather than drawing a second outline inside it,
+ * because a crew's ground is one shape however it's split up inside. */
+function rebuildOutlines() {
+  if (!outlineLayer) return
+  const byTurf = new Map<string, { lat: number; lng: number }[]>()
+  for (const a of addressById.values()) {
+    if (!a.turf_id || a.lat == null || a.lng == null) continue
+    const t = turfById.value.get(a.turf_id)
+    if (!t || !isTodayTurf(t)) continue
+    const key = t.parent_turf_id ?? t.id
+    const arr = byTurf.get(key)
+    if (arr) arr.push({ lat: a.lat, lng: a.lng })
+    else byTurf.set(key, [{ lat: a.lat, lng: a.lng }])
+  }
+  const out: TurfOutline[] = []
+  for (const [id, points] of byTurf) {
+    const t = turfById.value.get(id)
+    if (t) out.push({ id, color: turfDisplayColor(t), points })
+  }
+  outlineLayer.setTurfs(out)
 }
 
 // Dots vs. house-number pills — same control as Scout's pin-style toggle,
@@ -589,6 +622,15 @@ const draftMemberIds = computed(() => {
 })
 
 const draftDoorCount = computed(() => draftMemberIds.value.size)
+
+/** What saveTurf() would call this turf if you never type a name. Shown in
+ * the editing bar so an unnamed draft still reads as something, rather than
+ * as a blank. Mirrors the naming rule in saveTurf — keep the two together. */
+const defaultDraftName = computed(() => {
+  const opt = assignOptions.value.find((o) => o.value === assignChoice.value)
+  const who = assignChoice.value !== 'none' && opt ? opt.label.split(' — ')[1] : ''
+  return who ? `${who}'s turf` : `Turf ${todayTurfs.value.length + 1}`
+})
 const draftTakenCount = computed(() => segments.value.reduce((n, s) => n + s.takenCount, 0))
 
 /** Doors the user chose to STEAL from another turf ("Take them too" on the
@@ -596,6 +638,33 @@ const draftTakenCount = computed(() => segments.value.reduce((n, s) => n + s.tak
  * time the owning turf is re-cut around them first, so the draft's RPC can
  * actually claim them. Snapshotted/restored with Undo. */
 const stealIds = ref(new Set<string>())
+
+/** "Take" — destructive create (2026-07-25, user call). With it armed, every
+ * sweep simply takes the doors it lands on, whoever holds them, instead of
+ * skipping them and offering a "Take them too" button afterwards. The user's
+ * words: "there is a toggle that lets you… but the button is called Take.
+ * You take the turf. And that way, we don't have to have a dialogue."
+ *
+ * It changes nothing about what SAVING does — doors still get released from
+ * their old turf first, honestly, by releaseStolenDoors(). It only removes
+ * the per-sweep confirmation. Off by default and never persisted: this is a
+ * mode you arm for one cut, not a setting you forget is on. */
+const takeMode = ref(false)
+
+/** Doors that landed in stealIds because Take was on, so switching it back
+ * off can hand them back. A door taken by an explicit "Take them too" tap
+ * is NOT in here and survives the toggle, because you asked for that one. */
+let autoStolenIds = new Set<string>()
+
+function toggleTakeMode() {
+  takeMode.value = !takeMode.value
+  if (!takeMode.value) {
+    for (const id of autoStolenIds) stealIds.value.delete(id)
+    autoStolenIds = new Set()
+  }
+  for (const seg of segments.value) computeSegment(seg)
+  doorLayer?.requestRepaint()
+}
 
 // Transient feedback line ("Added WALNUT ST — 41 doors") that temporarily
 // replaces the standing instructions in the sweep bar, optionally carrying
@@ -626,34 +695,12 @@ function runFlashAction() {
   a?.run()
 }
 
-const hint = computed(() => {
-  if (flashMsg.value) return flashMsg.value
-  // Overview: no draft open, so nothing is being cut — say what the map is
-  // showing and how to start.
-  if (!draftOpen.value) {
-    return showTakenDoors.value
-      ? 'Overview — every turf\'s doors wear their own color (the person it\'s assigned to, where there is one). Tap a door to see whose it is. Tap "Create new turf" below to start cutting.'
-      : 'Overview — turn on the Turf layer to color every turf\'s doors by owner, or tap "Create new turf" below to start cutting.'
-  }
-  if (lassoActive.value) {
-    return selectMode.value === 'erase'
-      ? 'Lasso armed to ERASE — drag a loop and every turf door inside comes back out. Tap Lasso again to go back to panning.'
-      : 'Lasso armed — drag a loop and every door inside joins the turf. Tap Lasso again to go back to panning.'
-  }
-  if (streetTapActive.value) {
-    return selectMode.value === 'erase'
-      ? 'Street tap armed to ERASE — tap any street on the map and it comes out of the turf. Tap Streets again when done.'
-      : 'Street tap armed — tap any street right on the map, dots or no dots, and every door on it joins the turf. Tap Streets again when done.'
-  }
-  if (focusedStreet.value) {
-    return `Trimming ${focusedStreet.value.name} — tap its doors on the map to drop or restore each house. Tap open map (or its row) when you're done.`
-  }
-  const base =
-    'Type a street name below and tap a match to see it on the map. Add takes the house range you set (the whole street unless you narrow it). Tap a street in the list below to trim house by house, or circle a patch with Lasso.'
-  return isSubcutter.value
-    ? `${base} Only streets inside your assigned turf count toward a sub-turf.`
-    : base
-})
+// The sweep bar used to carry a standing instruction that changed with every
+// armed tool, focused street and draft state. That whole ladder is gone
+// (2026-07-25, user call): the tools say what they are, and the help tour is
+// where explanation lives. What's left is transient feedback only, so the bar
+// renders only while a flash is up.
+const hint = computed(() => flashMsg.value)
 
 // --- Assignment options: today's squads + every canvasser. A turf may point
 // at a past day's squad that loadToday won't return — keep it selectable so
@@ -697,11 +744,11 @@ function prettyDay(dateStr: string): string {
   return new Date(y, m - 1, d).toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
-/** Non-empty when the turf is still pointed at a past day's crew — the row's
- * warning text, which doubles as the explanation for why no squad sees it. */
+/** Non-empty when the turf is still pointed at a past day's crew. State, not
+ * instruction (2026-07-25) — the reassign control is right there. */
 function staleDispatchLabel(t: TurfWithMeta): string {
   if (t.parent_turf_id || !t.squad || t.squad.squad_date === localToday()) return ''
-  return `Not out today — last crew was ${t.squad.name} (${prettyDay(t.squad.squad_date)}). Reassign it to send a squad back.`
+  return `Not out today. Last crew: ${t.squad.name}, ${prettyDay(t.squad.squad_date)}.`
 }
 
 function historyTarget(r: AssignmentLog): string {
@@ -805,19 +852,17 @@ function paintForDoor(id: string): DoorPaintState | null {
   const inDraft = draftMemberIds.value.has(id)
   const ownedElsewhere =
     !!a.turf_id && !(editingTurfId.value && a.turf_id === editingTurfId.value)
-  if (!inDraft) {
-    const f = focusedStreet.value
-    const l = locatedStreet.value
-    const onShownStreet = (f && doorOnStreet(a, f)) || (l && doorOnStreet(a, l))
-    // Turf layer on + zoomed to at least TAKEN_MIN_ZOOM: every door another
-    // turf owns paints (crossed out while cutting, turf-colored in
-    // overview), so someone else's ground reads door-level just by having
-    // the toggle on — from farther out than regular pins need. Toggle off =
-    // draft members and the shown street only.
-    const shownAsOtherTurf =
-      ownedElsewhere && showTakenDoors.value && (map?.getZoom() ?? 0) >= TAKEN_MIN_ZOOM
-    if (!onShownStreet && !shownAsOtherTurf) return null
-  }
+  // EVERY door paints, always (2026-07-25, user call: "I wanna just see
+  // everything, and then the turf will toggle it on and off"). The map used
+  // to open blank and reveal doors only for a searched street, a trimmed
+  // street, or — with the Turf layer on — somebody else's ground, which made
+  // the layer toggle read as the switch that turns the map on at all.
+  //
+  // Now the baseline is Scout's: the whole county on knock-status colors, and
+  // the Turf layer is purely additive on top of it (rings in overview,
+  // crossed-out symbols while cutting). Nothing is filtered out here; the
+  // canvas already drops to cheap dots below PINS_MIN_ZOOM, which is what
+  // keeps ~23k doors affordable.
   // Draft members can still carry another turf's stamp (a sub-cut claims
   // from its parent pool, a steal from its victim until save) — membership
   // wins over anything else. Otherwise, with the Turf layer on, another
@@ -831,7 +876,12 @@ function paintForDoor(id: string): DoorPaintState | null {
     const who = owner.assignee
     return {
       fill: FILL_OPEN,
-      ring: null,
+      // The cross-out says "taken", the RING says taken BY WHOM (2026-07-25,
+      // user call: "they need to be color coded in addition to having the
+      // cross out on them"). Same identity color the overview rings use and
+      // the same color that turf's outline is stroked in, so a door and the
+      // shape around it agree.
+      ring: turfDisplayColor(owner),
       emphasis: false,
       taken: {
         initial: who ? (who.display_name || who.username).charAt(0).toUpperCase() : '',
@@ -1067,6 +1117,7 @@ async function initialize() {
     // +/- controls still zoom.
     disableDoubleClickZoom: true,
   })
+  attachPoiTapGuard(map)
   map.addListener('click', (e: google.maps.MapMouseEvent) => onMapClick(e))
 
   doorLayer = new DoorCanvasLayer(map, {
@@ -1082,6 +1133,12 @@ async function initialize() {
 
   cityLayer = new CityLimitsLayer(map)
   if (showCity.value) void cityLayer.setVisible(true)
+
+  // Rough turf footprints, stroke-only, riding the same Turf toggle as the
+  // door rings and taken symbols.
+  outlineLayer = new TurfOutlineLayer(map)
+  outlineLayer.setVisible(showTakenDoors.value)
+  rebuildOutlines()
 
   // Fly to where the user is standing — cutting usually starts on the
   // ground — while the street data streams in behind the map.
@@ -1149,7 +1206,16 @@ async function loadCutterData() {
     indexAddresses(rows)
     doorLayer?.setDoors(locatedCanvasDoors())
     refreshStaleTurfs()
-    // Needs the street index above to resolve names to house numbers.
+    rebuildOutlines()
+    // Every door paints on its knock status from the moment the page opens
+    // (see paintForDoor), so the statuses are no longer a lazy trim-mode
+    // extra — they ARE the map. Unawaited on purpose: the doors are already
+    // on screen in their unknocked color and simply recolor when this lands,
+    // which is the map-first startup this page was rebuilt around.
+    ensureKnockStatuses()
+    // Both need the street index above to resolve names to house numbers.
+    applyIncomingStreet()
+    applyIncomingAssignee()
     applyIncomingPlan()
   } catch {
     loadError.value = 'Could not load the street data. Check your connection and reload.'
@@ -1171,6 +1237,7 @@ async function reloadAll() {
   doorLayer?.setDoors(locatedCanvasDoors())
   defaultDraftParent()
   refreshStaleTurfs()
+  rebuildOutlines()
   doorLayer?.requestRepaint()
 }
 
@@ -1386,11 +1453,28 @@ function matchesSegment(a: AddressLite, seg: Pick<DraftSegment, 'range_start' | 
  * door the user explicitly chose to steal. Everything else is "taken". */
 function claimableDoor(a: AddressLite): boolean {
   if (stealIds.value.has(a.id)) return true
+  if (takeMode.value && autoStealable(a)) return true
+  return claimableWithoutSteal(a)
+}
+
+/** The claim rule with no stealing in it at all — what set_turf_segments()
+ * would give this draft on its own. Split out so Take mode can tell "this
+ * door is already mine to claim" from "this door belongs to someone and I'm
+ * about to take it", and only record the latter for release at save. */
+function claimableWithoutSteal(a: AddressLite): boolean {
   const parentId = effectiveParentId.value
   return (
     (editingTurfId.value !== null && a.turf_id === editingTurfId.value) ||
     (parentId !== null ? a.turf_id === parentId : !a.turf_id && !isSubcutter.value)
   )
+}
+
+/** Would Take mode grab this door? Same permission gate as the manual steal
+ * — a manager can take from any top-level turf, a sub-cutter only from a
+ * sibling sub-turf — so the toggle never reaches ground the RPC would
+ * refuse anyway. */
+function autoStealable(a: AddressLite): boolean {
+  return !!a.turf_id && canStealFrom(turfById.value.get(a.turf_id))
 }
 
 /** May the current cutter steal doors from this turf? Managers can re-cut
@@ -1409,6 +1493,17 @@ function computeSegment(seg: DraftSegment) {
   const rows = streetRows(seg.street_name, seg.city)
   const members = rows.filter((a) => matchesSegment(a, seg))
   const free = members.filter(claimableDoor)
+  // Take mode: a door this segment only got because the toggle is on has to
+  // be RECORDED as a steal, or save time wouldn't know to re-cut the turf
+  // that currently holds it and the RPC would simply decline to claim it.
+  if (takeMode.value) {
+    for (const a of free) {
+      if (!claimableWithoutSteal(a) && !stealIds.value.has(a.id) && autoStealable(a)) {
+        stealIds.value.add(a.id)
+        autoStolenIds.add(a.id)
+      }
+    }
+  }
   seg.memberIds = free.map((a) => a.id)
   seg.doorCount = free.length
   seg.takenCount = members.length - free.length
@@ -1556,6 +1651,8 @@ function startOverDraft() {
   if (segments.value.length) snapshotDraft()
   segments.value = []
   stealIds.value = new Set()
+  autoStolenIds = new Set()
+  takeMode.value = false
   expandedSegKey.value = null
   saveError.value = ''
   defaultDraftParent()
@@ -1576,6 +1673,8 @@ function onSegmentParityChange(seg: DraftSegment, parity: string) {
 function clearDraft() {
   segments.value = []
   stealIds.value = new Set()
+  autoStolenIds = new Set()
+  takeMode.value = false
   expandedSegKey.value = null
   editingTurfId.value = null
   draftName.value = ''
@@ -1611,6 +1710,55 @@ function startNewTurf() {
  *
  * Runs after indexAddresses(), because resolving a street name to its house
  * numbers needs the in-memory street index. */
+/** /turf?street=Grove St — where the AI chat's [[Street]] links land now
+ * (2026-07-25, user call). Zooms to the street, paints its doors on their
+ * knock status like everything else, and leaves the search box filled so the
+ * house-range controls are right there. Deliberately does NOT open a draft:
+ * arriving from a sentence is a "show me" not a "start cutting".
+ *
+ * Needs the street index, so it runs at the tail of loadCutterData with the
+ * other query handlers. The param is consumed either way. */
+function applyIncomingStreet() {
+  const raw = route.query.street
+  if (typeof raw !== 'string' || !raw.trim()) return
+  const wanted = normalizeStreetName(raw.trim().slice(0, 80))
+  void router.replace({ path: '/turf', query: {} })
+  const hit =
+    streetSummaries.find((s) => s.street_name === wanted) ??
+    streetSummaries.find((s) => s.street_name.includes(wanted))
+  if (!hit) {
+    flash(`No street called ${titleCase(wanted)} in the address list.`)
+    return
+  }
+  onStreetInput(titleCase(hit.street_name))
+  locateStreet(hit)
+}
+
+/** /turf?assignee=<profile id> — the way in from a person's page now that
+ * per-member sub-turfs are out of the picker (2026-07-25, user call: "the
+ * campaign manager can go to the user's profile page and click View doors,
+ * and you can view their doors on the map in the turf editor").
+ *
+ * Selects whatever turf carries that person's name today (their sub-turf if
+ * a leader cut them one, otherwise a turf assigned to them outright) and
+ * flies to it. Read-only on arrival — this is "show me their stretch", and
+ * Edit is right there on the card if that's what you actually want. */
+function applyIncomingAssignee() {
+  const raw = route.query.assignee
+  if (typeof raw !== 'string' || !raw) return
+  void router.replace({ path: '/turf', query: {} })
+  const theirs = todayTurfs.value.filter((t) => t.assignee_id === raw)
+  // Prefer the biggest, so somebody with both a personal slice and a whole
+  // turf lands on the one that actually holds their day.
+  const best = theirs.sort((a, b) => turfDoorCount(b.id) - turfDoorCount(a.id))[0]
+  if (!best) {
+    flash('No turf carries that person’s name today.')
+    return
+  }
+  selectedTurfId.value = best.id
+  focusTurf(best.id)
+}
+
 function applyIncomingPlan() {
   const raw = route.query.plan
   if (typeof raw !== 'string' || !raw) return
@@ -1801,6 +1949,9 @@ function locateStreet(m: { street_name: string; city: string; lo: number; hi: nu
 /** The flash action for a batch of skipped doors, or null when none of
  * their owners can be stolen from. */
 function stealActionFor(doors: AddressLite[]): { label: string; run: () => void } | null {
+  // With Take armed there is nothing to offer — those doors were already
+  // claimed by the sweep that just ran. That's the whole point of the mode.
+  if (takeMode.value) return null
   const stealable = doors.filter((a) =>
     canStealFrom(a.turf_id ? turfById.value.get(a.turf_id) : undefined),
   )
@@ -2580,12 +2731,23 @@ const selectedTurfId = ref<string | null>(null)
 const selectedTurf = computed(
   () => listTurfs.value.find((t) => t.id === selectedTurfId.value) ?? null,
 )
+/** TOP-LEVEL turfs only (2026-07-25, user call: "it has certain people's
+ * doors listed here, and that shouldn't be listed there — you just select the
+ * main turf"). The per-member "<name>'s doors" sub-turfs are a squad-page
+ * concept: they're cut there, dissolved nightly, and listing them here padded
+ * the dropdown with rows nobody picks. A manager who wants to see one
+ * person's share opens it from that person's page instead (see ?assignee=).
+ *
+ * Sub-cutters are the exception: their whole job IS sub-turfs, so they still
+ * get theirs. */
 const turfPickOptions = computed<SelectOption[]>(() => [
   { value: 'none', label: 'Look at a turf…' },
-  ...listTurfs.value.map((t) => ({
-    value: t.id,
-    label: `${t.parent_turf_id ? '↳ ' : ''}${t.name}`,
-  })),
+  ...listTurfs.value
+    .filter((t) => isSubcutter.value || !t.parent_turf_id)
+    .map((t) => ({
+      value: t.id,
+      label: `${t.parent_turf_id ? '↳ ' : ''}${t.name}`,
+    })),
 ])
 
 function onPickTurf(value: string) {
@@ -2610,6 +2772,105 @@ function editTurf(t: TurfWithMeta) {
   // The whole turf should be pinned while it's being edited — geocode its
   // still-unmapped doors in the background (same pass a save runs).
   void geocodeTurfDoors(t.id)
+}
+
+// --- Combine two turfs (2026-07-25, user call: "there should be a way to
+// combine turfs — a button, you just hit combine, and it adds the two turfs
+// to each other"). ---
+//
+// Mechanically identical to the copy-stale flow: free the source's doors,
+// then claim source + target segments under the target. It has to be that
+// order, because set_turf_segments only ever claims from the free pool — a
+// door still stamped with the source turf would simply be declined.
+//
+// The emptied source turf is then deleted, so "combine" leaves one turf and
+// not one turf plus a husk. Sub-turfs of either side dissolve on the way (the
+// same trigger that fires on re-dispatch), which is right: a per-member split
+// of a turf that no longer exists means nothing.
+
+const combineBusy = ref(false)
+
+/** Today's top-level turfs, biggest first — the dispatch list. */
+const dispatchTurfs = computed(() =>
+  todayTurfs.value
+    .filter((t) => !t.parent_turf_id)
+    .slice()
+    .sort((a, b) => turfDoorCount(b.id) - turfDoorCount(a.id)),
+)
+
+/** Doors currently stamped to a turf, counting its sub-turfs' doors too —
+ * a crew's assignment doesn't shrink because a leader split it up. */
+function turfDoorCount(turfId: string): number {
+  let n = 0
+  for (const a of addressById.values()) {
+    if (!a.turf_id) continue
+    if (a.turf_id === turfId) n++
+    else if (turfById.value.get(a.turf_id)?.parent_turf_id === turfId) n++
+  }
+  return n
+}
+
+/** Turfs the selected one can merge into: today's other TOP-LEVEL turfs the
+ * viewer may manage. Sub-turfs are excluded on both sides — they're a squad
+ * page concept and their doors belong to a parent pool. */
+function combineTargets(t: TurfWithMeta): SelectOption[] {
+  return [
+    { value: 'none', label: 'Combine into…' },
+    ...todayTurfs.value
+      .filter((o) => o.id !== t.id && !o.parent_turf_id && canManage(o))
+      .map((o) => ({ value: o.id, label: o.name })),
+  ]
+}
+
+async function combineTurf(source: TurfWithMeta, targetId: string) {
+  if (targetId === 'none' || combineBusy.value) return
+  const target = turfById.value.get(targetId)
+  if (!target) return
+  const moving = [...addressById.values()].filter((a) => a.turf_id === source.id).length
+  if (
+    !window.confirm(
+      `Move ${moving} door${moving === 1 ? '' : 's'} from "${source.name}" into "${target.name}"? "${source.name}" is deleted.`,
+    )
+  ) {
+    return
+  }
+  combineBusy.value = true
+  listError.value = ''
+  try {
+    if (editingTurfId.value === source.id || editingTurfId.value === target.id) closeDraft()
+    const asPayload = (rows: TurfWithMeta['turf_segments']): SegmentPayload[] =>
+      rows.map((s) => ({
+        street_name: s.street_name,
+        city: s.city,
+        range_start: s.range_start,
+        range_end: s.range_end,
+        parity: s.parity,
+      }))
+    // 1. Release the source's doors into the free pool.
+    const { error: freeErr } = await supabase.rpc('set_turf_segments', {
+      target_turf_id: source.id,
+      segments: [],
+    })
+    if (freeErr) throw freeErr
+    // 2. Claim both sets under the target. The RPC rewrites the stored
+    //    segments honestly from what it actually claimed, so overlapping or
+    //    adjacent ranges from the two turfs come out as clean runs.
+    const { error: claimErr } = await supabase.rpc('set_turf_segments', {
+      target_turf_id: target.id,
+      segments: [...asPayload(target.turf_segments), ...asPayload(source.turf_segments)],
+    })
+    if (claimErr) throw claimErr
+    // 3. The husk goes.
+    const { error: delErr } = await supabase.from('turfs').delete().eq('id', source.id)
+    if (delErr) throw delErr
+    selectedTurfId.value = target.id
+    await reloadAll()
+    flash(`Combined into ${target.name}.`)
+  } catch {
+    listError.value = 'Could not combine those turfs — reload and try again.'
+  } finally {
+    combineBusy.value = false
+  }
 }
 
 async function deleteTurf(t: TurfWithMeta) {
@@ -2769,10 +3030,27 @@ onUnmounted(() => {
       </div>
     </div>
     <div v-else class="stack">
-      <!-- Status bar: taps are contextual (fresh street = take it, drafted
-           street = trim it) — this bar just carries the instructions and
-           per-gesture feedback. -->
-      <div class="sweep-bar" :style="{ '--draft-color': draftColor }">
+      <!-- WHICH turf you're cutting, at the very top of the page (2026-07-25,
+           user call: "it should be a little bit more obvious which turf we're
+           editing, it should display it more towards the top"). Sticky, so it
+           stays put while you work down the streets table. Wears the turf's
+           own color, and says Editing vs New so a re-cut is never mistaken
+           for a fresh one. -->
+      <div
+        v-if="draftOpen"
+        class="editing-bar"
+        :style="{ '--draft-color': draftColor }"
+      >
+        <span class="editing-dot" aria-hidden="true"></span>
+        <span class="editing-what">{{ editingTurfId ? 'Editing' : 'New turf' }}</span>
+        <strong class="editing-name">{{ draftName.trim() || defaultDraftName }}</strong>
+        <span class="editing-count">{{ draftDoorCount }} door{{ draftDoorCount === 1 ? '' : 's' }}</span>
+        <span v-if="takeMode" class="editing-take">Take</span>
+      </div>
+
+      <!-- Per-gesture feedback only ("Added WALNUT ST, 41 doors"), and only
+           while a flash is up — no standing instructions. -->
+      <div v-if="hint" class="sweep-bar" :style="{ '--draft-color': draftColor }">
         <span class="sweep-dot" aria-hidden="true"></span>
         <p class="sweep-hint">{{ hint }}</p>
         <!-- One optional action on the flash — e.g. "Take them too" after a
@@ -3006,28 +3284,46 @@ onUnmounted(() => {
           >
             ☝ Streets
           </button>
-          <template v-if="lassoActive || streetTapActive">
-            <button
-              type="button"
-              class="layer-btn"
-              :class="{ active: selectMode === 'add' }"
-              :aria-pressed="selectMode === 'add'"
-              title="Add the selection to the turf"
-              @click="selectMode = 'add'"
-            >
-              Add
-            </button>
-            <button
-              type="button"
-              class="layer-btn lasso-erase"
-              :class="{ active: selectMode === 'erase' }"
-              :aria-pressed="selectMode === 'erase'"
-              title="Remove the selection from the turf"
-              @click="selectMode = 'erase'"
-            >
-              Erase
-            </button>
-          </template>
+        </div>
+        <!-- Add/Erase on their OWN row underneath, at small size — the Squad
+             page's arrangement, brought back here (2026-07-25, user call:
+             "two at the top, two small ones in the bottom"). Four buttons on
+             one row was too busy and reached across the map. -->
+        <div v-if="draftOpen && (lassoActive || streetTapActive)" class="sweep-mode-row">
+          <button
+            type="button"
+            class="layer-btn btn-tiny"
+            :class="{ active: selectMode === 'add' }"
+            :aria-pressed="selectMode === 'add'"
+            title="Add the selection to the turf"
+            @click="selectMode = 'add'"
+          >
+            Add
+          </button>
+          <button
+            type="button"
+            class="layer-btn btn-tiny lasso-erase"
+            :class="{ active: selectMode === 'erase' }"
+            :aria-pressed="selectMode === 'erase'"
+            title="Remove the selection from the turf"
+            @click="selectMode = 'erase'"
+          >
+            Erase
+          </button>
+        </div>
+        <!-- Destructive create. Armed, every sweep takes the doors it lands
+             on from whoever holds them, instead of skipping and asking. -->
+        <div v-if="draftOpen" class="take-row">
+          <button
+            type="button"
+            class="layer-btn btn-tiny take-btn"
+            :class="{ active: takeMode }"
+            :aria-pressed="takeMode"
+            title="Sweeps take doors from other turfs instead of skipping them"
+            @click="toggleTakeMode"
+          >
+            Take
+          </button>
         </div>
         <!-- Compact house history: tap a dot (no tool armed) to see the
              door's last knocks. -->
@@ -3304,9 +3600,48 @@ onUnmounted(() => {
               :aria-label="`Reassign ${selectedTurf.name}`"
               @update:model-value="reassignTurf(selectedTurf, $event)"
             />
+            <!-- Merge this turf into another one. Top-level turfs only. -->
+            <AppSelect
+              v-if="canManage(selectedTurf) && !selectedTurf.parent_turf_id"
+              class="turf-row-assign"
+              small
+              :disabled="combineBusy"
+              :options="combineTargets(selectedTurf)"
+              model-value="none"
+              :aria-label="`Combine ${selectedTurf.name} into another turf`"
+              @update:model-value="combineTurf(selectedTurf, $event)"
+            />
           </div>
         </template>
         <p v-if="listError" class="error">{{ listError }}</p>
+      </div>
+
+      <!-- Dispatch: every turf out today with the crew on it, each row one
+           tap from a reassignment (2026-07-25, user call: "we want an easy
+           way to assign a squad to a turf"). The picker card above handles
+           ONE turf at a time and made sending five crews out a five-trip
+           job. Managers only — a sub-cutter doesn't dispatch. -->
+      <div v-if="isManager && dispatchTurfs.length" class="card" data-help="turf-dispatch">
+        <h3>Today's turf</h3>
+        <div class="dispatch-list">
+          <div v-for="t in dispatchTurfs" :key="t.id" class="dispatch-row">
+            <button class="dispatch-main" @click="onPickTurf(t.id)">
+              <span class="turf-swatch" :style="{ background: turfDisplayColor(t) }" aria-hidden="true"></span>
+              <span class="dispatch-text">
+                <span class="dispatch-name">{{ t.name }}</span>
+                <span class="muted dispatch-meta">{{ turfDoorCount(t.id) }} doors</span>
+              </span>
+            </button>
+            <AppSelect
+              class="dispatch-assign"
+              small
+              :options="assignOptionsFor(t)"
+              :model-value="assignChoiceOf(t)"
+              :aria-label="`Assign ${t.name}`"
+              @update:model-value="reassignTurf(t, $event)"
+            />
+          </div>
+        </div>
       </div>
 
       <!-- Long-page shortcut: the cutting screen runs well past one viewport
@@ -3584,6 +3919,115 @@ onUnmounted(() => {
   z-index: 6;
 }
 
+/* Dispatch list: one row per turf out today, name on the left, crew picker
+   on the right. Wraps rather than scrolling sideways. */
+.dispatch-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dispatch-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.dispatch-main {
+  flex: 1 1 10rem;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dispatch-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dispatch-name {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dispatch-meta {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.dispatch-assign {
+  flex: 0 1 12rem;
+  min-width: 0;
+}
+
+/* Which turf is being cut. Sticky at the top of the page so it survives
+   scrolling down through the streets table. */
+.editing-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--draft-color);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.editing-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--draft-color);
+  flex: 0 0 auto;
+}
+
+.editing-what {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.editing-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editing-count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.editing-take {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: #d64545;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 /* Lasso toggle, top-right under the fullscreen button — same chrome as the
    layer buttons. */
 .lasso-toggle {
@@ -3596,6 +4040,48 @@ onUnmounted(() => {
   overflow: hidden;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
   z-index: 6;
+}
+
+/* Rows 3 and 4 of the right column: Add/Erase, then Take. Both sit UNDER
+   the two tool buttons at reduced size, so the tools stay the thing you aim
+   at and the modifiers stay out of the way. */
+.sweep-mode-row,
+.take-row {
+  position: absolute;
+  right: 0.6rem;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+}
+
+.sweep-mode-row {
+  top: calc(0.6rem + (36px + 0.5rem) * 2);
+}
+
+/* Sits directly under Add/Erase when a tool is armed, and slides up into
+   that slot when none is. */
+.take-row {
+  top: calc(0.6rem + (36px + 0.5rem) * 2);
+}
+
+.sweep-mode-row ~ .take-row {
+  top: calc(0.6rem + 36px + 0.5rem + 28px + 0.4rem + 36px + 0.5rem);
+}
+
+.btn-tiny {
+  min-height: 28px;
+  padding: 0 0.55rem;
+  font-size: calc(0.78rem * var(--ui-scale));
+}
+
+/* Armed Take is a warning, not a normal selection — it is the one control
+   here that changes somebody else's turf. */
+.take-btn.active {
+  background: #d64545;
+  color: #fff;
 }
 
 .layer-btn {

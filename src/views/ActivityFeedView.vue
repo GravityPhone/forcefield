@@ -99,9 +99,10 @@ const optionsSaving = ref(false)
 const optionsSaved = ref(false)
 const optionsError = ref('')
 
-/** Milestone steps must be whole numbers ≥ 1 (the DB CHECKs agree). */
+/** Whole numbers, 0 or more. ZERO IS MEANINGFUL: it switches that milestone
+ * off (2026-07-25 — the DB CHECKs were relaxed to >= 0 to match). */
 function cleanStep(n: number): number {
-  return Math.max(1, Math.round(Number.isFinite(n) ? n : 1))
+  return Math.max(0, Math.round(Number.isFinite(n) ? n : 0))
 }
 
 async function saveOptions() {
@@ -115,8 +116,10 @@ async function saveOptions() {
       show_signatures: f.show_signatures,
       person_milestones: f.person_milestones,
       person_door_step: cleanStep(f.person_door_step),
+      person_knock_step: cleanStep(f.person_knock_step),
       squad_milestones: f.squad_milestones,
       squad_door_step: cleanStep(f.squad_door_step),
+      squad_knock_step: cleanStep(f.squad_knock_step),
       squad_signature_step: cleanStep(f.squad_signature_step),
       team_milestones: f.team_milestones,
       team_door_step: cleanStep(f.team_door_step),
@@ -140,6 +143,9 @@ async function saveOptions() {
 // leaderboard's every-log "doors" count is deliberately looser).
 const seenIds = new Set<string>()
 const personDoors = new Map<string, Set<string>>()
+// Attempt tallies (plain counts, not distinct sets) for the knock milestones.
+const personKnocks = new Map<string, number>()
+const squadKnocks = new Map<string, number>()
 const squadDoors = new Map<string, Set<string>>()
 const squadSigs = new Map<string, Set<string>>()
 const teamDoors = new Set<string>()
@@ -150,6 +156,8 @@ const sigsToday = ref(0)
 function resetCounters() {
   seenIds.clear()
   personDoors.clear()
+  personKnocks.clear()
+  squadKnocks.clear()
   squadDoors.clear()
   squadSigs.clear()
   teamDoors.clear()
@@ -173,7 +181,21 @@ function whoOf(row: FeedRow): string {
 function bump(set: Set<string>, member: string, step: number): { size: number; crossed: boolean } {
   const before = set.size
   set.add(member)
+  // step 0 (or junk) = this milestone is switched off. Guarding here rather
+  // than at each call site means a 0 can never reach the `% step` below,
+  // where it would be NaN and quietly never fire — or, worse, fire on every
+  // single row if the comparison were written the other way round.
+  if (step < 1) return { size: set.size, crossed: false }
   return { size: set.size, crossed: set.size > before && set.size % step === 0 }
+}
+
+/** Knock milestones count ATTEMPTS, so unlike doors/signatures there's no
+ * distinct set to grow — just a tally per key. Same 0-is-off rule. */
+function tally(map: Map<string, number>, key: string, step: number): { n: number; crossed: boolean } {
+  const n = (map.get(key) ?? 0) + 1
+  map.set(key, n)
+  if (step < 1) return { n, crossed: false }
+  return { n, crossed: n % step === 0 }
 }
 
 function setFor(map: Map<string, Set<string>>, key: string): Set<string> {
@@ -206,6 +228,38 @@ function processRow(row: FeedRow): FeedItem[] {
     personName: row.person?.name ?? null,
     street: row.address ? prettyStreet(row.address.street) : null,
   })
+
+  // Knock-count milestones run off EVERY row, door or not — that's the point
+  // of them (2026-07-25, user call).
+  const pk = tally(personKnocks, row.canvasser_id, s.person_knock_step)
+  if (s.person_milestones && pk.crossed) {
+    out.push({
+      kind: 'milestone',
+      key: `pk-${row.canvasser_id}-${pk.n}`,
+      at: row.occurred_at,
+      scope: 'person',
+      emoji: '👊',
+      strong: who,
+      rest: `has knocked ${pk.n} times today`,
+      avatar: row.canvasser?.avatar ?? null,
+      color,
+      whoId: row.canvasser_id,
+    })
+  }
+  if (row.squad_id && row.squad_name) {
+    const qk = tally(squadKnocks, row.squad_id, s.squad_knock_step)
+    if (s.squad_milestones && qk.crossed) {
+      out.push({
+        kind: 'milestone',
+        key: `qk-${row.squad_id}-${qk.n}`,
+        at: row.occurred_at,
+        scope: 'squad',
+        emoji: '👊',
+        strong: row.squad_name,
+        rest: `has knocked ${qk.n} times today`,
+      })
+    }
+  }
 
   if (row.household_id) {
     const p = bump(setFor(personDoors, row.canvasser_id), row.household_id, s.person_door_step)
@@ -412,24 +466,27 @@ function whoIdOf(item: FeedItem): string | null {
             <input type="checkbox" v-model="settings.person_milestones" />
             Personal milestones
           </label>
+          <!-- 0 in any of these boxes switches that milestone off. -->
           <div v-if="settings.person_milestones" class="step-row">
-            every <input type="number" min="1" v-model.number="settings.person_door_step" /> doors
+            every <input type="number" min="0" v-model.number="settings.person_door_step" /> doors ·
+            <input type="number" min="0" v-model.number="settings.person_knock_step" /> knocks
           </div>
           <label class="check">
             <input type="checkbox" v-model="settings.squad_milestones" />
             Squad milestones
           </label>
           <div v-if="settings.squad_milestones" class="step-row">
-            every <input type="number" min="1" v-model.number="settings.squad_door_step" /> doors ·
-            <input type="number" min="1" v-model.number="settings.squad_signature_step" /> signatures
+            every <input type="number" min="0" v-model.number="settings.squad_door_step" /> doors ·
+            <input type="number" min="0" v-model.number="settings.squad_knock_step" /> knocks ·
+            <input type="number" min="0" v-model.number="settings.squad_signature_step" /> signatures
           </div>
           <label class="check">
             <input type="checkbox" v-model="settings.team_milestones" />
             Whole-team milestones
           </label>
           <div v-if="settings.team_milestones" class="step-row">
-            every <input type="number" min="1" v-model.number="settings.team_door_step" /> doors ·
-            <input type="number" min="1" v-model.number="settings.team_signature_step" /> signatures
+            every <input type="number" min="0" v-model.number="settings.team_door_step" /> doors ·
+            <input type="number" min="0" v-model.number="settings.team_signature_step" /> signatures
           </div>
           <div class="options-actions">
             <button class="btn btn-primary btn-sm" :disabled="optionsSaving" @click="saveOptions">

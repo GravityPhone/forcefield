@@ -42,7 +42,21 @@ export type PatternId =
   | 'stripes'
   | 'dots'
 
-export type FontId = 'system' | 'rounded' | 'mono' | 'serif'
+export type FontId =
+  | 'system'
+  | 'rounded'
+  | 'grotesque'
+  | 'geometric'
+  | 'condensed'
+  | 'legible'
+  | 'trebuchet'
+  | 'serif'
+  | 'book'
+  | 'garamond'
+  | 'slab'
+  | 'mono'
+  | 'marker'
+  | 'poster'
 
 /** Per-account display preferences beyond the color scheme — all cosmetic,
  * all stored flat inside the same profiles.theme jsonb as `scheme`. */
@@ -59,8 +73,11 @@ export interface DisplayPrefs {
   font: FontId
   /** 'theme' defers to the scheme's own radius token. */
   corners: 'theme' | 'sharp' | 'round'
-  compact: boolean
-  reduceMotion: boolean
+  // `compact` and `reduceMotion` lived here until 2026-07-25, when their
+  // toggles came off /appearance (user call). The keys are simply ignored on
+  // read now, so any profile row still carrying them normalizes clean and
+  // nobody is stranded in a mode they can no longer reach. Reduced motion
+  // still honors the OS setting via the media query in style.css.
   pattern: PatternId
   patternBold: boolean
 }
@@ -392,8 +409,13 @@ export interface ActivityFeedSettings {
   show_signatures: boolean
   person_milestones: boolean
   person_door_step: number
+  /** Every N knock ATTEMPTS, as opposed to distinct doors — so a hard street
+   * where nobody answers still moves. 0 = off, which is true of every step
+   * here since 2026-07-25. */
+  person_knock_step: number
   squad_milestones: boolean
   squad_door_step: number
+  squad_knock_step: number
   squad_signature_step: number
   team_milestones: boolean
   team_door_step: number
@@ -409,8 +431,10 @@ export const DEFAULT_FEED_SETTINGS: ActivityFeedSettings = {
   show_signatures: true,
   person_milestones: true,
   person_door_step: 5,
+  person_knock_step: 0,
   squad_milestones: true,
   squad_door_step: 25,
+  squad_knock_step: 0,
   squad_signature_step: 10,
   team_milestones: true,
   team_door_step: 100,

@@ -209,6 +209,37 @@ function canvasserName(r: CanvasserLeaderboardRow) {
   return r.display_name || r.username
 }
 
+// --- "Where am I?" (2026-07-25, user call). The row was always tinted, but
+// on a board of fifty people that's only findable if you already know where
+// to look. Each board gets your position as a value next to its heading, and
+// tapping it jumps to the row. ---
+
+/** 1-based position of `myId` in an already-ranked list, or null when you're
+ * not on this board at all (no knocks in the window, or you don't knock). */
+function standingIn(rows: { rank: number; mine: boolean }[]): { rank: number; total: number } | null {
+  const mine = rows.find((r) => r.mine)
+  return mine ? { rank: mine.rank, total: rows.length } : null
+}
+
+function canvasserStanding(rows: CanvasserLeaderboardRow[], metric: LeaderboardMetric) {
+  return standingIn(
+    ranked(rows, metric).map((r, i) => ({ rank: i + 1, mine: r.canvasser_id === myId })),
+  )
+}
+
+const myCanvasserStanding = computed(() => canvasserStanding(canvassers.value, primaryMetric.value))
+const myDoorsStanding = computed(() => canvasserStanding(canvassers.value, 'doors'))
+const mySquadStanding = computed(() =>
+  standingIn(ranked(squadRows.value, primaryMetric.value).map((s, i) => ({ rank: i + 1, mine: s.isMine }))),
+)
+
+/** Scrolls the highlighted row of one board into the middle of the screen. */
+function jumpToMyRow(boardId: string) {
+  document
+    .querySelector(`[data-board="${boardId}"] tr.me`)
+    ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+}
+
 onMounted(() => {
   void refreshAll()
   // New knocks are the only thing that moves standings; debounce so a burst
@@ -296,8 +327,17 @@ onUnmounted(() => {
           <span v-if="dayLoading" class="spinner" aria-hidden="true"></span>
         </div>
 
-        <div class="card" data-help="board-canvassers">
-          <h3>Canvassers — {{ METRIC_LABELS[primaryMetric] }}{{ dateSuffix }}</h3>
+        <div class="card" data-board="primary" data-help="board-canvassers">
+          <div class="board-head">
+            <h3>Canvassers — {{ METRIC_LABELS[primaryMetric] }}{{ dateSuffix }}</h3>
+            <button
+              v-if="myCanvasserStanding"
+              class="standing"
+              @click="jumpToMyRow('primary')"
+            >
+              You: #{{ myCanvasserStanding.rank }} of {{ myCanvasserStanding.total }}
+            </button>
+          </div>
           <div class="board-scroll">
           <table class="board">
             <thead>
@@ -325,8 +365,13 @@ onUnmounted(() => {
           <p v-if="!canvassers.length" class="muted empty-note">{{ canvassersEmptyNote }}</p>
         </div>
 
-        <div v-if="showDoorsBoard" class="card">
-          <h3>Canvassers — Doors knocked{{ dateSuffix }}</h3>
+        <div v-if="showDoorsBoard" class="card" data-board="doors">
+          <div class="board-head">
+            <h3>Canvassers — Doors knocked{{ dateSuffix }}</h3>
+            <button v-if="myDoorsStanding" class="standing" @click="jumpToMyRow('doors')">
+              You: #{{ myDoorsStanding.rank }} of {{ myDoorsStanding.total }}
+            </button>
+          </div>
           <div class="board-scroll">
           <table class="board">
             <thead>
@@ -351,8 +396,13 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="card">
-          <h3>{{ squadsTitle }}</h3>
+        <div class="card" data-board="squads">
+          <div class="board-head">
+            <h3>{{ squadsTitle }}</h3>
+            <button v-if="mySquadStanding" class="standing" @click="jumpToMyRow('squads')">
+              Your squad: #{{ mySquadStanding.rank }} of {{ mySquadStanding.total }}
+            </button>
+          </div>
           <template v-if="squadRows.length">
             <div class="board-scroll">
             <table class="board">
@@ -531,8 +581,41 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
 }
 
+/* Your own row, findable at a glance on a board of fifty (2026-07-25): a
+ * heavier tint than the old 10%, plus an accent bar down the leading edge so
+ * it reads even when the tint is washed out by Sunlight boost. */
 tr.me td {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  font-weight: 600;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  font-weight: 700;
+}
+
+tr.me td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.board-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.board-head h3 {
+  margin: 0;
+}
+
+/* A value, not a label: where you stand, and a way to go look at it. */
+.standing {
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  font-size: calc(0.82rem * var(--ui-scale));
+  font-weight: 700;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
 }
 </style>

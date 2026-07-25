@@ -2,6 +2,12 @@ import { supabase } from '@/lib/supabase'
 import { startOfLocalDayISO } from '@/lib/day'
 import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockOutcome } from '@/types'
 
+/** "WALNUT ST" -> "Walnut St", for anything a person reads. The voter file
+ * is all-caps; screens are not. */
+export function titleCase(s: string): string {
+  return s.toLowerCase().replace(/[a-z]/g, (c) => c.toUpperCase())
+}
+
 export type WalkDirection = 'ascending' | 'descending'
 export type WalkParity = 'both' | 'even' | 'odd'
 

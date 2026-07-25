@@ -44,3 +44,8 @@ demo-studio/auto/demo-plan.json
 
 # Downloaded research papers — local reference material only, never pushed
 research/
+
+# Local QA session page written by scratchpad/dev-login.mjs. It embeds a
+# one-time Supabase magic link, and public/ ships to the live site, so this
+# must never be committed or deployed.
+public/dev-login.html

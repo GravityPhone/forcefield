@@ -121,44 +121,15 @@ html.pref-bold body {
   -webkit-text-stroke: 0.02em;
 }
 
-/* Compact spacing: tightens the shared primitives so more fits per screen.
- * View-specific layouts keep their own spacing — this is a squeeze, not a
- * relayout. */
-html.pref-compact .page {
-  padding: 0.85rem;
-}
-
-html.pref-compact .card {
-  /* The var lets components that bleed to the card edge (negative margins,
-   * e.g. Talk's tinted address banner) track the squeezed padding. */
-  --card-pad: 0.9rem;
-  padding: var(--card-pad);
-}
-
-html.pref-compact .btn {
-  min-height: clamp(36px, 9.5vw, 42px);
-  padding: clamp(0.45rem, 1.6vw, 0.6rem) clamp(0.8rem, 3vw, 1.1rem);
-}
-
-html.pref-compact .field {
-  margin-bottom: 0.7rem;
-}
-
-html.pref-compact .field input,
-html.pref-compact .field textarea,
-html.pref-compact .field select {
-  min-height: clamp(36px, 9.5vw, 42px);
-  padding: clamp(0.45rem, 1.6vw, 0.6rem) clamp(0.7rem, 2.5vw, 0.9rem);
-}
-
 /* Keyboard-only focus ring for anything without its own focus style. */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
-/* Honors both the OS setting and the in-app Reduce motion pref (a media
- * query can't be forced from JS, so the pref mirrors it as a class). */
+/* The OS setting is the only reduced-motion signal now — the in-app toggle
+ * (and its mirroring .pref-reduce-motion class) came off /appearance
+ * 2026-07-25. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -167,14 +138,6 @@ html.pref-compact .field select {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
-}
-
-html.pref-reduce-motion *,
-html.pref-reduce-motion *::before,
-html.pref-reduce-motion *::after {
-  animation-duration: 0.01ms !important;
-  animation-iteration-count: 1 !important;
-  transition-duration: 0.01ms !important;
 }
 
 #app {

@@ -19,6 +19,31 @@ export const mapsAuthError = ref(false)
  * the not-yet-loaded google global. */
 export const MAP_RENDERING_TYPE = 'RASTER' as google.maps.RenderingType
 
+/** Below this zoom, business POIs are shown but NOT tappable (2026-07-25,
+ * user call: too easy to hit a shop by accident, and Google's place card is
+ * fiddly to get back out of).
+ *
+ * `clickableIcons` controls tappability only — the icons and labels still
+ * draw either way, so the businesses stay on the map as landmarks, which is
+ * what they're actually useful for when you're finding a street. Zoomed in
+ * past this, a tap on a business is deliberate, so it's allowed through.
+ *
+ * A suppressed POI tap falls through to the map's own click handler, which
+ * is what every one of our maps wants anyway (locate the street, open the
+ * door). */
+export const POI_TAP_MIN_ZOOM = 18
+
+/** Wires the zoom gate above onto a map. Call once, right after construction,
+ * on every map that shows POIs. Returns nothing to unsubscribe: the listener
+ * dies with the map. */
+export function attachPoiTapGuard(map: google.maps.Map) {
+  const sync = () => {
+    map.setOptions({ clickableIcons: (map.getZoom() ?? 0) >= POI_TAP_MIN_ZOOM })
+  }
+  sync()
+  map.addListener('zoom_changed', sync)
+}
+
 let configured = false
 
 function configure() {

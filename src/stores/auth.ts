@@ -11,15 +11,17 @@ interface AuthState {
   ready: boolean
 }
 
-/** Where each role lands after login. Campaign managers get the full
- * dashboard (the old admin home); admins land on role management — their
- * job is roles/teams/campaign oversight, not day-to-day team controls. */
+/** Where each role lands after login. Reworked 2026-07-25 (user call): the
+ * /admin dashboard is the SERVER OPERATOR's screen now — where an admin
+ * manages campaigns and the teams under them — so admins land there and
+ * campaign managers can't reach it at all. A campaign manager runs one
+ * campaign, so they open on the numbers for it. */
 export function roleHome(role: AppRole): string {
   switch (role) {
     case 'admin':
-      return '/admin/roles'
-    case 'campaign_manager':
       return '/admin'
+    case 'campaign_manager':
+      return '/admin/analytics'
     default:
       // Squad leaders and canvassers share the same home: the canvass screen.
       return '/canvass'

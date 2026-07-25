@@ -70,12 +70,57 @@ const nameWobble = computed(() => {
   return { transform: `rotate(${tilt}deg) scale(${pop})` }
 })
 
+// --- How long you've been at this (2026-07-25, user call). A value under
+// the role, not a sentence. Anchored on your FIRST KNOCK when you have one —
+// that's when you actually started canvassing — and on the account date
+// otherwise, so a brand-new sign-up still gets a line. ---
+
+const tenure = ref('')
+
+/** "3 days" / "6 weeks" / "4 months" — one unit, no decimals. */
+function spanLabel(from: Date): string {
+  const days = Math.max(0, Math.floor((Date.now() - from.getTime()) / 86_400_000))
+  if (days < 1) return 'today'
+  if (days < 14) return `${days} day${days === 1 ? '' : 's'}`
+  if (days < 60) {
+    const w = Math.floor(days / 7)
+    return `${w} week${w === 1 ? '' : 's'}`
+  }
+  const m = Math.floor(days / 30)
+  return `${m} month${m === 1 ? '' : 's'}`
+}
+
+function shortDay(d: Date): string {
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
+async function loadTenure() {
+  if (!auth.profile) return
+  const { data } = await supabase
+    .from('knock_logs')
+    .select('occurred_at')
+    .eq('canvasser_id', auth.profile.id)
+    .order('occurred_at', { ascending: true })
+    .limit(1)
+  const firstKnock = data?.[0]?.occurred_at
+  if (firstKnock) {
+    const d = new Date(firstKnock)
+    tenure.value = `Knocking since ${shortDay(d)} · ${spanLabel(d)}`
+    return
+  }
+  const joined = new Date(auth.profile.created_at)
+  if (!Number.isNaN(joined.getTime())) {
+    tenure.value = `Joined ${shortDay(joined)} · ${spanLabel(joined)}`
+  }
+}
+
 onMounted(async () => {
   if (!auth.profile) return
   displayName.value = auth.profile.display_name ?? ''
   bio.value = auth.profile.bio ?? ''
   whyCanvassing.value = auth.profile.why_canvassing ?? ''
   funFact.value = auth.profile.fun_fact ?? ''
+  void loadTenure()
   if (showPhone) {
     const { data } = await supabase
       .from('member_phones')
@@ -174,6 +219,7 @@ async function save() {
                easter egg (see onNameTap). -->
           <span class="identity-name" :style="nameWobble" @click="onNameTap">{{ previewName }}</span>
           <span class="muted identity-role">{{ ROLE_LABELS[auth.profile.role] }}</span>
+          <span v-if="tenure" class="muted identity-tenure">{{ tenure }}</span>
         </span>
       </div>
 
@@ -342,6 +388,12 @@ async function save() {
 
 .identity-role {
   font-size: 0.85rem;
+}
+
+/* How long you've been at it — a value, sized below the role. */
+.identity-tenure {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
 }
 
 /* --- Emoji / color picker buttons --- */

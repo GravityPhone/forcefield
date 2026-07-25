@@ -103,14 +103,18 @@ const router = createRouter({
     // read-only notice, and RLS enforces the same rule server-side.
     { path: '/turf', name: 'turf', component: () => import('@/views/TurfView.vue'), meta: { roles: [] } },
 
-    // Management area. Campaign managers run the day-to-day (dashboard, AI
-    // chat, settings) and manage non-admin roles/placement on /admin/roles;
-    // true admins additionally manage admins and org-wide oversight.
-    { path: '/admin', name: 'admin', component: () => import('@/views/AdminHomeView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
+    // Management area. Campaign managers run one campaign's day-to-day
+    // (analytics, AI chat, settings, turf) and place people on /admin/roles.
+    //
+    // The dashboard and the campaigns editor are ADMIN ONLY as of 2026-07-25
+    // (user call): admin is the server-operator role, and the dashboard is
+    // where they manage the campaigns and teams that sit under them. A
+    // campaign manager doesn't create campaigns, so neither screen is theirs.
+    { path: '/admin', name: 'admin', component: () => import('@/views/AdminHomeView.vue'), meta: { roles: ['admin'] } },
     { path: '/admin/analytics', name: 'admin-analytics', component: () => import('@/views/AdminAnalyticsView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
     { path: '/admin/chat', name: 'admin-chat', component: () => import('@/views/AdminChatView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
     { path: '/admin/settings', name: 'admin-settings', component: () => import('@/views/AdminSettingsView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
-    { path: '/admin/campaigns', name: 'admin-campaigns', component: () => import('@/views/AdminCampaignsView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
+    { path: '/admin/campaigns', name: 'admin-campaigns', component: () => import('@/views/AdminCampaignsView.vue'), meta: { roles: ['admin'] } },
     // Role management — was "/admin/users" until the roster took over the
     // browse-people job (2026-07-12); this page is purely role/team/squad
     // placement now. Old path kept as a redirect for stale bookmarks.

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
 import { supabase } from '@/lib/supabase'
@@ -38,6 +38,14 @@ const route = useRoute()
 const auth = useAuthStore()
 
 const member = ref<MemberProfile | null>(null)
+
+/** Who gets "View their doors": whoever can actually do something on the
+ * turf screen. A squad leader qualifies — splitting the crew's turf is their
+ * job — but not a plain canvasser, who'd land on the read-only notice. */
+const canSeeDoors = computed(() => {
+  const role = auth.profile?.role
+  return role === 'admin' || role === 'campaign_manager' || role === 'team_lead'
+})
 const visits = ref<VisitRow[]>([])
 const loading = ref(true)
 
@@ -134,6 +142,18 @@ function doorLine(v: VisitRow): string {
             Call
           </a>
         </div>
+
+        <!-- Straight into the cutter, framed on this person's stretch
+             (2026-07-25, user call). Per-member sub-turfs came out of the
+             cutter's turf picker the same day, so this is how a manager
+             reaches one: from the person, not from a list of turf names. -->
+        <router-link
+          v-if="canSeeDoors"
+          class="btn btn-sm btn-ghost view-doors"
+          :to="{ path: '/turf', query: { assignee: member.id } }"
+        >
+          View their doors
+        </router-link>
 
         <!-- About — only the fields they actually filled in. -->
         <div v-if="member.bio || member.why_canvassing || member.fun_fact" class="card about">

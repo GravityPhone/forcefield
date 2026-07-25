@@ -9,6 +9,10 @@ export interface TurfLite {
   squad_id: string | null
   assignee_id: string | null
   parent_turf_id: string | null
+  /** The crew this turf is dispatched to right now, embedded so a map can
+   * answer "who has this street?" without a second query (2026-07-25, user
+   * call). Null when it's assigned to one person or to nobody. */
+  squad: { name: string } | null
 }
 
 export interface MyTurf {
@@ -60,7 +64,9 @@ export async function fetchMyTurf(userId: string): Promise<MyTurf> {
       .from('squad_members')
       .select('squad_id, user_id, squads!inner(squad_date)')
       .eq('squads.squad_date', today),
-    supabase.from('turfs').select('id, name, color, squad_id, assignee_id, parent_turf_id'),
+    supabase
+      .from('turfs')
+      .select('id, name, color, squad_id, assignee_id, parent_turf_id, squad:squads(name)'),
   ])
   const squadIds = new Set((mineRes.data ?? []).map((r) => r.squad_id as string))
   const squadmateIds = new Set<string>([userId])
@@ -68,7 +74,12 @@ export async function fetchMyTurf(userId: string): Promise<MyTurf> {
     if (squadIds.has(r.squad_id as string)) squadmateIds.add(r.user_id as string)
   }
 
-  const all = (turfRes.data ?? []) as TurfLite[]
+  // PostgREST types a to-one embed as an array in some shapes — normalize so
+  // callers only ever see the object (or null).
+  const all = ((turfRes.data ?? []) as unknown[]).map((row) => {
+    const t = row as TurfLite & { squad: { name: string } | { name: string }[] | null }
+    return { ...t, squad: Array.isArray(t.squad) ? (t.squad[0] ?? null) : t.squad }
+  }) as TurfLite[]
   const byId = new Map(all.map((t) => [t.id, t]))
   // The crew's own ground, top level only — sub-turfs ride in via their parent.
   const directIds = new Set(

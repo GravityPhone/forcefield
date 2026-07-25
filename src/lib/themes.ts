@@ -620,12 +620,30 @@ export function sunlightTokens(t: ThemeTokens, dark = false): ThemeTokens {
 }
 
 /** System-font stacks only — a font choice must not add a single byte of
- * webfont download. Unsupported entries fall back to the system face. */
+ * webfont download. Every stack therefore names several real faces across
+ * Windows / macOS / iOS / Android and ends in a generic family, so a device
+ * missing all of them still lands somewhere sane rather than on Times.
+ *
+ * Widened from 4 to 14 on 2026-07-25 (user call). The set is deliberately
+ * grouped by FEEL — sans, then serif, then the two novelty faces — because
+ * that's the order the picker renders them in. */
 export const FONT_STACKS: Record<FontId, string> = {
   system: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
   rounded: "ui-rounded, 'SF Pro Rounded', 'Nunito', 'Varela Round', system-ui, sans-serif",
-  mono: "ui-monospace, 'Cascadia Code', 'Roboto Mono', Menlo, Consolas, monospace",
+  grotesque: "'Helvetica Neue', Helvetica, Arial, sans-serif",
+  geometric: "Futura, 'Century Gothic', 'Avenir Next', Avenir, 'URW Gothic', system-ui, sans-serif",
+  condensed: "'Arial Narrow', 'Roboto Condensed', 'Liberation Sans Narrow', 'Segoe UI', sans-serif",
+  // Verdana/Tahoma are on essentially every device and were drawn for small
+  // sizes — the most readable option here on a phone in bad light.
+  legible: "'Atkinson Hyperlegible', Verdana, Tahoma, 'DejaVu Sans', sans-serif",
+  trebuchet: "'Trebuchet MS', 'Lucida Grande', 'Lucida Sans Unicode', sans-serif",
   serif: "ui-serif, Georgia, 'Times New Roman', serif",
+  book: "'Palatino Linotype', Palatino, 'Book Antiqua', 'Iowan Old Style', Georgia, serif",
+  garamond: "Garamond, 'EB Garamond', 'Apple Garamond', 'Times New Roman', serif",
+  slab: "Rockwell, 'Roboto Slab', 'Bookman Old Style', Georgia, serif",
+  mono: "ui-monospace, 'Cascadia Code', 'Roboto Mono', Menlo, Consolas, monospace",
+  marker: "'Segoe Print', 'Bradley Hand', 'Chalkboard SE', 'Comic Sans MS', cursive",
+  poster: "Impact, Haettenschweiler, 'Arial Black', 'Franklin Gothic Bold', sans-serif",
 }
 
 export const TEXT_SCALES: { value: number; label: string }[] = [
@@ -644,8 +662,6 @@ export const DEFAULT_PREFS: DisplayPrefs = {
   sunlight: true,
   font: 'system',
   corners: 'theme',
-  compact: false,
-  reduceMotion: false,
   pattern: 'none',
   patternBold: false,
 }
@@ -671,8 +687,9 @@ export function normalizeThemeSettings(raw: unknown): { scheme: ThemeId; prefs: 
           ? (obj.font as FontId)
           : DEFAULT_PREFS.font,
       corners: obj.corners === 'sharp' || obj.corners === 'round' ? obj.corners : 'theme',
-      compact: obj.compact === true,
-      reduceMotion: obj.reduceMotion === true,
+      // obj.compact / obj.reduceMotion are deliberately dropped on the floor
+      // (see DisplayPrefs) — an old row keeps them in the jsonb until the
+      // next save and they simply stop meaning anything.
       pattern: isPatternId(obj.pattern) ? obj.pattern : DEFAULT_PREFS.pattern,
       patternBold: obj.patternBold === true,
     },
@@ -693,7 +710,7 @@ function applyPatternLayer(
 }
 
 /** Applies everything a scheme's tokens don't cover: root font scale, font
- * stack, bold/compact/reduce-motion classes, corner override, and the
+ * stack, bold class, corner override, and the
  * background-pattern mask layers (style.css owns the matching selectors).
  * Call AFTER applyThemeTokens — the corner override wins over the scheme's
  * radius token by running last. */
@@ -707,8 +724,6 @@ export function applyDisplayPrefs(prefs: DisplayPrefs, tokens: ThemeTokens) {
     style.setProperty('--radius', prefs.corners === 'sharp' ? '4px' : '18px')
   }
   root.classList.toggle('pref-bold', prefs.bold)
-  root.classList.toggle('pref-compact', prefs.compact)
-  root.classList.toggle('pref-reduce-motion', prefs.reduceMotion)
 
   const pattern = getPattern(prefs.pattern)
   if (!pattern.a && !pattern.b) {
