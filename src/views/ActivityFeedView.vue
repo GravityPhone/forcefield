@@ -49,6 +49,10 @@ interface EventItem {
   key: string
   at: string
   who: string
+  /** The canvasser's profile id — their name and avatar link to /member/:id
+   * (2026-07-25, user call: "pull up the other person's profile when we go
+   * on the feed and we click someone's name"). */
+  whoId: string
   avatar: string | null
   color: string
   outcome: KnockOutcome
@@ -64,9 +68,11 @@ interface MilestoneItem {
   emoji: string
   strong: string
   rest: string
-  /** Person milestones show the canvasser's avatar like event rows do. */
+  /** Person milestones show the canvasser's avatar like event rows do, and
+   * link to their profile the same way. */
   avatar?: string | null
   color?: string
+  whoId?: string
 }
 
 type FeedItem = EventItem | MilestoneItem
@@ -193,6 +199,7 @@ function processRow(row: FeedRow): FeedItem[] {
     key: row.client_id || row.id,
     at: row.occurred_at,
     who,
+    whoId: row.canvasser_id,
     avatar: row.canvasser?.avatar ?? null,
     color,
     outcome: row.outcome,
@@ -213,6 +220,7 @@ function processRow(row: FeedRow): FeedItem[] {
         rest: `hit ${p.size} doors today`,
         avatar: row.canvasser?.avatar ?? null,
         color,
+        whoId: row.canvasser_id,
       })
     }
     if (row.squad_id && row.squad_name) {
@@ -365,6 +373,12 @@ function timeOf(iso: string): string {
 function ms(item: FeedItem): MilestoneItem {
   return item as MilestoneItem
 }
+
+/** The profile behind a row, when there is one person behind it — squad and
+ * whole-team milestones have none. */
+function whoIdOf(item: FeedItem): string | null {
+  return item.kind === 'milestone' ? (item.whoId ?? null) : item.whoId
+}
 </script>
 
 <template>
@@ -442,21 +456,24 @@ function ms(item: FeedItem): MilestoneItem {
           class="row"
           :class="item.kind === 'milestone' ? `milestone milestone-${item.scope}` : item.kind"
         >
-          <!-- Event rows + personal milestones lead with the canvasser. -->
-          <span
+          <!-- Event rows + personal milestones lead with the canvasser, and
+               both the face and the name open their profile. -->
+          <component
+            :is="whoIdOf(item) ? 'router-link' : 'span'"
             v-if="item.kind !== 'milestone' || item.scope === 'person'"
+            :to="whoIdOf(item) ? { name: 'member', params: { id: whoIdOf(item) } } : undefined"
             class="row-avatar"
             :style="{ borderColor: item.color, background: avatarUrl(item.avatar ?? null) ? 'var(--surface)' : item.color }"
           >
             <img v-if="avatarUrl(item.avatar ?? null)" :src="avatarUrl(item.avatar ?? null)" alt="" />
             <template v-else>{{ (item.kind === 'milestone' ? item.strong : item.who).slice(0, 1).toUpperCase() }}</template>
-          </span>
+          </component>
           <span v-else class="row-emoji" aria-hidden="true">{{ item.emoji }}</span>
 
           <span class="row-main">
             <template v-if="item.kind === 'signature'">
               <span class="row-what">
-                <strong>{{ item.who }}</strong>
+                <router-link class="who-link" :to="{ name: 'member', params: { id: item.whoId } }">{{ item.who }}</router-link>
                 got {{ item.personName ? `${item.personName}'s` : 'a' }} signature
               </span>
               <span class="muted row-meta">
@@ -465,7 +482,7 @@ function ms(item: FeedItem): MilestoneItem {
             </template>
             <template v-else-if="item.kind === 'knock'">
               <span class="row-what">
-                <strong>{{ item.who }}</strong>
+                <router-link class="who-link" :to="{ name: 'member', params: { id: item.whoId } }">{{ item.who }}</router-link>
                 <span class="outcome-chip" :style="{ color: OUTCOME_HEX[item.outcome] }">
                   <span class="outcome-dot" :style="{ background: OUTCOME_HEX[item.outcome] }"></span>
                   {{ OUTCOME_LABELS[item.outcome] }}</span
@@ -478,7 +495,13 @@ function ms(item: FeedItem): MilestoneItem {
             <template v-else>
               <span class="row-what">
                 <span v-if="ms(item).scope === 'person'" class="row-inline-emoji" aria-hidden="true">{{ ms(item).emoji }}</span>
-                <strong>{{ ms(item).strong }}</strong> {{ ms(item).rest }}
+                <router-link
+                  v-if="ms(item).whoId"
+                  class="who-link"
+                  :to="{ name: 'member', params: { id: ms(item).whoId } }"
+                  >{{ ms(item).strong }}</router-link
+                >
+                <strong v-else>{{ ms(item).strong }}</strong> {{ ms(item).rest }}
               </span>
               <span class="muted row-meta">{{ timeOf(item.at) }}</span>
             </template>
@@ -688,6 +711,20 @@ function ms(item: FeedItem): MilestoneItem {
   height: 100%;
   object-fit: contain;
   padding: 2px;
+}
+
+/* The name is the way to the person (2026-07-25). Styled like the bold text
+   it replaced rather than like a link — the whole feed would turn blue. */
+.who-link {
+  font-weight: 700;
+  color: inherit;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.who-link:hover,
+.who-link:focus-visible {
+  text-decoration: underline;
 }
 
 .row-emoji {
