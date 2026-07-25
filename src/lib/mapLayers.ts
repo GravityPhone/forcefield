@@ -375,42 +375,14 @@ export class CityLimitsLayer {
   }
 }
 
-/** The density dot itself — a circle that grows with how many pins it stands
- * for, no count text (the default clusterer numbers read like house numbers
- * next to number-mode pins, which was confusing). The translucent halo is
- * the "this stands for an area" cue. Shared by the clusterer renderer below
- * (Squad) and Hunt's zoomed-out density layer. */
-export function densityDotElement(count: number, color = '#2f6fed'): HTMLElement {
-  const el = document.createElement('div')
-  const size = Math.round(Math.min(44, 16 + Math.sqrt(count) * 2.8))
-  const s = el.style
-  s.boxSizing = 'border-box'
-  s.width = `${size}px`
-  s.height = `${size}px`
-  s.borderRadius = '50%'
-  s.background = color
-  s.border = '2px solid #fff'
-  s.boxShadow = `0 0 0 ${Math.max(4, Math.round(size / 5))}px ${color}40, 0 0 4px rgba(0, 0, 0, 0.4)`
-  s.cursor = 'pointer'
-  return el
-}
+// Density dots and the cluster renderer that used them are GONE (2026-07-24,
+// the three-map unification): both existed to keep the DOM-marker count down,
+// and the canvas renderer (src/lib/doorCanvas.ts) has no marker count to keep
+// down. Below PINS_MIN_ZOOM every door simply paints as a tiny dot, which is
+// a truer density picture than a bubble and costs less. Don't reintroduce
+// clustering without a reason that isn't marker cost.
 
-/** Cluster bubbles as plain density dots. */
-export function dotClusterRenderer(color = '#2f6fed') {
-  return {
-    render({ count, position }: { count: number; position: google.maps.LatLng }) {
-      return new google.maps.marker.AdvancedMarkerElement({
-        position,
-        content: densityDotElement(count, color),
-        // Above single pins, below anything intentionally raised (anchors,
-        // member avatars).
-        zIndex: 300,
-      })
-    },
-  }
-}
-
-// --- Per-device layer preferences (same pattern as Hunt's pin mode). ---
+// --- Per-device layer preferences. ---
 
 /** Turf shading is a tri-state on the Scout, Squad, and Turf maps: shade
  * only YOUR turf, shade ALL turf (yours emphasized), or none. Scout and the
@@ -449,6 +421,31 @@ export function readMapPref(key: string, fallback: boolean): boolean {
 export function writeMapPref(key: string, value: boolean) {
   try {
     localStorage.setItem(key, String(value))
+  } catch {
+    /* private mode — the toggle still works this session */
+  }
+}
+
+/** Every map flips its pins between colored dots and house-number chips
+ * under its own key (Scout `hunt-pin-mode`, Squad `squad-pin-mode`, cutter
+ * `turf-pin-mode`) — the control is identical, the DEFAULT is per-map
+ * (Scout opens on dots, the other two on numbers, matching what each map
+ * did before the toggles existed). */
+export type PinMode = 'dots' | 'numbers'
+
+export function readPinMode(key: string, fallback: PinMode): PinMode {
+  try {
+    const v = localStorage.getItem(key)
+    if (v === 'dots' || v === 'numbers') return v
+  } catch {
+    /* private mode — fall through */
+  }
+  return fallback
+}
+
+export function writePinMode(key: string, mode: PinMode) {
+  try {
+    localStorage.setItem(key, mode)
   } catch {
     /* private mode — the toggle still works this session */
   }

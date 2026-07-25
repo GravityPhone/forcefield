@@ -7,13 +7,16 @@ import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
   CityLimitsLayer,
   TurfAreasLayer,
-  densityDotElement,
   readMapPref,
+  readPinMode,
   readTurfShadeMode,
   writeMapPref,
+  writePinMode,
   writeTurfShadeMode,
 } from '@/lib/mapLayers'
-import type { DoorPoint, TurfShadeMode } from '@/lib/mapLayers'
+import type { DoorPoint, PinMode, TurfShadeMode } from '@/lib/mapLayers'
+import { DoorCanvasLayer, PINS_MIN_ZOOM } from '@/lib/doorCanvas'
+import type { DoorPaintState } from '@/lib/doorCanvas'
 import { geocodeAndCache } from '@/lib/geocode'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { localToday, startOfLocalDayISO } from '@/lib/day'
@@ -29,18 +32,10 @@ import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockLog, Kn
 const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
 const NEARBY_CAP = 50
 const DEFAULT_ZOOM = 14
-/** Below this zoom, numbers mode falls back to plain dots — house numbers
- * only mean something when you're close enough to be looking at one street,
- * and number chips floating over a whole town read as noise. */
-const NUMBERS_MIN_ZOOM = 16
-/** Below this zoom, individual pins give way to clickable density dots (tap
- * one to zoom into that area). With ~10k geocoded doors, town-level zooms
- * would otherwise mean thousands of live marker elements — the main thing
- * that made Hunt crawl on phones. */
-const PINS_MIN_ZOOM = 15
-/** Hard cap on live pin elements even at close zoom (nearest to the map
- * center win) — a safety net, not something a normal viewport hits. */
-const MAX_VISIBLE_PINS = 2000
+// Zoom thresholds (PINS_MIN_ZOOM / NUMBERS_MIN_ZOOM) and the tap radius are
+// shared with Squad and the turf cutter — see src/lib/doorCanvas.ts. Below
+// PINS_MIN_ZOOM every door paints as a tiny dot; door taps don't land there
+// either (at town zoom a 22px tap circle covers half a street).
 
 /** `persons(count)` is a PostgREST aggregate embed — one row per address
  * with a single { count } entry, giving household roster size in the same
@@ -67,32 +62,17 @@ const searching = ref(false)
 const locating = ref(false)
 const pinsLoading = ref(false)
 // Whether pins draw as colored dots or as labeled house-number chips. Persisted
-// so a canvasser's choice survives reloads/navigation.
-type PinMode = 'dots' | 'numbers'
-const pinMode = ref<PinMode>(readStoredPinMode())
+// so a canvasser's choice survives reloads/navigation. Scout defaults to dots
+// (the county-wide view is mostly read at a glance); Squad and the cutter
+// default to numbers.
+const pinMode = ref<PinMode>(readPinMode('hunt-pin-mode', 'dots'))
 const locatedAddressId = ref<string | null>(null)
-/** Tracked so numbers mode can fall back to dots when zoomed out; only
- * threshold CROSSINGS trigger a restyle (per-tick loops over every marker
- * were the map's old perf sin). */
-let mapZoom = DEFAULT_ZOOM
-
-function readStoredPinMode(): PinMode {
-  try {
-    return localStorage.getItem('hunt-pin-mode') === 'numbers' ? 'numbers' : 'dots'
-  } catch {
-    return 'dots'
-  }
-}
 
 function setPinMode(mode: PinMode) {
   if (pinMode.value === mode) return
   pinMode.value = mode
-  try {
-    localStorage.setItem('hunt-pin-mode', mode)
-  } catch {
-    /* private-mode / storage disabled — the toggle still works this session */
-  }
-  refreshAllPinStyles()
+  writePinMode('hunt-pin-mode', mode)
+  doorLayer?.requestRepaint()
 }
 
 // Map layer toggles (turf area shading, city limits), prefs shared with the
@@ -147,17 +127,23 @@ const doorInfoByAddress = new Map<string, DoorPoint>()
 const loadError = ref('')
 
 let map: google.maps.Map | null = null
-/** Every geocoded door we know about, markers or not — the source of truth
- * the viewport renderer draws from. Markers are created lazily for doors in
- * (or near) the current view and torn down when they leave it. */
+/** Every geocoded door we know about — the row data behind the pins the
+ * canvas layer paints (it holds only id/lat/lng/house itself). */
 const addressById = new Map<string, AddressWithRoster>()
-let densityMarkers: google.maps.marker.AdvancedMarkerElement[] = []
-let densityZoom = -1
 let areasLayer: TurfAreasLayer | null = null
 let cityLayer: CityLimitsLayer | null = null
-let markersByAddress = new Map<string, google.maps.marker.AdvancedMarkerElement>()
+/** Every door paints on ONE canvas (see src/lib/doorCanvas.ts) — the same
+ * renderer the turf cutter and the Squad map use. There are no marker
+ * elements, so there's no pin cap, no viewport-scoped marker churn, and no
+ * density-dot decluttering: those all existed to keep the DOM marker count
+ * survivable and none of it is needed here. */
+let doorLayer: DoorCanvasLayer | null = null
 let initStarted = false
 let searchTimer: ReturnType<typeof setTimeout> | undefined
+/** Set once the canvasser pans/zooms themselves — the opening frame lands
+ * asynchronously (map-first startup), and it must never yank a map someone
+ * is already reading. */
+let userMovedMap = false
 
 watch(
   () => talk.activeTab,
@@ -309,204 +295,93 @@ function applyStatusAndSummary(
   if (todayData) knockedToday.value = todayData
 }
 
-/** Each pin is a plain DOM dot (AdvancedMarkerElement content) rather than a
- * classic google.maps.Symbol — far lighter than legacy Marker overlays.
- * Fixed size — the viewport renderer handles decluttering (density dots when
- * zoomed out), so there's no per-zoom rescale loop (that loop, running over
- * every marker on every zoom tick, was the main thing making the map feel
- * sluggish). Located pin stands out larger with a dark ring and sits above
- * its neighbors. */
-function styleMarker(marker: google.maps.marker.AdvancedMarkerElement, addressId: string) {
-  const el = marker.content as HTMLElement
-  const outcome = doorOutcomeFor(addressId)
-  const isLocated = addressId === locatedAddressId.value
-  // Common look (shared by both modes): outcome color, white ring, dark ring
-  // + raised when it's the located pin.
-  const s = el.style
-  s.boxSizing = 'border-box'
-  s.cursor = 'pointer'
-  s.background = outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
-  s.border = isLocated ? '3px solid #111' : '1.5px solid #ffffff'
-  // Dark halo = someone already knocked here today (any canvasser) — the
-  // "don't re-knock" cue, distinct from the located pin's solid dark border.
-  s.outline = knockedToday.value.has(addressId) ? '2px solid #111' : ''
-  s.outlineOffset = '1.5px'
-  // "Your turf" ring: the turf's own color, so multiple turfs (yours vs your
-  // squad's) stay tellable apart. Layered under the usual drop shadow.
-  const turfId = turfByAddress.value.get(addressId)
+/** Paint state for one door on the shared canvas layer — the Scout reading
+ * of the same three-band model every map uses: outermost halo, membership
+ * ring, then the status fill.
+ *
+ * fill  = the door's effective knock status (doorStatusOutcome), blue when
+ *         nobody's been yet.
+ * ring  = whose ground this is — your turf's own color, so a crew holding
+ *         several turfs can still tell them apart. The LOCATED door takes
+ *         the ring for itself in near-black: whatever you just tapped has
+ *         to be unmistakable, and it's one door against a screen of many.
+ * halo  = somebody in the org already knocked here TODAY — the
+ *         "don't double-knock" cue, and the one band that survives at
+ *         tiny-dot zooms.
+ *
+ * Never returns null: unlike the turf cutter (which paints only the street
+ * being worked), Scout shows every geocoded door, so every door is also
+ * tappable. */
+function paintForDoor(id: string): DoorPaintState {
+  const outcome = doorOutcomeFor(id)
+  const isLocated = id === locatedAddressId.value
+  const turfId = turfByAddress.value.get(id)
   const turfColor = turfId ? myTurfColorById.value.get(turfId) : undefined
-  s.boxShadow = turfColor
-    ? `0 0 0 3px ${turfColor}, 0 0 3px rgba(0, 0, 0, 0.45)`
-    : '0 0 3px rgba(0, 0, 0, 0.45)'
-  s.color = '#ffffff'
-  s.display = 'flex'
-  s.alignItems = 'center'
-  s.justifyContent = 'center'
-  s.fontWeight = '700'
-  s.lineHeight = '1'
-  marker.zIndex = isLocated ? 1000 : 1
-
-  // `data-house` is stamped in addOrUpdateMarker; fall back to a dot when a
-  // row has no parseable house number so those pins never render blank —
-  // or when the map is zoomed too far out for house numbers to mean much.
-  if (pinMode.value === 'numbers' && mapZoom >= NUMBERS_MIN_ZOOM && el.dataset.house) {
-    el.textContent = el.dataset.house
-    s.borderRadius = '7px'
-    s.width = 'auto'
-    s.height = isLocated ? '24px' : '19px'
-    s.minWidth = isLocated ? '24px' : '19px'
-    s.padding = '0 5px'
-    s.fontSize = isLocated ? '13px' : '11px'
-  } else {
-    el.textContent = ''
-    const size = isLocated ? 22 : 14
-    s.borderRadius = '50%'
-    s.width = `${size}px`
-    s.height = `${size}px`
-    s.minWidth = ''
-    s.padding = ''
-    s.fontSize = ''
+  return {
+    fill: outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX,
+    ring: isLocated ? LOCATED_RING : (turfColor ?? null),
+    halo: knockedToday.value.has(id) ? TODAY_HALO : null,
+    emphasis: isLocated,
   }
 }
 
-function refreshAllPinStyles() {
-  for (const [id, marker] of markersByAddress) styleMarker(marker, id)
+/** Near-black rings: the door you just tapped, and the "already knocked
+ * today" band. Deliberately not themed — like the outcome colors, these
+ * have to read the same in every scheme and in direct sun. */
+const LOCATED_RING = '#111111'
+const TODAY_HALO = '#111111'
+
+// Any state the paint function reads repaints the one canvas (rAF-coalesced
+// inside the layer). This replaces what used to be a loop restyling every
+// marker's ~18 inline style properties.
+//
+// Deliberately NOT a deep watch: these refs hold Maps/Sets of ~15k entries
+// and a deep traverse on every trigger costs more than the repaint does.
+// Whole-set refreshes REPLACE the Map (new reference, so this fires); the
+// only in-place mutations are in the realtime feed below, which repaints
+// explicitly.
+watch(
+  [statusByHousehold, knockedToday, myTurfColorById, locatedAddressId],
+  () => doorLayer?.requestRepaint(),
+)
+
+function canvasDoorOf(a: AddressWithRoster) {
+  const n = houseNumber(a.street)
+  return { id: a.id, lat: a.lat!, lng: a.lng!, house: n > 0 ? String(n) : '' }
 }
 
-/** Register a door (turf membership, shading info, viewport source-of-truth)
- * without creating a marker for it. */
+/** Register a door: its row data, its turf membership (for shading), and its
+ * point on the canvas layer. Everything that learns about a door at runtime
+ * — locate, the street backfill, a geocode landing — goes through here, so
+ * the canvas never misses one. */
 function registerDoor(a: AddressWithRoster) {
   if (a.turf_id) turfByAddress.value.set(a.id, a.turf_id)
   else turfByAddress.value.delete(a.id)
   if (a.lat == null || a.lng == null) return
   addressById.set(a.id, a)
   doorInfoByAddress.set(a.id, { lat: a.lat, lng: a.lng, street: a.street })
+  doorLayer?.upsertDoor(canvasDoorOf(a))
 }
 
-function addOrUpdateMarker(a: AddressWithRoster) {
+function addDoor(a: AddressWithRoster) {
   registerDoor(a)
-  if (a.lat == null || a.lng == null || !map) return
-  let marker = markersByAddress.get(a.id)
-  if (!marker) {
-    const content = document.createElement('div')
-    const num = houseNumber(a.street)
-    if (num > 0) content.dataset.house = String(num)
-    marker = new google.maps.marker.AdvancedMarkerElement({
-      position: { lat: a.lat, lng: a.lng },
-      title: `${a.street}${a.unit ? ' ' + a.unit : ''}`,
-      content,
-      gmpClickable: true,
-      map,
-    })
-    marker.addListener('gmp-click', () => void locateAddress(a))
-    markersByAddress.set(a.id, marker)
-  } else {
-    marker.position = { lat: a.lat, lng: a.lng }
-  }
-  styleMarker(marker, a.id)
+  doorLayer?.requestRepaint()
 }
 
-// --- Viewport-scoped pins ---
-// Runs on every map 'idle' (pan/zoom settled, never per zoom tick). Zoomed
-// out: no individual pins at all, just density dots — tap one to zoom into
-// that patch. Zoomed in: real pins, but only for doors inside the padded
-// viewport; everything that left the view is torn down.
-
-function renderVisibleDoors() {
-  if (!map) return
-  const zoom = map.getZoom() ?? mapZoom
-  if (zoom < PINS_MIN_ZOOM) {
-    for (const [id, marker] of markersByAddress) {
-      if (id === locatedAddressId.value) continue // keep the highlighted pin
-      marker.map = null
-      markersByAddress.delete(id)
-    }
-    renderDensityDots(zoom)
+/** Map taps: a door if one is under the finger (and we're zoomed in enough
+ * for that to mean a specific door — at town zoom a 22px tap circle covers
+ * half a street), otherwise "let me see the map", which scrolls the page up
+ * to it. Pins have no elements of their own now, so this one listener
+ * handles both cases. */
+function onMapClick(e: google.maps.MapMouseEvent) {
+  const zoomedIn = (map?.getZoom() ?? 0) >= PINS_MIN_ZOOM
+  const id = zoomedIn && e.latLng ? doorLayer?.doorAt(e.latLng) : null
+  const address = id ? addressById.get(id) : null
+  if (address) {
+    void locateAddress(address)
     return
   }
-  clearDensityDots()
-  const b = map.getBounds()
-  if (!b) return
-  // Pad by half a viewport each side so short pans land on already-built pins.
-  const ne = b.getNorthEast()
-  const sw = b.getSouthWest()
-  const padLat = (ne.lat() - sw.lat()) / 2
-  const padLng = (ne.lng() - sw.lng()) / 2
-  const minLat = sw.lat() - padLat
-  const maxLat = ne.lat() + padLat
-  const minLng = sw.lng() - padLng
-  const maxLng = ne.lng() + padLng
-  let inView: AddressWithRoster[] = []
-  for (const a of addressById.values()) {
-    if (a.lat! >= minLat && a.lat! <= maxLat && a.lng! >= minLng && a.lng! <= maxLng) {
-      inView.push(a)
-    }
-  }
-  if (inView.length > MAX_VISIBLE_PINS) {
-    const c = map.getCenter()
-    const origin = c ? { lat: c.lat(), lng: c.lng() } : FALLBACK_CENTER
-    inView = inView
-      .sort(
-        (a, b2) =>
-          flatDistance({ lat: a.lat!, lng: a.lng! }, origin) -
-          flatDistance({ lat: b2.lat!, lng: b2.lng! }, origin),
-      )
-      .slice(0, MAX_VISIBLE_PINS)
-  }
-  const keepIds = new Set(inView.map((a) => a.id))
-  for (const [id, marker] of markersByAddress) {
-    if (!keepIds.has(id) && id !== locatedAddressId.value) {
-      marker.map = null
-      markersByAddress.delete(id)
-    }
-  }
-  for (const a of inView) {
-    if (!markersByAddress.has(a.id)) addOrUpdateMarker(a)
-  }
-}
-
-/** Grid-bucket every known door into ~72px cells and draw one clickable
- * density dot per cell (same look as the Squad/Turf cluster bubbles).
- * Tapping a dot zooms to that cell's doors — repeat taps walk you down
- * until real pins take over at PINS_MIN_ZOOM. */
-function renderDensityDots(zoom: number) {
-  // Buckets are global (not viewport-dependent) — panning at the same zoom
-  // reuses the existing dots; only a zoom change re-bins.
-  if (zoom === densityZoom && densityMarkers.length) return
-  clearDensityDots()
-  if (!map) return
-  densityZoom = zoom
-  const worldPx = 256 * 2 ** zoom
-  const cellLng = (360 * 72) / worldPx
-  const cellLat = cellLng * 0.77 // ≈cos(40°N): keeps cells visually squarish here
-  type Bucket = { n: number; sumLat: number; sumLng: number; b: google.maps.LatLngBounds }
-  const buckets = new Map<string, Bucket>()
-  for (const a of addressById.values()) {
-    const key = `${Math.floor(a.lat! / cellLat)}:${Math.floor(a.lng! / cellLng)}`
-    let bkt = buckets.get(key)
-    if (!bkt) buckets.set(key, (bkt = { n: 0, sumLat: 0, sumLng: 0, b: new google.maps.LatLngBounds() }))
-    bkt.n++
-    bkt.sumLat += a.lat!
-    bkt.sumLng += a.lng!
-    bkt.b.extend({ lat: a.lat!, lng: a.lng! })
-  }
-  for (const bkt of buckets.values()) {
-    const marker = new google.maps.marker.AdvancedMarkerElement({
-      position: { lat: bkt.sumLat / bkt.n, lng: bkt.sumLng / bkt.n },
-      content: densityDotElement(bkt.n),
-      zIndex: 300,
-      gmpClickable: true,
-      map,
-    })
-    marker.addListener('gmp-click', () => map?.fitBounds(bkt.b, 48))
-    densityMarkers.push(marker)
-  }
-}
-
-function clearDensityDots() {
-  for (const marker of densityMarkers) marker.map = null
-  densityMarkers = []
-  densityZoom = -1
+  scrollHuntToTop()
 }
 
 /** Where the map should open: the door this canvasser most recently knocked
@@ -526,19 +401,20 @@ async function lastKnockCenter(): Promise<{ lat: number; lng: number } | null> {
   return loc ? { lat: loc.lat, lng: loc.lng } : null
 }
 
+// MAP-FIRST STARTUP (2026-07-24, ported from the turf cutter): initialize
+// awaits ONLY the Maps API, so the basemap is on screen in well under a
+// second. The ~10k addresses and the two ~15k-row knock views used to be
+// awaited BEFORE the map was even constructed — the whole "Scout takes
+// forever to load" feeling. They now stream in behind a live map and the
+// opening frame applies when they land (unless the canvasser already moved
+// the map themselves, in which case they're reading it and we leave it be).
+
 async function initialize() {
   pinsLoading.value = true
-  let mapAddresses: AddressWithRoster[] = []
-  let lastCenter: { lat: number; lng: number } | null = null
   try {
-    ;[mapAddresses, , lastCenter] = await Promise.all([
-      fetchMapData(),
-      loadMaps(),
-      lastKnockCenter(),
-      fetchTurfs(),
-    ])
+    await loadMaps()
   } catch {
-    loadError.value = 'Could not load the map or address data. Check your connection.'
+    loadError.value = 'Could not load the map. Check your connection.'
     initStarted = false
     pinsLoading.value = false
     return
@@ -549,10 +425,10 @@ async function initialize() {
   }
 
   map = new google.maps.Map(mapEl.value, {
-    center: lastCenter ?? FALLBACK_CENTER,
-    zoom: lastCenter ? 16 : DEFAULT_ZOOM,
-    // mapId is what lets pins render as AdvancedMarker elements instead of
-    // the heavier legacy Marker overlays.
+    center: FALLBACK_CENTER,
+    zoom: DEFAULT_ZOOM,
+    // mapId is still required — the member/you-are-here AdvancedMarkers and
+    // the cloud style both need it, even though doors are canvas now.
     mapId: GOOGLE_MAPS_MAP_ID,
     renderingType: MAP_RENDERING_TYPE,
     streetViewControl: false,
@@ -563,26 +439,48 @@ async function initialize() {
     // one-finger panning is what canvassers actually want here.
     gestureHandling: 'greedy',
   })
-  // Tapping the map background (not a pin — markers fire their own 'gmp-click'
-  // instead of bubbling to this one) means "let me see the map", so bring
-  // it into view. Tapping a pin doesn't hit this listener at all.
-  map.addListener('click', scrollHuntToTop)
-  mapZoom = map.getZoom() ?? DEFAULT_ZOOM
-  map.addListener('zoom_changed', () => {
-    const wasClose = mapZoom >= NUMBERS_MIN_ZOOM
-    mapZoom = map?.getZoom() ?? mapZoom
-    if (pinMode.value === 'numbers' && wasClose !== mapZoom >= NUMBERS_MIN_ZOOM) {
-      refreshAllPinStyles()
-    }
+  map.addListener('click', (e: google.maps.MapMouseEvent) => onMapClick(e))
+  map.addListener('dragstart', () => {
+    userMovedMap = true
   })
-  // Pins and density dots are (re)built on every settled pan/zoom — never
-  // per zoom tick, and never for doors outside the padded viewport.
-  map.addListener('idle', renderVisibleDoors)
+
+  doorLayer = new DoorCanvasLayer(map, {
+    pinMode: () => pinMode.value,
+    paintFor: paintForDoor,
+  })
+  // Settled pan/zoom: the canvas repaints only if the view outgrew its
+  // painted box or landed on a new zoom. Mid-animation it just stretches via
+  // its CSS transform — there is nothing per-frame to do here.
+  map.addListener('idle', () => doorLayer?.checkView())
 
   areasLayer = new TurfAreasLayer(map)
   areasLayer.setVisible(turfShade.value !== 'off')
   cityLayer = new CityLimitsLayer(map)
   if (showCity.value) void cityLayer.setVisible(true)
+
+  void loadMapData()
+}
+
+/** Everything the map needs that isn't the map — fetched behind a basemap
+ * that's already interactive. */
+async function loadMapData() {
+  let mapAddresses: AddressWithRoster[] = []
+  let lastCenter: { lat: number; lng: number } | null = null
+  try {
+    ;[mapAddresses, lastCenter] = await Promise.all([
+      fetchMapData(),
+      lastKnockCenter(),
+      fetchTurfs(),
+    ])
+  } catch {
+    loadError.value = 'Could not load the address data. Check your connection.'
+    pinsLoading.value = false
+    return
+  }
+  if (!map) {
+    pinsLoading.value = false
+    return
+  }
 
   const bounds = new google.maps.LatLngBounds()
   const myTurfBounds = new google.maps.LatLngBounds()
@@ -594,12 +492,18 @@ async function initialize() {
       myTurfBounds.extend({ lat: a.lat, lng: a.lng })
     }
   }
+  doorLayer?.requestRepaint()
   // Opening frame, best anchor first: all of your (and your today-squad's)
   // turf together — the crew's whole assignment in one look — then your last
   // knocked door, then every pin. (Fitting all ~10k county-wide pins zooms
   // way out and looks like the map "doesn't know where to start".)
-  if (!myTurfBounds.isEmpty()) map.fitBounds(myTurfBounds, 64)
-  else if (!lastCenter && !bounds.isEmpty()) map.fitBounds(bounds, 48)
+  if (!userMovedMap) {
+    if (!myTurfBounds.isEmpty()) map.fitBounds(myTurfBounds, 64)
+    else if (lastCenter) {
+      map.setCenter(lastCenter)
+      map.setZoom(16)
+    } else if (!bounds.isEmpty()) map.fitBounds(bounds, 48)
+  }
   rebuildTurfAreas()
   pinsLoading.value = false
   // Entering Scout with a door already loaded in Talk: land on that door
@@ -626,12 +530,12 @@ async function refreshStatuses() {
   } catch {
     return
   }
-  refreshAllPinStyles()
+  doorLayer?.requestRepaint()
   rebuildTurfAreas()
 }
 
 /** Pan/zoom to a turf's doors (the chips above the map). Works off door
- * data, not markers — the turf's pins may not be built yet. */
+ * data, not markers. */
 function focusTurf(turfId: string) {
   if (!map) return
   const bounds = new google.maps.LatLngBounds()
@@ -643,9 +547,7 @@ function focusTurf(turfId: string) {
   if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
 }
 
-/** Re-frame around every turf that's yours — same view the map opens with.
- * Works off door data, not markers — with viewport-scoped pins, your turf's
- * markers may not exist while you're panned somewhere else. */
+/** Re-frame around every turf that's yours — same view the map opens with. */
 function focusAllMyTurf() {
   if (!map) return
   const bounds = new google.maps.LatLngBounds()
@@ -665,29 +567,6 @@ function focusAllMyTurf() {
 // refreshStatuses, so only INSERTs are streamed. ---
 
 let knockFeed: RealtimeChannel | null = null
-
-/** One-shot pop on a pin as its knock lands — the "plink" that makes live
- * progress watchable. Squadmates' knocks pop bigger than the rest of the
- * org's. Web Animations API (not a CSS class) so back-to-back knocks on
- * nearby doors each restart cleanly. */
-function plinkMarker(addressId: string, isSquadmate: boolean) {
-  const marker = markersByAddress.get(addressId)
-  const el = marker?.content as HTMLElement | undefined
-  if (!marker || !el) return
-  const prevZ = marker.zIndex
-  marker.zIndex = 1500
-  const anim = el.animate(
-    [
-      { transform: 'scale(1)' },
-      { transform: `scale(${isSquadmate ? 2.6 : 1.8})` },
-      { transform: 'scale(1)' },
-    ],
-    { duration: isSquadmate ? 750 : 550, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' },
-  )
-  anim.onfinish = () => {
-    marker.zIndex = prevZ ?? 1
-  }
-}
 
 function subscribeToKnockFeed() {
   knockFeed = supabase
@@ -710,11 +589,13 @@ function subscribeToKnockFeed() {
       if (new Date(knock.occurred_at) >= new Date(startOfLocalDayISO())) {
         knockedToday.value.add(knock.household_id)
       }
-      const marker = markersByAddress.get(knock.household_id)
-      if (marker) {
-        styleMarker(marker, knock.household_id)
-        plinkMarker(knock.household_id, squadmateIds.value.has(knock.canvasser_id))
-      }
+      // Both writes above are in-place, so repaint explicitly (the watcher
+      // above only sees whole-Map replacements). The "plink" is the one-shot
+      // pop that makes live progress watchable — bigger for a squadmate than
+      // for the rest of the org — and drives its own short animation loop.
+      doorLayer?.requestRepaint()
+      const mine = squadmateIds.value.has(knock.canvasser_id)
+      doorLayer?.plink(knock.household_id, mine ? 2.6 : 1.8, mine ? 750 : 550)
     })
     .subscribe()
 }
@@ -817,16 +698,11 @@ async function locateAddress(address: AddressWithRoster) {
       const loc = await geocodeAndCache(address)
       if (loc) Object.assign(address, loc)
     }
-    // Shrink the previously-located pin back to normal (the per-zoom restyle
-    // loop used to do this implicitly; it's gone now, so do it explicitly).
-    const prevLocatedId = locatedAddressId.value
+    // The previously-located door shrinks back on its own — the whole canvas
+    // repaints off locatedAddressId, so there's nothing per-pin to undo.
     locatedAddressId.value = address.id
     locatedAddress.value = address
-    if (prevLocatedId && prevLocatedId !== address.id) {
-      const prev = markersByAddress.get(prevLocatedId)
-      if (prev) styleMarker(prev, prevLocatedId)
-    }
-    addOrUpdateMarker(address)
+    addDoor(address)
 
     if (address.lat != null && address.lng != null && map) {
       map.panTo({ lat: address.lat, lng: address.lng })
@@ -862,7 +738,8 @@ async function locateAddress(address: AddressWithRoster) {
       }
     }
 
-    for (const a of geocoded.slice(0, NEARBY_CAP)) addOrUpdateMarker(a)
+    for (const a of geocoded.slice(0, NEARBY_CAP)) registerDoor(a)
+    doorLayer?.requestRepaint()
   } finally {
     locating.value = false
   }
@@ -1029,6 +906,10 @@ function onFullscreenChange() {
   setTimeout(() => {
     if (!map) return
     google.maps.event.trigger(map, 'resize')
+    // The canvas sizes itself off the map div — re-measure after the
+    // transition or it keeps painting at the old dimensions.
+    doorLayer?.checkView()
+    doorLayer?.requestRepaint()
   }, 0)
 }
 
@@ -1049,9 +930,8 @@ onUnmounted(() => {
     void supabase.removeChannel(knockFeed)
     knockFeed = null
   }
-  for (const marker of markersByAddress.values()) marker.map = null
-  markersByAddress.clear()
-  clearDensityDots()
+  doorLayer?.dispose()
+  doorLayer = null
   addressById.clear()
   doorInfoByAddress.clear()
   areasLayer?.dispose()

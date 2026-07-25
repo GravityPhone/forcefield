@@ -1,20 +1,25 @@
-// One-canvas door renderer for the turf cutter (2026-07-23; slimmed to
-// doors-only 2026-07-24 when the derived street lines came out as squiggles
-// that didn't sit on the real roads — the map now stays blank except for
-// the doors of the street being located/trimmed).
+// One-canvas door renderer — the shared rendering engine for ALL THREE maps
+// (Scout / Squad / Turf cutter) since 2026-07-24. Born in the turf cutter
+// (2026-07-23) and generalized outward once it was clear the cutter was the
+// only map that felt fast.
 //
-// Doors paint ONLY when the view's paintFor returns a state for them (the
-// draft's covered doors, the located street, the street being trimmed, and
-// — with the Turf layer on at pin zoom — other turfs' doors as "taken"
-// symbols); everything else is invisible AND untappable. The lasso still
-// hit-tests every door — it selects data, not pixels.
+// WHY ONE CANVAS AND NOT MARKERS: an AdvancedMarkerElement is a custom
+// element wrapping your content div — 2-3 DOM nodes each — and Google writes
+// a fresh transform to every one of them on every frame of every pan and
+// zoom. At a couple thousand doors that's thousands of per-frame style
+// writes plus layout, which is what made Scout crawl on phones (and what
+// the density-blob decluttering was working around). Here EVERY door paints
+// onto ONE canvas sized ~2x the viewport, positioned in an OverlayView pane
+// so it rides map pans for free. Google moves one DOM node. A full repaint
+// is a few milliseconds, so paint-state changes just repaint (rAF-coalesced)
+// and there is no pin cap at all.
 //
-// Rendering stays the VAN/Felt/Mapbox-class approach: everything paints on
-// ONE canvas sized ~2× the viewport, positioned in an OverlayView pane so it
-// rides map pans for free. A full repaint is a few milliseconds, so state
-// changes just repaint (rAF-coalesced). Hit testing runs in Web-Mercator
-// "world" coordinates (precomputed per door) off the map's own click events
-// — the canvas never intercepts pointer events.
+// Doors paint ONLY when the view's paintFor returns a state for them, and an
+// unpainted door is also untappable — that's how the cutter shows just the
+// located/trimmed street while Scout and Squad simply return a state for
+// everything. Hit testing runs in Web-Mercator "world" coordinates
+// (precomputed per door) off the map's own click events; the canvas never
+// intercepts pointer events.
 //
 // Zoom fix (the "dots drift while zooming" bug): during a zoom animation the
 // painted bitmap is at the OLD scale, and repositioning only its top-left
@@ -25,6 +30,15 @@
 // repaint redraws it crisp. Never repaint mid-animation: getZoom() returns
 // the TARGET zoom while getBounds() still animates, so a mid-zoom repaint
 // computes a misregistered box.
+
+/** Below this zoom every map drops to tiny dots — no house numbers, no
+ * tap-sized pins. Shared so all three maps change scale at the same moment. */
+export const PINS_MIN_ZOOM = 15
+/** House-number pills need at least this zoom (AND pinMode() === 'numbers').
+ * Numbers only mean something once you're looking at one street. */
+export const NUMBERS_MIN_ZOOM = 16
+/** How close a tap must land to count as hitting a door. */
+export const TAP_RADIUS_PX = 22
 
 /** Fixed red accent for the taken-door symbol — matches the outcomes' "no"
  * red, but only ever drawn as a ring/glyph, never a fill. */
@@ -41,12 +55,27 @@ export interface CanvasDoor {
   house: string
 }
 
+/** An avatar/initial chip drawn ON a door — Squad's "who covered this today"
+ * marker, and the glyph inside the cutter's taken symbol. */
+export interface DoorBadge {
+  /** Single letter fallback while the image loads (or when there's none). */
+  initial: string
+  /** Decoded avatar bitmap, or null. Call requestRepaint() from its onload. */
+  img: HTMLImageElement | null
+  /** Backing color behind the initial fallback. */
+  color?: string
+}
+
 export interface DoorPaintState {
-  /** Dot fill — cutter status color (white when there's nothing to say). */
+  /** Dot fill — the door's status color (white/blue when there's nothing to
+   * say, depending on the map). */
   fill: string
-  /** Outer membership ring — ONE uniform color for draft doors (2026-07-24;
-   * the per-turf palette rings are gone), null for none. */
+  /** Membership ring just outside the white gap: the cutter's draft ring, a
+   * turf's identity color, Scout's located highlight. Null for none. */
   ring: string | null
+  /** Outermost hairline ring, outside `ring` — Scout's "somebody already
+   * knocked here today" halo. */
+  halo?: string | null
   /** Thin status ring tight around the fill — the partly-signed yellow
    * around a green center. */
   innerRing?: string | null
@@ -54,26 +83,36 @@ export interface DoorPaintState {
   outline?: string | null
   /** House-number pill text color (defaults to white). */
   ink?: string
-  /** Door is in the current draft — drawn bigger, above plain doors. */
-  inDraft: boolean
+  /** Draw bigger and above plain doors — the cutter's draft members, Scout's
+   * located door, Squad's assign selection. */
+  emphasis: boolean
+  /** Fade the whole door (Squad greys doors it can't hand out). 0-1. */
+  alpha?: number
+  /** Breathing ring — Squad's assign-mode walk anchor. Costs an animation
+   * loop while any painted door asks for it, so use it for transient modes
+   * only, never as a resting state. */
+  pulse?: boolean
+  /** Avatar chip carried BY the door (Squad: the squadmate who knocked it
+   * today). Drawn inside the pill / as the dot's center; the status color
+   * stays legible as the surrounding ring. */
+  badge?: DoorBadge | null
   /** Door belongs to a DIFFERENT turf: draw the uniform "taken" symbol — a
    * hollow red-ringed disc carrying the owner-assignee's avatar/initial (or
-   * a slash when unassigned) — instead of a status dot. Deliberately a
+   * a slash when unassigned) — INSTEAD of a status dot. Deliberately a
    * symbol, never a solid red fill, so it can't be read as a closed door. */
-  taken?: { initial: string; img: HTMLImageElement | null } | null
+  taken?: DoorBadge | null
 }
 
 export interface DoorCanvasOptions {
   /** Below this zoom painted doors draw as tiny dots (no numbers). */
-  minPinZoom: number
+  minPinZoom?: number
   /** House-number pills need at least this zoom (AND pinMode() === 'numbers'). */
-  numbersMinZoom: number
+  numbersMinZoom?: number
   /** Live pin-style pref, read fresh each repaint like paintFor — 'numbers'
-   * still falls back to dots below numbersMinZoom, same as Scout. */
+   * still falls back to dots below numbersMinZoom. */
   pinMode(): 'dots' | 'numbers'
   /** Paint state for a door, or null to skip it entirely — unpainted doors
-   * are also invisible to doorAt(), so only the located/trimmed street is
-   * tappable door-by-door. */
+   * are also invisible to doorAt(). */
   paintFor(id: string): DoorPaintState | null
 }
 
@@ -95,14 +134,27 @@ function worldY(lat: number): number {
  * span per side. Pans within the margin cost nothing. */
 const PAD = 0.5
 
+/** One "plink" — the pop a door makes as a live knock lands on it. */
+interface Plink {
+  start: number
+  duration: number
+  peak: number
+}
+
 export class DoorCanvasLayer {
   private overlay: google.maps.OverlayView
   private map: google.maps.Map
-  private opts: DoorCanvasOptions
+  private opts: Required<Pick<DoorCanvasOptions, 'minPinZoom' | 'numbersMinZoom'>> &
+    DoorCanvasOptions
   private canvas: HTMLCanvasElement | null = null
   private doors = new Map<string, InternalDoor>()
   private raf = 0
   private disposed = false
+  // Animation state — a self-limiting rAF loop runs ONLY while a plink is in
+  // flight or a painted door asked to pulse, then stops on its own.
+  private plinks = new Map<string, Plink>()
+  private wantsPulse = false
+  private animRaf = 0
   // Painted-region state: reposition is valid while the view stays inside
   // the painted world-coordinate box (zoom drift is absorbed by the CSS
   // scale transform until the next settled repaint).
@@ -114,7 +166,11 @@ export class DoorCanvasLayer {
 
   constructor(map: google.maps.Map, opts: DoorCanvasOptions) {
     this.map = map
-    this.opts = opts
+    this.opts = {
+      minPinZoom: opts.minPinZoom ?? PINS_MIN_ZOOM,
+      numbersMinZoom: opts.numbersMinZoom ?? NUMBERS_MIN_ZOOM,
+      ...opts,
+    }
     this.overlay = new google.maps.OverlayView()
     this.overlay.onAdd = () => {
       const c = document.createElement('canvas')
@@ -149,6 +205,32 @@ export class DoorCanvasLayer {
 
   upsertDoor(d: CanvasDoor) {
     this.doors.set(d.id, { ...d, wx: worldX(d.lng), wy: worldY(d.lat) })
+  }
+
+  removeDoor(id: string) {
+    this.doors.delete(id)
+  }
+
+  hasDoor(id: string): boolean {
+    return this.doors.has(id)
+  }
+
+  /** Pop a door as a knock lands on it — the "plink" that makes a teammate's
+   * live progress watchable. `peak` is the scale multiplier at the top of
+   * the bounce (squadmates pop harder than the rest of the org).
+   *
+   * Skipped below minPinZoom: the door is a 2px dot there, so the pop is
+   * invisible anyway — and animating means repainting every painted door at
+   * 60fps, which at town zoom is the whole county. Falls back to a single
+   * repaint so the new status color still lands. */
+  plink(id: string, peak = 1.8, duration = 600) {
+    if (!this.doors.has(id)) return
+    if ((this.map.getZoom() ?? 0) < this.opts.minPinZoom) {
+      this.requestRepaint()
+      return
+    }
+    this.plinks.set(id, { start: performance.now(), duration, peak })
+    this.runAnimation()
   }
 
   /** Re-anchor (and mid-zoom, re-scale) the canvas to the live projection.
@@ -189,6 +271,21 @@ export class DoorCanvasLayer {
     })
   }
 
+  /** Drives pulses and plinks. Self-limiting: the loop stops the moment no
+   * plink is live and the last repaint saw no pulsing door. */
+  private runAnimation() {
+    if (this.animRaf || this.disposed) return
+    this.animRaf = requestAnimationFrame(() => {
+      this.animRaf = 0
+      const now = performance.now()
+      for (const [id, p] of this.plinks) {
+        if (now - p.start >= p.duration) this.plinks.delete(id)
+      }
+      this.repaint()
+      if (this.plinks.size || this.wantsPulse) this.runAnimation()
+    })
+  }
+
   /** For map 'idle': repaint if the settled view outgrew the painted box or
    * arrived at a new zoom. */
   checkView() {
@@ -202,7 +299,7 @@ export class DoorCanvasLayer {
 
   /** Nearest PAINTED door within `pxRadius` screen pixels, or null. Doors
    * whose paintFor is null don't count. */
-  doorAt(latLng: google.maps.LatLng, pxRadius: number): string | null {
+  doorAt(latLng: google.maps.LatLng, pxRadius: number = TAP_RADIUS_PX): string | null {
     const zoom = this.map.getZoom()
     if (zoom == null) return null
     const scale = 2 ** zoom
@@ -321,10 +418,16 @@ export class DoorCanvasLayer {
     const p = proj.fromLatLngToDivPixel(this.paintedNW)
     if (!p) return
 
-    canvas.width = Math.round(cssW * dpr)
-    canvas.height = Math.round(cssH * dpr)
-    canvas.style.width = `${cssW}px`
-    canvas.style.height = `${cssH}px`
+    // Assigning width/height also clears the bitmap — only do it when the
+    // size actually changed, so a 60fps plink loop isn't reallocating.
+    const wantW = Math.round(cssW * dpr)
+    const wantH = Math.round(cssH * dpr)
+    if (canvas.width !== wantW || canvas.height !== wantH) {
+      canvas.width = wantW
+      canvas.height = wantH
+      canvas.style.width = `${cssW}px`
+      canvas.style.height = `${cssH}px`
+    }
     canvas.style.left = `${p.x}px`
     canvas.style.top = `${p.y}px`
     canvas.style.transform = ''
@@ -340,61 +443,43 @@ export class DoorCanvasLayer {
     const px = (wx: number) => (wx - wxMin) * scale
     const py = (wy: number) => (wy - wyMin) * scale
 
-    const dot = (x: number, y: number, r: number, fill: string) => {
-      ctx.beginPath()
-      ctx.arc(x, y, r, 0, Math.PI * 2)
-      ctx.fillStyle = fill
-      ctx.fill()
-    }
-    const pill = (x: number, y: number, text: string, h: number, paint: DoorPaintState) => {
-      const w = Math.max(h, 10 + text.length * 7)
-      const ringW = 2.5
-      if (paint.ring) {
-        rounded(ctx, x - w / 2 - ringW, y - h / 2 - ringW, w + ringW * 2, h + ringW * 2, 9)
-        ctx.fillStyle = paint.ring
-        ctx.fill()
-      }
-      rounded(ctx, x - w / 2 - 1.5, y - h / 2 - 1.5, w + 3, h + 3, 8)
-      ctx.fillStyle = '#fff'
-      ctx.fill()
-      rounded(ctx, x - w / 2, y - h / 2, w, h, 7)
-      ctx.fillStyle = paint.fill
-      ctx.fill()
-      if (paint.outline) {
-        rounded(ctx, x - w / 2, y - h / 2, w, h, 7)
-        ctx.strokeStyle = paint.outline
-        ctx.lineWidth = 1
-        ctx.stroke()
-      }
-      if (paint.innerRing) {
-        rounded(ctx, x - w / 2 + 1, y - h / 2 + 1, w - 2, h - 2, 6)
-        ctx.strokeStyle = paint.innerRing
-        ctx.lineWidth = 2
-        ctx.stroke()
-      }
-      ctx.fillStyle = paint.ink ?? '#fff'
-      ctx.fillText(text, x, y + 0.5)
-    }
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.font = PILL_FONT
 
-    // Painter's order: excluded doors first, draft members above them.
+    // Animation clock: plink scale per door, and a shared 0-1 pulse phase.
+    const now = performance.now()
+    const pulsePhase = (now % 1100) / 1100
+    this.wantsPulse = false
+    const plinkScale = (id: string) => {
+      const p2 = this.plinks.get(id)
+      if (!p2) return 1
+      const t = Math.min(1, (now - p2.start) / p2.duration)
+      // Up fast, back down with an ease-out settle.
+      const bump = Math.sin(t * Math.PI)
+      return 1 + (p2.peak - 1) * bump * bump
+    }
+
+    // Painter's order: plain doors first, emphasized ones above them.
     const late: InternalDoor[] = []
     for (const d of this.doors.values()) {
       if (d.wx < wxMin || d.wx > wxMax || d.wy < wyMin || d.wy > wyMax) continue
       const paint = this.opts.paintFor(d.id)
       if (!paint) continue
-      if (paint.inDraft) {
+      if (paint.emphasis) {
         late.push(d)
         continue
       }
-      this.paintDoor(ctx, px(d.wx), py(d.wy), d, paint, tiny, numbers, dot, pill)
+      this.paintDoor(ctx, px(d.wx), py(d.wy), d, paint, tiny, numbers, plinkScale(d.id), pulsePhase)
     }
     for (const d of late) {
       const paint = this.opts.paintFor(d.id)
-      if (paint) this.paintDoor(ctx, px(d.wx), py(d.wy), d, paint, tiny, numbers, dot, pill)
+      if (paint) {
+        this.paintDoor(ctx, px(d.wx), py(d.wy), d, paint, tiny, numbers, plinkScale(d.id), pulsePhase)
+      }
     }
+    // A pulsing door was painted this frame — keep the clock running.
+    if (this.wantsPulse && !this.animRaf) this.runAnimation()
   }
 
   private paintDoor(
@@ -405,38 +490,122 @@ export class DoorCanvasLayer {
     paint: DoorPaintState,
     tiny: boolean,
     numbers: boolean,
-    dot: (x: number, y: number, r: number, fill: string) => void,
-    pill: (x: number, y: number, text: string, h: number, paint: DoorPaintState) => void,
+    pop: number,
+    pulsePhase: number,
   ) {
+    const alpha = paint.alpha ?? 1
+    const scaled = pop !== 1
+    if (alpha !== 1 || scaled) {
+      ctx.save()
+      if (alpha !== 1) ctx.globalAlpha = alpha
+      if (scaled) {
+        ctx.translate(x, y)
+        ctx.scale(pop, pop)
+        ctx.translate(-x, -y)
+      }
+    }
+    if (paint.pulse) {
+      this.wantsPulse = true
+      // Breathing ring around the door — the walk anchor's "tap another door
+      // and everything between comes with it" cue.
+      const r = (tiny ? 6 : 13) + pulsePhase * (tiny ? 4 : 9)
+      ctx.save()
+      ctx.globalAlpha = alpha * (1 - pulsePhase) * 0.9
+      strokeCircle(ctx, x, y, r, paint.ring ?? paint.fill, 2.5)
+      ctx.restore()
+    }
     if (paint.taken) {
       // Taken doors stay a symbol at every zoom — their house number matters
       // less than "not yours", so no number pill.
       this.paintTaken(ctx, x, y, paint.taken, tiny)
-      return
-    }
-    if (tiny) {
-      if (paint.ring) dot(x, y, 4.5, paint.ring)
-      if (paint.innerRing) dot(x, y, 3.2, paint.innerRing)
-      dot(x, y, 2.2, paint.fill)
+    } else if (tiny) {
+      if (paint.halo) dot(ctx, x, y, 5.6, paint.halo)
+      if (paint.ring) dot(ctx, x, y, 4.5, paint.ring)
+      if (paint.innerRing) dot(ctx, x, y, 3.2, paint.innerRing)
+      dot(ctx, x, y, 2.2, paint.fill)
       if (paint.outline) strokeCircle(ctx, x, y, 2.2, paint.outline, 1)
+    } else if (numbers && d.house) {
+      this.paintPill(ctx, x, y, d.house, paint)
+    } else {
+      this.paintDot(ctx, x, y, paint)
+    }
+    if (alpha !== 1 || scaled) ctx.restore()
+  }
+
+  /** Round door: halo / membership ring / white gap / status fill, with the
+   * badge avatar (when there is one) filling the center and the status color
+   * demoted to a thick surrounding band so both still read. */
+  private paintDot(ctx: CanvasRenderingContext2D, x: number, y: number, paint: DoorPaintState) {
+    const badge = paint.badge
+    const r = paint.emphasis || badge ? 8.5 : 6.5
+    if (paint.halo) dot(ctx, x, y, r + 6, paint.halo)
+    if (paint.ring) dot(ctx, x, y, r + 4, paint.ring)
+    dot(ctx, x, y, r + 1.5, '#fff')
+    if (badge) {
+      dot(ctx, x, y, r, paint.fill)
+      drawBadge(ctx, x, y, r - 2.6, badge)
       return
     }
-    if (numbers && d.house) {
-      const h = paint.inDraft ? 20 : 19
-      pill(x, y, d.house, h, paint)
-      return
-    }
-    const r = paint.inDraft ? 8.5 : 6.5
-    if (paint.ring) dot(x, y, r + 4, paint.ring)
-    dot(x, y, r + 1.5, '#fff')
     if (paint.innerRing) {
       // Partly signed: yellow band around the green center.
-      dot(x, y, r, paint.innerRing)
-      dot(x, y, r - 2.5, paint.fill)
+      dot(ctx, x, y, r, paint.innerRing)
+      dot(ctx, x, y, r - 2.5, paint.fill)
     } else {
-      dot(x, y, r, paint.fill)
+      dot(ctx, x, y, r, paint.fill)
       if (paint.outline) strokeCircle(ctx, x, y, r, paint.outline, 1.2)
     }
+  }
+
+  /** House-number chip. With a badge the pill grows a leading avatar circle,
+   * same shape the Squad map's DOM pins had. */
+  private paintPill(
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    text: string,
+    paint: DoorPaintState,
+  ) {
+    const badge = paint.badge
+    const h = badge ? 22 : paint.emphasis ? 21 : 19
+    const badgeR = h / 2 - 2.5
+    const w = Math.max(h, 10 + text.length * 7) + (badge ? badgeR * 2 + 3 : 0)
+    const ringW = 2.5
+    if (paint.halo) {
+      rounded(ctx, x - w / 2 - ringW - 2, y - h / 2 - ringW - 2, w + (ringW + 2) * 2, h + (ringW + 2) * 2, 11)
+      ctx.fillStyle = paint.halo
+      ctx.fill()
+    }
+    if (paint.ring) {
+      rounded(ctx, x - w / 2 - ringW, y - h / 2 - ringW, w + ringW * 2, h + ringW * 2, 9)
+      ctx.fillStyle = paint.ring
+      ctx.fill()
+    }
+    rounded(ctx, x - w / 2 - 1.5, y - h / 2 - 1.5, w + 3, h + 3, 8)
+    ctx.fillStyle = '#fff'
+    ctx.fill()
+    rounded(ctx, x - w / 2, y - h / 2, w, h, 7)
+    ctx.fillStyle = paint.fill
+    ctx.fill()
+    if (paint.outline) {
+      rounded(ctx, x - w / 2, y - h / 2, w, h, 7)
+      ctx.strokeStyle = paint.outline
+      ctx.lineWidth = 1
+      ctx.stroke()
+    }
+    if (paint.innerRing) {
+      rounded(ctx, x - w / 2 + 1, y - h / 2 + 1, w - 2, h - 2, 6)
+      ctx.strokeStyle = paint.innerRing
+      ctx.lineWidth = 2
+      ctx.stroke()
+    }
+    let textX = x
+    if (badge) {
+      const bx = x - w / 2 + badgeR + 2.5
+      drawBadge(ctx, bx, y, badgeR, badge)
+      textX = x + badgeR + 1.5
+    }
+    ctx.fillStyle = paint.ink ?? '#fff'
+    ctx.fillText(text, textX, y + 0.5)
   }
 
   /** The "someone else's turf" symbol: a white disc in a red ring — clearly
@@ -446,30 +615,19 @@ export class DoorCanvasLayer {
     ctx: CanvasRenderingContext2D,
     x: number,
     y: number,
-    badge: { initial: string; img: HTMLImageElement | null },
+    badge: DoorBadge,
     tiny: boolean,
   ) {
     if (tiny) {
-      ctx.beginPath()
-      ctx.arc(x, y, 3.2, 0, Math.PI * 2)
-      ctx.fillStyle = '#fff'
-      ctx.fill()
+      dot(ctx, x, y, 3.2, '#fff')
       strokeCircle(ctx, x, y, 3.2, TAKEN_ACCENT, 1.6)
       return
     }
     const r = 7.5
-    ctx.beginPath()
-    ctx.arc(x, y, r, 0, Math.PI * 2)
-    ctx.fillStyle = '#fff'
-    ctx.fill()
+    dot(ctx, x, y, r, '#fff')
     const img = badge.img
     if (img && img.complete && img.naturalWidth > 0) {
-      ctx.save()
-      ctx.beginPath()
-      ctx.arc(x, y, r - 1, 0, Math.PI * 2)
-      ctx.clip()
-      ctx.drawImage(img, x - r + 1, y - r + 1, (r - 1) * 2, (r - 1) * 2)
-      ctx.restore()
+      drawBadge(ctx, x, y, r - 1, badge)
     } else if (badge.initial) {
       ctx.fillStyle = TAKEN_ACCENT
       ctx.font = '800 9px system-ui, sans-serif'
@@ -489,8 +647,38 @@ export class DoorCanvasLayer {
   dispose() {
     this.disposed = true
     if (this.raf) cancelAnimationFrame(this.raf)
+    if (this.animRaf) cancelAnimationFrame(this.animRaf)
+    this.plinks.clear()
     this.overlay.setMap(null)
   }
+}
+
+/** Avatar disc: the bitmap clipped round when it's decoded, else the
+ * initial on the badge color (matching how the DOM markers degraded). */
+function drawBadge(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, badge: DoorBadge) {
+  const img = badge.img
+  dot(ctx, x, y, r, badge.color ?? '#fff')
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(x, y, r, 0, Math.PI * 2)
+    ctx.clip()
+    ctx.drawImage(img, x - r, y - r, r * 2, r * 2)
+    ctx.restore()
+    return
+  }
+  if (!badge.initial) return
+  ctx.fillStyle = '#fff'
+  ctx.font = `800 ${Math.round(r * 1.25)}px system-ui, sans-serif`
+  ctx.fillText(badge.initial, x, y + 0.5)
+  ctx.font = PILL_FONT
+}
+
+function dot(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, fill: string) {
+  ctx.beginPath()
+  ctx.arc(x, y, r, 0, Math.PI * 2)
+  ctx.fillStyle = fill
+  ctx.fill()
 }
 
 function strokeCircle(
@@ -522,6 +710,6 @@ function rounded(ctx: CanvasRenderingContext2D, x: number, y: number, w: number,
 function worldToLatLng(wx: number, wy: number): google.maps.LatLng {
   const lng = (wx / 256) * 360 - 180
   const n = Math.PI - (2 * Math.PI * wy) / 256
-  const lat = (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n)))
+  const lat = (180 / Math.PI) * (Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))))
   return new google.maps.LatLng(lat, lng)
 }

@@ -52,8 +52,14 @@ import AppSelect from '@/components/ui/AppSelect.vue'
 import type { SelectOption } from '@/components/ui/AppSelect.vue'
 import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
-import { CityLimitsLayer, readMapPref, writeMapPref } from '@/lib/mapLayers'
-import { DoorCanvasLayer } from '@/lib/doorCanvas'
+import { CityLimitsLayer, readMapPref, readPinMode, writeMapPref, writePinMode } from '@/lib/mapLayers'
+import type { PinMode } from '@/lib/mapLayers'
+import {
+  DoorCanvasLayer,
+  NUMBERS_MIN_ZOOM,
+  PINS_MIN_ZOOM,
+  TAP_RADIUS_PX,
+} from '@/lib/doorCanvas'
 import type { DoorPaintState } from '@/lib/doorCanvas'
 import {
   geocodeAndCache,
@@ -155,10 +161,8 @@ const statusByAddress = ref<Map<string, KnockOutcome>>(new Map())
 const partlySignedDoors = ref<Set<string>>(new Set())
 
 // --- Zoom thresholds ---
-/** Trim-mode doors show house-number pills from this zoom (dots below). */
-const NUMBERS_MIN_ZOOM = 16
-/** Below this zoom trim-mode doors are tiny dots and door taps don't land. */
-const PINS_MIN_ZOOM = 15
+// PINS_MIN_ZOOM / NUMBERS_MIN_ZOOM / TAP_RADIUS_PX are shared with Scout and
+// Squad (src/lib/doorCanvas.ts) — all three maps change scale together.
 /** Other turfs' doors (Turf layer on — crossed out while cutting, colored
  * by owner in overview) start showing this much farther OUT than regular
  * door pins — 2026-07-24 later still, user call: seeing whose ground is
@@ -166,8 +170,6 @@ const PINS_MIN_ZOOM = 15
  * gated behind the toggle, still tiny dots below PINS_MIN_ZOOM
  * (doorCanvas's own tiny-vs-full split is unchanged). */
 const TAKEN_MIN_ZOOM = PINS_MIN_ZOOM - 2
-/** How close (screen px) a tap must land to a door to count as tapping it. */
-const TAP_RADIUS_PX = 22
 /** How close (screen px) the lasso LINE must pass to a door to brush it —
  * touching a dot with the stroke selects it, no enclosure needed. */
 const LASSO_BRUSH_PX = 16
@@ -525,24 +527,12 @@ function toggleTakenDoors() {
 // unlike Hunt, the cutter always showed numbers automatically once zoomed
 // in before this toggle existed, so 'numbers' is the behavior-preserving
 // default; 'dots' still falls back automatically below NUMBERS_MIN_ZOOM.
-type PinMode = 'dots' | 'numbers'
-function readStoredPinMode(): PinMode {
-  try {
-    return localStorage.getItem('turf-pin-mode') === 'dots' ? 'dots' : 'numbers'
-  } catch {
-    return 'numbers'
-  }
-}
-const pinMode = ref<PinMode>(readStoredPinMode())
+const pinMode = ref<PinMode>(readPinMode('turf-pin-mode', 'numbers'))
 
 function setPinMode(mode: PinMode) {
   if (pinMode.value === mode) return
   pinMode.value = mode
-  try {
-    localStorage.setItem('turf-pin-mode', mode)
-  } catch {
-    /* private-mode / storage disabled — the toggle still works this session */
-  }
+  writePinMode('turf-pin-mode', mode)
   doorLayer?.requestRepaint()
 }
 
@@ -830,7 +820,7 @@ function paintForDoor(id: string): DoorPaintState | null {
     return {
       fill: FILL_OPEN,
       ring: null,
-      inDraft: false,
+      emphasis: false,
       taken: {
         initial: who ? (who.display_name || who.username).charAt(0).toUpperCase() : '',
         img: who ? badgeImage(who.avatar) : null,
@@ -854,7 +844,8 @@ function paintForDoor(id: string): DoorPaintState | null {
     innerRing,
     outline: fill === FILL_OPEN ? OPEN_OUTLINE : null,
     ink: fill === FILL_OPEN ? OPEN_INK : '#fff',
-    inDraft,
+    // Draft members draw bigger and above their neighbors.
+    emphasis: inDraft,
   }
 }
 
@@ -2569,6 +2560,36 @@ function onFullscreenChange() {
   }, 0)
 }
 
+// --- Jump to top / bottom ---
+// The cutting screen stacks up tall (map + draft table + turf card), so a
+// pair of fixed left-edge buttons saves a long thumb-scroll. They only exist
+// once the page is meaningfully longer than the viewport, and never in
+// fullscreen (the map owns the screen then).
+
+/** Page must be this much taller than the viewport before the pair appears. */
+const JUMP_MIN_OVERFLOW = 1.4
+
+const pageTall = ref(false)
+const scrollY = ref(0)
+
+function measureScroll() {
+  const el = document.scrollingElement ?? document.documentElement
+  pageTall.value = el.scrollHeight > window.innerHeight * JUMP_MIN_OVERFLOW
+  scrollY.value = el.scrollTop
+}
+
+const showJump = computed(() => pageTall.value && !isFullscreen.value)
+const atPageTop = computed(() => scrollY.value < 40)
+const atPageBottom = computed(() => {
+  const el = document.scrollingElement ?? document.documentElement
+  return scrollY.value + window.innerHeight >= el.scrollHeight - 40
+})
+
+function jumpTo(where: 'top' | 'bottom') {
+  const el = document.scrollingElement ?? document.documentElement
+  el.scrollTo({ top: where === 'top' ? 0 : el.scrollHeight, behavior: 'smooth' })
+}
+
 onMounted(() => {
   if (!initStarted) {
     initStarted = true
@@ -2576,6 +2597,15 @@ onMounted(() => {
   }
   document.addEventListener('fullscreenchange', onFullscreenChange)
   document.addEventListener('webkitfullscreenchange', onFullscreenChange)
+  window.addEventListener('scroll', measureScroll, { passive: true })
+  window.addEventListener('resize', measureScroll)
+  measureScroll()
+})
+
+// Cards appear and disappear as the draft opens/closes and streets pile up —
+// re-measure after the DOM settles rather than polling.
+watch([draftOpen, segments, streetMatches, selectedTurfId], () => void nextTick(measureScroll), {
+  deep: true,
 })
 
 onUnmounted(() => {
@@ -2584,6 +2614,8 @@ onUnmounted(() => {
   cityLayer?.dispose()
   document.removeEventListener('fullscreenchange', onFullscreenChange)
   document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
+  window.removeEventListener('scroll', measureScroll)
+  window.removeEventListener('resize', measureScroll)
 })
 </script>
 
@@ -3143,6 +3175,30 @@ onUnmounted(() => {
         </template>
         <p v-if="listError" class="error">{{ listError }}</p>
       </div>
+
+      <!-- Long-page shortcut: the cutting screen runs well past one viewport
+           (map + streets table + turf card), so park a jump pair on the left
+           edge rather than making anyone thumb-scroll the whole way. -->
+      <div v-if="showJump" class="jump-nav" role="group" aria-label="Jump on page">
+        <button
+          type="button"
+          class="jump-btn"
+          :disabled="atPageTop"
+          aria-label="Jump to top of page"
+          @click="jumpTo('top')"
+        >
+          <span aria-hidden="true">↑</span> Top
+        </button>
+        <button
+          type="button"
+          class="jump-btn"
+          :disabled="atPageBottom"
+          aria-label="Jump to bottom of page"
+          @click="jumpTo('bottom')"
+        >
+          <span aria-hidden="true">↓</span> Bottom
+        </button>
+      </div>
     </div>
   </AppShell>
 </template>
@@ -3152,6 +3208,48 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+/* --- Jump to top / bottom ---
+   Fixed to the left edge, clear of the phone tab bar. Sits below the tab
+   bar's z-index (40) so it can never cover navigation. */
+
+.jump-nav {
+  position: fixed;
+  left: 0.5rem;
+  bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px));
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+@media (min-width: 768px) {
+  .jump-nav {
+    bottom: 1.25rem;
+  }
+}
+
+.jump-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+  opacity: 0.92;
+}
+
+.jump-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* --- Sweep bar --- */

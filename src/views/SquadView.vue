@@ -2,7 +2,6 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { RealtimeChannel } from '@supabase/supabase-js'
-import { MarkerClusterer } from '@googlemaps/markerclusterer'
 import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
@@ -12,11 +11,14 @@ import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
   TurfAreasLayer,
-  dotClusterRenderer,
+  readPinMode,
   readTurfShadeMode,
+  writePinMode,
   writeTurfShadeMode,
 } from '@/lib/mapLayers'
-import type { DoorPoint, TurfShadeMode } from '@/lib/mapLayers'
+import type { DoorPoint, PinMode, TurfShadeMode } from '@/lib/mapLayers'
+import { DoorCanvasLayer, PINS_MIN_ZOOM } from '@/lib/doorCanvas'
+import type { CanvasDoor, DoorBadge, DoorPaintState } from '@/lib/doorCanvas'
 import { rangeCovers, walkRanges } from '@/lib/doorPath'
 import { OUTCOME_HEX, PIN_DEFAULT_HEX, doorStatusOutcome } from '@/lib/outcomes'
 import { avatarUrl } from '@/lib/avatars'
@@ -32,9 +34,9 @@ import type { ChatProfile, HouseholdLatestKnock, KnockLog } from '@/types'
 // Fallback map center: Richwood, OH (the imported demo subset).
 const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
 
-/** Below this zoom the house-number chips fall back to plain dots — numbers
- * only mean something when you're close enough to read a street. */
-const NUMBERS_MIN_ZOOM = 16
+// Zoom thresholds and the tap radius are shared with Scout and the turf
+// cutter — see src/lib/doorCanvas.ts, which is also where every door on all
+// three maps is actually painted.
 
 const router = useRouter()
 const route = useRoute()
@@ -319,14 +321,21 @@ const mapCardEl = ref<HTMLElement | null>(null)
 let map: google.maps.Map | null = null
 let areasLayer: TurfAreasLayer | null = null
 const markersByMember = new Map<string, google.maps.marker.AdvancedMarkerElement>()
-// One house-number pin per geocoded turf door, decluttered by a clusterer
-// (a turf can hold thousands of doors). Tapping one opens it in Talk mode.
-const markersByDoor = new Map<string, google.maps.marker.AdvancedMarkerElement>()
-let doorClusterer: MarkerClusterer | null = null
+/** Every turf door paints on ONE canvas — the shared renderer Scout and the
+ * turf cutter use (src/lib/doorCanvas.ts). The old per-door AdvancedMarkers
+ * plus a MarkerClusterer are gone: clustering only ever existed to keep the
+ * DOM marker count survivable, and there are no DOM markers now. Member
+ * avatars stay real markers — there are at most a handful of them. */
+let doorLayer: DoorCanvasLayer | null = null
 const mapFailed = ref(false)
-/** Tracked so number chips can fall back to dots when zoomed out; only
- * threshold crossings restyle. */
-let mapZoom = 13
+const pinMode = ref<PinMode>(readPinMode('squad-pin-mode', 'numbers'))
+
+function setPinMode(mode: PinMode) {
+  if (pinMode.value === mode) return
+  pinMode.value = mode
+  writePinMode('squad-pin-mode', mode)
+  doorLayer?.requestRepaint()
+}
 
 const turfColorById = computed(() => new Map(squadTurfs.value.map((t) => [t.id, t.color])))
 const turfById = computed(() => new Map(squadTurfs.value.map((t) => [t.id, t])))
@@ -352,14 +361,15 @@ async function initMap() {
     return
   }
   areasLayer?.dispose()
+  doorLayer?.dispose()
+  doorLayer = null
   for (const marker of markersByMember.values()) marker.map = null
   markersByMember.clear()
-  doorClusterer?.clearMarkers()
-  markersByDoor.clear()
   map = new google.maps.Map(el, {
     center: FALLBACK_CENTER,
     zoom: 13,
-    // mapId — required for AdvancedMarker avatar pins.
+    // mapId — required for the member AdvancedMarker avatar pins and the
+    // cloud style (doors are canvas, and don't need it).
     mapId: GOOGLE_MAPS_MAP_ID,
     renderingType: MAP_RENDERING_TYPE,
     streetViewControl: false,
@@ -368,13 +378,14 @@ async function initMap() {
     gestureHandling: 'greedy',
   })
   areasLayer = new TurfAreasLayer(map)
-  doorClusterer = new MarkerClusterer({ map, markers: [], renderer: dotClusterRenderer() })
-  mapZoom = map.getZoom() ?? mapZoom
-  map.addListener('zoom_changed', () => {
-    const wasClose = mapZoom >= NUMBERS_MIN_ZOOM
-    mapZoom = map?.getZoom() ?? mapZoom
-    if (wasClose !== mapZoom >= NUMBERS_MIN_ZOOM) restyleAllDoors()
+  doorLayer = new DoorCanvasLayer(map, {
+    pinMode: () => pinMode.value,
+    paintFor: paintForDoor,
   })
+  map.addListener('click', (e: google.maps.MapMouseEvent) => onMapClick(e))
+  // Settled pan/zoom: the canvas repaints only if the view outgrew its
+  // painted box or landed on a new zoom — nothing per-frame.
+  map.addListener('idle', () => doorLayer?.checkView())
   applyMapData(true)
 }
 
@@ -385,7 +396,7 @@ function applyMapData(refit = false) {
 
   void rebuildAreas()
 
-  applyDoorMarkers()
+  applyDoorPins()
 
   // One avatar marker per member, sitting on their last geocoded knock.
   const members = mySquad.value?.members ?? []
@@ -506,141 +517,99 @@ async function rebuildAreas() {
   )
 }
 
-/** House-number chip for one door, filled with the door's knock STATUS —
- * the exact colors the Scout map uses (doorStatusOutcome: green only when
- * everyone signed, yellow partly signed, red closed-no, blue untouched).
- * Doors a squad member knocked TODAY additionally wear that member's animal
- * avatar, so the map shows who covered what as the day unfolds. In assign
- * mode, selected doors wear the member's color instead, doors the viewer
- * can't hand out fade back, and the avatars sit out (door-picking needs the
- * selection colors legible, not decorated). */
-function styleDoorMarker(marker: google.maps.marker.AdvancedMarkerElement, door: TurfDoor) {
-  const el = marker.content as HTMLElement
-  const s = el.style
-  const status = statusByDoor.value.get(door.id)
-  const outcome = doorStatusOutcome(status?.outcome, status?.signed_count, status?.person_count)
-  const turfColor = turfColorById.value.get(door.turf_id)
-  const showNumber = !!el.dataset.house && mapZoom >= NUMBERS_MIN_ZOOM
-  const knocker = assigningMember.value ? undefined : todayKnockerByDoor.value.get(door.id)
-  const member = knocker ? memberById.value.get(knocker.canvasserId) : undefined
-  // textContent assignment also clears any previous badge child.
-  el.textContent = showNumber ? el.dataset.house! : ''
-  if (member) {
-    const url = avatarUrl(member.avatar)
-    const badge = document.createElement(url ? 'img' : 'span') as HTMLElement
-    const bs = badge.style
-    if (url) {
-      const img = badge as HTMLImageElement
-      img.src = url
-      img.alt = ''
-      bs.objectFit = 'contain'
-      bs.padding = '1px'
-      bs.background = '#fff'
-    } else {
-      // No animal picked — same initial-letter fallback as their big marker.
-      badge.textContent = memberName(member).slice(0, 1).toUpperCase()
-      bs.display = 'flex'
-      bs.alignItems = 'center'
-      bs.justifyContent = 'center'
-      bs.fontSize = '10px'
-      bs.background = memberColor(member)
-    }
-    bs.boxSizing = 'border-box'
-    bs.width = '17px'
-    bs.height = '17px'
-    bs.borderRadius = '50%'
-    bs.flexShrink = '0'
-    bs.pointerEvents = 'none'
-    el.prepend(badge)
+/** Avatar bitmaps for the today-knocker badge, by slug. Images decode async
+ * — the canvas repaints when one lands; until then the door shows the
+ * member's initial on their own color. */
+const badgeImgCache = new Map<string, HTMLImageElement>()
+function badgeImage(slug: string | null | undefined): HTMLImageElement | null {
+  const url = avatarUrl(slug)
+  if (!slug || !url) return null
+  let img = badgeImgCache.get(slug)
+  if (!img) {
+    img = new Image()
+    img.onload = () => doorLayer?.requestRepaint()
+    img.src = url
+    badgeImgCache.set(slug, img)
   }
-  // Avatar pins run a hair bigger than the plain 19/14px chips — today's
-  // covered doors are the map's live story, they get to pop.
-  const size = member ? 22 : showNumber ? 19 : 14
-  s.boxSizing = 'border-box'
-  s.cursor = 'pointer'
-  s.display = 'flex'
-  s.alignItems = 'center'
-  s.justifyContent = 'center'
-  s.gap = '3px'
-  s.height = `${size}px`
-  s.minWidth = `${size}px`
-  s.padding = showNumber ? (member ? '0 6px 0 2px' : '0 5px') : '0'
-  s.borderRadius = showNumber ? `${Math.ceil(size / 2)}px` : '50%'
-  s.width = showNumber ? 'auto' : `${size}px`
-  s.fontSize = '11px'
-  s.fontWeight = '700'
-  s.lineHeight = '1'
-  s.color = '#fff'
-  s.opacity = '1'
-  s.background = outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
-  s.border = '1.5px solid #fff'
-  // Thin ring in the turf's own color, so doors from different turfs (yours
-  // vs a squadmate's directly-assigned turf) stay tellable apart.
-  s.boxShadow = turfColor
-    ? `0 0 0 2px ${turfColor}, 0 0 3px rgba(0, 0, 0, 0.45)`
-    : '0 0 3px rgba(0, 0, 0, 0.45)'
-  const assignee = assigningMember.value
-  s.animation = ''
-  if (assignee) {
-    if (assignSelected.value.has(door.id)) {
-      s.background = memberColor(assignee)
-      s.boxShadow = '0 0 0 2.5px #fff, 0 0 5px rgba(0, 0, 0, 0.55)'
-      // The walk anchor pulses: the next unselected door tapped sweeps the
-      // whole walk from here.
-      if (door.id === assignAnchorId.value) {
-        s.animation = 'squad-anchor-pulse 1.1s ease-in-out infinite'
-      }
-    } else if (poolParentOf(door) === null) {
-      s.opacity = '0.35'
-    }
-  }
-  marker.title = member ? `${door.street} — ${memberName(member)}` : door.street
-  // Today's avatar pins ride above their plain neighbors.
-  marker.zIndex = member ? 10 : null
+  return img
 }
 
-/** Sync the door pins with the current turf doors: add new ones, restyle
- * existing ones (knock status changes), drop any no longer in turf. */
-function applyDoorMarkers() {
-  if (!map || !doorClusterer) return
-  const alive = new Set<string>()
-  const fresh: google.maps.marker.AdvancedMarkerElement[] = []
+/** Paint state for one turf door — the Squad reading of the shared
+ * three-band model (halo / membership ring / status fill):
+ *
+ * fill  = the door's knock STATUS, the exact colors Scout and the cutter use
+ *         (doorStatusOutcome: green only when everyone signed, yellow partly
+ *         signed, red closed-no, blue untouched).
+ * ring  = the owning turf's own color, so doors from the crew's turf and a
+ *         squadmate's directly-assigned turf stay tellable apart.
+ * badge = the squadmate who knocked this door TODAY — their animal avatar
+ *         rides in the middle of the pin, so the map tells the story of who
+ *         covered what as the day unfolds.
+ *
+ * ASSIGN MODE overrides most of that: doors in the pile take the member's
+ * color, the walk anchor breathes (tap another door and the whole walk
+ * between comes with it), doors the viewer can't hand out fade back, and the
+ * avatars sit out — door-picking needs the selection legible, not decorated. */
+function paintForDoor(id: string): DoorPaintState | null {
+  const door = turfDoors.value.get(id)
+  if (!door) return null
+  const status = statusByDoor.value.get(id)
+  const outcome = doorStatusOutcome(status?.outcome, status?.signed_count, status?.person_count)
+  const fill = outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
+  const turfColor = turfColorById.value.get(door.turf_id) ?? null
+
+  const assignee = assigningMember.value
+  if (assignee) {
+    const picked = assignSelected.value.has(id)
+    return {
+      fill: picked ? memberColor(assignee) : fill,
+      ring: picked ? '#ffffff' : turfColor,
+      emphasis: picked,
+      pulse: picked && id === assignAnchorId.value,
+      alpha: !picked && poolParentOf(door) === null ? 0.35 : 1,
+    }
+  }
+
+  const knocker = todayKnockerByDoor.value.get(id)
+  const member = knocker ? memberById.value.get(knocker.canvasserId) : undefined
+  let badge: DoorBadge | null = null
+  if (member) {
+    badge = {
+      initial: memberName(member).slice(0, 1).toUpperCase(),
+      img: badgeImage(member.avatar),
+      color: memberColor(member),
+    }
+  }
+  return {
+    fill,
+    ring: turfColor,
+    // Today's covered doors are the map's live story — they draw bigger and
+    // above their plain neighbors.
+    emphasis: !!badge,
+    badge,
+  }
+}
+
+/** Push the current turf doors onto the canvas layer. Idempotent — safe to
+ * call whenever either the map or the door data finishes loading first. */
+function applyDoorPins() {
+  if (!doorLayer) return
+  const points: CanvasDoor[] = []
   for (const door of turfDoors.value.values()) {
     if (door.lat == null || door.lng == null) continue
-    alive.add(door.id)
-    let marker = markersByDoor.get(door.id)
-    if (!marker) {
-      const content = document.createElement('div')
-      const num = houseNumber(door.street)
-      if (num > 0) content.dataset.house = String(num)
-      marker = new google.maps.marker.AdvancedMarkerElement({
-        position: { lat: door.lat, lng: door.lng },
-        title: door.street,
-        content,
-        gmpClickable: true,
-      })
-      marker.addListener('gmp-click', () => onDoorTap(door.id))
-      markersByDoor.set(door.id, marker)
-      fresh.push(marker)
-    }
-    styleDoorMarker(marker, door)
+    const n = houseNumber(door.street)
+    points.push({ id: door.id, lat: door.lat, lng: door.lng, house: n > 0 ? String(n) : '' })
   }
-  const stale: google.maps.marker.AdvancedMarkerElement[] = []
-  for (const [id, marker] of markersByDoor) {
-    if (!alive.has(id)) {
-      stale.push(marker)
-      markersByDoor.delete(id)
-    }
-  }
-  if (stale.length) doorClusterer.removeMarkers(stale)
-  if (fresh.length) doorClusterer.addMarkers(fresh)
+  doorLayer.setDoors(points)
 }
 
-/** Restyle a single door's pin in place (live knock landed on it). */
-function restyleDoor(addressId: string) {
-  const marker = markersByDoor.get(addressId)
-  const door = turfDoors.value.get(addressId)
-  if (marker && door) styleDoorMarker(marker, door)
+/** Map taps: a door if one is under the finger (and we're zoomed in enough
+ * for that to mean a specific door), otherwise nothing. Doors have no
+ * elements of their own now, so this one listener covers every pin. */
+function onMapClick(e: google.maps.MapMouseEvent) {
+  const zoomedIn = (map?.getZoom() ?? 0) >= PINS_MIN_ZOOM
+  const id = zoomedIn && e.latLng ? doorLayer?.doorAt(e.latLng) : null
+  if (id) onDoorTap(id)
 }
 
 /** Door pins do double duty: normally they open the door in Talk mode; in
@@ -812,7 +781,11 @@ async function onLiveKnock(knock: KnockLog) {
       .eq('household_id', a.id)
       .maybeSingle()
     if (status) statusByDoor.value.set(a.id, status as HouseholdLatestKnock)
-    restyleDoor(a.id)
+    // These writes are in-place, so repaint explicitly (the watcher above
+    // only sees whole-Map replacements), then pop the door — the thing that
+    // makes a squadmate's live progress watchable.
+    doorLayer?.requestRepaint()
+    doorLayer?.plink(a.id, 2.4, 700)
   }
 
   const member = mySquad.value?.members.find((m) => m.id === knock.canvasser_id)
@@ -836,6 +809,29 @@ const assigningMember = computed<ChatProfile | null>(
   () => (mySquad.value?.members ?? []).find((m) => m.id === assigningMemberId.value) ?? null,
 )
 
+// Anything paintForDoor reads repaints the one canvas (rAF-coalesced in the
+// layer). This replaces what used to be a loop restyling every door marker's
+// ~20 inline style properties — assign-mode taps in particular used to
+// restyle EVERY pin on the map per tap. Declared down here because it closes
+// over the assign refs above.
+//
+// Not a deep watch: every source here is REPLACED wholesale (loadDashboard
+// rebuilds the Maps, assign taps build a new Set), so reference equality is
+// enough. The one in-place path is the live knock feed, which repaints
+// explicitly.
+watch(
+  [
+    turfDoors,
+    statusByDoor,
+    todayKnockerByDoor,
+    turfColorById,
+    assigningMemberId,
+    assignSelected,
+    assignAnchorId,
+  ],
+  () => doorLayer?.requestRepaint(),
+)
+
 /** The top-level pool a door would be claimed from (itself for a door still
  * in a parent turf, its parent for a door already in a sub-turf) — or null
  * when the viewer isn't allowed to divide that turf. */
@@ -844,13 +840,6 @@ function poolParentOf(door: TurfDoor): string | null {
   if (!t) return null
   const pid = t.parent_turf_id ?? t.id
   return assignableParentIds.value.has(pid) ? pid : null
-}
-
-function restyleAllDoors() {
-  for (const [id, marker] of markersByDoor) {
-    const door = turfDoors.value.get(id)
-    if (door) styleDoorMarker(marker, door)
-  }
 }
 
 function startAssign(memberId: string) {
@@ -875,7 +864,6 @@ function startAssign(memberId: string) {
   }
   assignSelected.value = pre
   assignAnchorId.value = null
-  restyleAllDoors()
   mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
@@ -884,7 +872,6 @@ function cancelAssign() {
   assignSelected.value = new Set()
   assignAnchorId.value = null
   assignError.value = ''
-  restyleAllDoors()
 }
 
 /** Tap an unselected door: it joins the pile and becomes the walk anchor.
@@ -901,8 +888,6 @@ function toggleAssignDoor(addressId: string) {
     next.delete(addressId)
     assignAnchorId.value = null
     assignSelected.value = next
-    const marker = markersByDoor.get(addressId)
-    if (marker) styleDoorMarker(marker, door)
     return
   }
 
@@ -916,14 +901,12 @@ function toggleAssignDoor(addressId: string) {
     next.add(addressId)
     assignAnchorId.value = null
     assignSelected.value = next
-    restyleAllDoors()
     return
   }
 
   next.add(addressId)
   assignAnchorId.value = addressId
   assignSelected.value = next
-  restyleAllDoors()
 }
 
 interface SegmentDraft {
@@ -1136,10 +1119,53 @@ function knockedCount(memberId: string): number {
   return knockedByMember.value.get(memberId)?.size ?? 0
 }
 
+// --- Map fullscreen. Ported verbatim from Scout/the turf cutter: Safari
+// (incl. iOS) only ever exposes the webkit-prefixed API, so both directions
+// need a fallback, and Google Maps has to be told its container resized once
+// the browser finishes the transition — as does the door canvas, which sizes
+// itself off the map div. ---
+
+const isFullscreen = ref(false)
+const mapWrapEl = ref<HTMLElement | null>(null)
+
+type FullscreenableEl = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void
+}
+type FullscreenableDoc = Document & {
+  webkitExitFullscreen?: () => Promise<void> | void
+  webkitFullscreenElement?: Element | null
+}
+
+function toggleFullscreen() {
+  const doc = document as FullscreenableDoc
+  if (document.fullscreenElement ?? doc.webkitFullscreenElement) {
+    if (document.exitFullscreen) void document.exitFullscreen()
+    else doc.webkitExitFullscreen?.()
+    return
+  }
+  const el = mapWrapEl.value as FullscreenableEl | null
+  if (!el) return
+  if (el.requestFullscreen) void el.requestFullscreen()
+  else el.webkitRequestFullscreen?.()
+}
+
+function onFullscreenChange() {
+  const doc = document as FullscreenableDoc
+  isFullscreen.value = Boolean(document.fullscreenElement ?? doc.webkitFullscreenElement)
+  setTimeout(() => {
+    if (!map) return
+    google.maps.event.trigger(map, 'resize')
+    doorLayer?.checkView()
+    doorLayer?.requestRepaint()
+  }, 0)
+}
+
 // --- Lifecycle ---
 
 onMounted(async () => {
   squads.subscribeToRosters()
+  document.addEventListener('fullscreenchange', onFullscreenChange)
+  document.addEventListener('webkitfullscreenchange', onFullscreenChange)
   await squads.loadToday()
   subscribeToKnocks()
 })
@@ -1155,10 +1181,12 @@ onUnmounted(() => {
   squads.unsubscribeFromRosters()
   if (knockFeed) void supabase.removeChannel(knockFeed)
   areasLayer?.dispose()
+  doorLayer?.dispose()
+  doorLayer = null
   for (const marker of markersByMember.values()) marker.map = null
   markersByMember.clear()
-  doorClusterer?.clearMarkers()
-  markersByDoor.clear()
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
+  document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
 })
 
 // Load once the squad appears and reload whenever the squad or its roster
@@ -1269,8 +1297,60 @@ watch(
         <p v-if="mapsAuthError || mapFailed" class="error map-error">
           Couldn't load Google Maps — check the connection and reload.
         </p>
-        <div v-else class="squad-map-wrap">
+        <div
+          v-else
+          ref="mapWrapEl"
+          class="squad-map-wrap"
+          :class="{ 'map-wrap-fullscreen': isFullscreen }"
+        >
           <div ref="mapEl" class="squad-map"></div>
+          <!-- Flip every pin between a colored dot and its house number —
+               the same control Scout and the turf cutter carry, top-left
+               above the layer toggle. -->
+          <div class="pin-mode-toggle" role="group" aria-label="Pin style">
+            <button
+              type="button"
+              class="pin-mode-btn"
+              :class="{ active: pinMode === 'dots' }"
+              :aria-pressed="pinMode === 'dots'"
+              aria-label="Show pins as dots"
+              title="Dots"
+              @click="setPinMode('dots')"
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <circle cx="12" cy="12" r="6" fill="currentColor" />
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="pin-mode-btn"
+              :class="{ active: pinMode === 'numbers' }"
+              :aria-pressed="pinMode === 'numbers'"
+              aria-label="Show pins as house numbers"
+              title="House numbers"
+              @click="setPinMode('numbers')"
+            >
+              123
+            </button>
+          </div>
+          <!-- Fullscreen, top-right corner — same control as Scout and the
+               cutter. On a phone the page chrome eats most of the map. -->
+          <button
+            type="button"
+            class="map-fullscreen-btn"
+            :aria-label="isFullscreen ? 'Exit fullscreen map' : 'View map fullscreen'"
+            title="Fullscreen"
+            @click="toggleFullscreen"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <template v-if="isFullscreen">
+                <path d="M8 3v3a2 2 0 0 1-2 2H3M16 3v3a2 2 0 0 0 2 2h3M8 21v-3a2 2 0 0 0-2-2H3M16 21v-3a2 2 0 0 1 2-2h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </template>
+              <template v-else>
+                <path d="M3 9V5a2 2 0 0 1 2-2h4M21 9V5a2 2 0 0 0-2-2h-4M3 15v4a2 2 0 0 0 2 2h4M21 15v4a2 2 0 0 1-2 2h-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+              </template>
+            </svg>
+          </button>
           <!-- Turf shading, same tri-state as the Scout map: the crew's turf,
                everyone's, or (tap the active button again) none. -->
           <div class="layer-toggle" role="group" aria-label="Turf shading">
@@ -1549,8 +1629,19 @@ watch(
   min-height: 260px;
 }
 
-/* Same chrome as the Scout map's layer strip. */
-.layer-toggle {
+.map-wrap-fullscreen {
+  background: #000;
+}
+
+.map-wrap-fullscreen .squad-map {
+  height: 100%;
+  border-radius: 0;
+  border: none;
+}
+
+/* Map chrome, identical to Scout and the turf cutter: LEFT column = pin
+   style then layers; RIGHT = fullscreen. */
+.pin-mode-toggle {
   position: absolute;
   top: 0.6rem;
   left: 0.6rem;
@@ -1559,6 +1650,69 @@ watch(
   border-radius: 6px;
   overflow: hidden;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+}
+
+.pin-mode-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pin-mode-btn + .pin-mode-btn {
+  border-left: 1px solid var(--border);
+}
+
+.pin-mode-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.pin-mode-btn:not(.active):hover {
+  background: var(--surface-2);
+}
+
+.map-fullscreen-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+}
+
+.map-fullscreen-btn:hover {
+  background: var(--surface-2);
+}
+
+.layer-toggle {
+  position: absolute;
+  top: calc(0.6rem + 36px + 0.5rem);
+  left: 0.6rem;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
 }
 
 .layer-btn {
@@ -1805,16 +1959,6 @@ watch(
 .member-marker.selected {
   transform: scale(1.25);
 }
-
-/* Assign mode's walk-anchor pulse — lives on marker content in Google's map
- * pane, outside this component's subtree, so it must be global. */
-@keyframes squad-anchor-pulse {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.3);
-  }
-}
+/* The assign-mode walk-anchor pulse used to be a CSS keyframe on marker
+   content; it's drawn on the door canvas now (DoorPaintState.pulse). */
 </style>
