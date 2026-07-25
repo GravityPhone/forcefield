@@ -5,16 +5,19 @@ import { geocodeAndCache } from '@/lib/geocode'
 import {
   findNextOnStreet,
   findUpcomingOnStreet,
+  type NextHouseOptions,
   type UpcomingDoor,
   type WalkDirection,
   type WalkParity,
 } from '@/lib/streetWalk'
+import { fetchMyTurf } from '@/lib/myTurf'
 import { useAuthStore } from './auth'
 import type { Address, KnockLog, KnockOutcome, NewKnock, Person } from '@/types'
 
 const WALK_DIRECTION_KEY = 'forcefield.walk_direction'
 const WALK_PARITY_KEY = 'forcefield.walk_parity'
 const KNOCK_PARTLY_SIGNED_KEY = 'forcefield.knock_partly_signed'
+const MY_DOORS_ONLY_KEY = 'forcefield.my_doors_only'
 
 /** Person search hit with its address embedded (null for unlinked walk-ups). */
 export interface PersonHit extends Person {
@@ -53,6 +56,16 @@ interface TalkState {
    * haven't yet — some pushes chase every signature in a household, others
    * treat one signature as door-done. Per-device, like the walk prefs. */
   knockPartlySigned: boolean
+  /** "My doors" switch, sitting next to Next: on, the walk (Next, Back AND
+   * the Up-next chips) only ever offers doors on turf that's yours today;
+   * off, it offers every door on the street, which is how you wander a block
+   * nobody cut and knock what's closest. Per-device, like the walk prefs. */
+  myDoorsOnly: boolean
+  /** Turf ids that are mine today — the set the switch above filters on.
+   * Empty until ensureMyTurf() has run (and legitimately empty when nothing
+   * is assigned to me, which is why the switch hides itself then). */
+  myTurfIds: Set<string>
+  myTurfLoaded: boolean
   /** The next few doors the walk pattern would visit from the current one —
    * the "Up next" chips. null = not computed yet (loading); [] = end of the
    * street. Refreshed on loadAddress and whenever a walk pref changes. */
@@ -85,6 +98,11 @@ export const useTalkStore = defineStore('talk', {
     walkDirection: (localStorage.getItem(WALK_DIRECTION_KEY) as WalkDirection) || 'ascending',
     walkParity: (localStorage.getItem(WALK_PARITY_KEY) as WalkParity) || 'both',
     knockPartlySigned: localStorage.getItem(KNOCK_PARTLY_SIGNED_KEY) !== 'false',
+    // Off by default: with it on, someone who hasn't been handed turf yet
+    // would tap Next and go nowhere, with no clue why.
+    myDoorsOnly: localStorage.getItem(MY_DOORS_ONLY_KEY) === 'true',
+    myTurfIds: new Set(),
+    myTurfLoaded: false,
     upcoming: null,
     myKnockPath: [],
     myKnockPathLoaded: false,
@@ -192,6 +210,28 @@ export const useTalkStore = defineStore('talk', {
       upcomingSeq++
     },
 
+    /** One-time load of which turf is mine today (see lib/myTurf.ts) — what
+     * the "My doors" switch filters on. Left un-loaded on failure so the next
+     * walk retries rather than silently filtering against an empty set. */
+    async ensureMyTurf() {
+      if (this.myTurfLoaded) return
+      const auth = useAuthStore()
+      if (!auth.profile) return
+      const { mine } = await fetchMyTurf(auth.profile.id)
+      this.myTurfIds = mine
+      this.myTurfLoaded = true
+    },
+
+    /** The walk options in force right now, including the "My doors" filter
+     * when it's on AND there's actually turf to filter to (switching it on
+     * with nothing assigned would empty every walk). */
+    walkOptions(): NextHouseOptions {
+      return {
+        knockPartlySigned: this.knockPartlySigned,
+        turfIds: this.myDoorsOnly && this.myTurfIds.size ? this.myTurfIds : null,
+      }
+    },
+
     /** Recompute the Up-next preview for the current door. Fire-and-forget
      * from loadAddress and the walk-pref setters; a stale lookup (the door
      * or a pref changed while it ran) is dropped on landing. */
@@ -200,11 +240,13 @@ export const useTalkStore = defineStore('talk', {
       const seq = ++upcomingSeq
       this.upcoming = null
       if (!current) return
+      await this.ensureMyTurf()
+      if (seq !== upcomingSeq || this.selectedAddress?.id !== current.id) return
       const list = await findUpcomingOnStreet(
         current,
         this.walkDirection,
         this.walkParity,
-        { knockPartlySigned: this.knockPartlySigned },
+        this.walkOptions(),
         4,
       )
       if (seq !== upcomingSeq || this.selectedAddress?.id !== current.id) return
@@ -301,6 +343,12 @@ export const useTalkStore = defineStore('talk', {
       void this.refreshUpcoming()
     },
 
+    setMyDoorsOnly(only: boolean) {
+      this.myDoorsOnly = only
+      localStorage.setItem(MY_DOORS_ONLY_KEY, String(only))
+      void this.refreshUpcoming()
+    },
+
     /** Canvasser confirms before the screen clears. The outcome itself was
      * already written by logOutcome — this just moves on, auto-advancing to
      * the next house on the street per walkDirection/walkParity (falling
@@ -315,9 +363,13 @@ export const useTalkStore = defineStore('talk', {
 
       const current = this.selectedAddress
       if (!current) return
-      const next = await findNextOnStreet(current, this.walkDirection, this.walkParity, {
-        knockPartlySigned: this.knockPartlySigned,
-      })
+      await this.ensureMyTurf()
+      const next = await findNextOnStreet(
+        current,
+        this.walkDirection,
+        this.walkParity,
+        this.walkOptions(),
+      )
       if (next) await this.loadAddress(next.id)
     },
 
@@ -376,8 +428,27 @@ export const useTalkStore = defineStore('talk', {
       const path = this.myKnockPath
       if (!path.length) return
       const idx = this.selectedAddress ? path.indexOf(this.selectedAddress.id) : -1
-      const target = path[idx + 1]
+      const behind = path.slice(idx + 1)
+      if (!behind.length) return
+      const target = (await this.firstMyDoor(behind)) ?? null
       if (target) await this.loadAddress(target)
+    },
+
+    /** First id in a list that the "My doors" switch allows — the whole list's
+     * head when the switch is off. Turf membership isn't on the path (it's
+     * just ids), so it takes one small lookup; capped because Back only ever
+     * needs the nearest match behind you, not the whole 500-knock history. */
+    async firstMyDoor(ids: string[]): Promise<string | undefined> {
+      await this.ensureMyTurf()
+      const turfIds = this.myDoorsOnly && this.myTurfIds.size ? this.myTurfIds : null
+      if (!turfIds) return ids[0]
+      const window = ids.slice(0, 60)
+      const { data } = await supabase.from('addresses').select('id, turf_id').in('id', window)
+      const turfBy = new Map((data ?? []).map((r) => [r.id as string, r.turf_id as string | null]))
+      return window.find((id) => {
+        const t = turfBy.get(id)
+        return !!t && turfIds.has(t)
+      })
     },
   },
 })

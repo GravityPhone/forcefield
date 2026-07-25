@@ -17,6 +17,11 @@ export interface NextHouseOptions {
   /** Whether to stop at households where someone signed but other residents
    * haven't yet. Off = treat a partly-signed door as done and walk past it. */
   knockPartlySigned: boolean
+  /** "My doors" filter: when set, the walk only ever offers doors sitting on
+   * one of these turfs (yours today — see lib/myTurf.ts). Null/undefined = the
+   * whole street, which is the point of switching it off: wander a block that
+   * isn't yours and knock whatever's closest. */
+  turfIds?: Set<string> | null
 }
 
 /** `street` stores the FULL address line ("123 Walnut St"), so matching by
@@ -68,11 +73,13 @@ export async function findUpcomingOnStreet(
     .from('addresses')
     .select('*, persons(count)')
     .ilike('street', `%${targetName}`)
+  const turfIds = options.turfIds
   const rows = ((data ?? []) as AddressWithRoster[]).filter(
     (a) =>
       a.id !== current.id &&
       streetNameOf(a.street) === targetName &&
-      matchesParity(houseNumber(a.street), parity),
+      matchesParity(houseNumber(a.street), parity) &&
+      (!turfIds || (a.turf_id !== null && turfIds.has(a.turf_id))),
   )
 
   const ahead =

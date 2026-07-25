@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { Geolocation } from '@capacitor/geolocation'
 import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
@@ -24,7 +24,9 @@ import type { MapScrollGuard } from '@/lib/mapScroll'
 import { geocodeAndCache, normalizeStreetName, streetAtPoint } from '@/lib/geocode'
 import { avatarUrl } from '@/lib/avatars'
 import { fetchAllRows, supabase } from '@/lib/supabase'
-import { localToday, startOfLocalDayISO } from '@/lib/day'
+import { fetchMyTurf } from '@/lib/myTurf'
+import type { TurfLite } from '@/lib/myTurf'
+import { startOfLocalDayISO } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
 import { useTalkStore } from '@/stores/talk'
 import {
@@ -143,15 +145,8 @@ const todayKnockerByDoor = ref<Map<string, { canvasserId: string; at: number }>>
  * rows (today's active canvassers), not the org. */
 const knockerById = ref<Map<string, BadgePerson>>(new Map())
 /** Every turf — yours (assigned directly or via a squad you're in today)
- * get a colored ring on member pins and a jump-to chip. */
-interface TurfLite {
-  id: string
-  name: string
-  color: string
-  squad_id: string | null
-  assignee_id: string | null
-  parent_turf_id: string | null
-}
+ * get a colored ring on member pins and a jump-to chip. Which of them are
+ * mine is decided in lib/myTurf.ts, shared with Talk's "My doors" filter. */
 const allTurfs = ref<TurfLite[]>([])
 const myTurfIds = ref<Set<string>>(new Set())
 /** Everyone in a squad I'm in today — their live knocks plink harder than
@@ -188,7 +183,7 @@ watch(
       void initialize() // syncFromTalk runs at its tail, once the map exists
     } else {
       void refreshStatuses()
-      void syncFromTalk()
+      if (!syncFromQuery()) void syncFromTalk()
     }
   },
   { immediate: true },
@@ -237,32 +232,9 @@ async function fetchMapData() {
  * past day's squad is nobody's until the campaign manager re-dispatches it. */
 async function fetchTurfs() {
   if (!auth.profile) return
-  const me = auth.profile.id
-  const [smRes, turfRes] = await Promise.all([
-    supabase
-      .from('squad_members')
-      .select('squad_id, squads!inner(squad_date)')
-      .eq('user_id', me)
-      .eq('squads.squad_date', localToday()),
-    supabase.from('turfs').select('id, name, color, squad_id, assignee_id, parent_turf_id'),
-  ])
-  const mySquadIds = new Set((smRes.data ?? []).map((r) => r.squad_id as string))
-  const all = (turfRes.data ?? []) as TurfLite[]
+  const { all, mine, squadIds: mySquadIds } = await fetchMyTurf(auth.profile.id)
   allTurfs.value = all
-  const byId = new Map(all.map((t) => [t.id, t]))
-  const topMine = (t: TurfLite) =>
-    t.parent_turf_id == null &&
-    (t.assignee_id === me || (t.squad_id != null && mySquadIds.has(t.squad_id)))
-  myTurfIds.value = new Set(
-    all
-      .filter((t) => {
-        if (topMine(t)) return true
-        if (t.parent_turf_id == null || t.assignee_id !== me) return false
-        const parent = byId.get(t.parent_turf_id)
-        return !!parent && (parent.squad_id == null || mySquadIds.has(parent.squad_id))
-      })
-      .map((t) => t.id),
-  )
+  myTurfIds.value = mine
   if (mySquadIds.size) {
     const { data } = await supabase
       .from('squad_members')
@@ -481,6 +453,7 @@ function knockerName(p: BadgePerson): string {
 /** Tap someone's icon, see who they are — the field's "who's that?" answered
  * without leaving the door you're looking at. */
 const router = useRouter()
+const route = useRoute()
 function openKnockerProfile(id: string) {
   void router.push({ name: 'member', params: { id } })
 }
@@ -725,7 +698,8 @@ async function loadMapData() {
   pinsLoading.value = false
   // Entering Scout with a door already loaded in Talk: land on that door
   // (locate wins over the turf frame above — you're mid-walk, not arriving).
-  void syncFromTalk()
+  // A ?street= deep link outranks both — it's what the person just tapped.
+  if (!syncFromQuery()) void syncFromTalk()
 }
 
 /** Re-pull statuses/summaries and recolor existing pins. Called whenever
@@ -1038,6 +1012,22 @@ async function locateAddress(address: AddressWithRoster) {
  * locates the door itself — zoomed in, pin highlighted. Runs once per Talk
  * address, so flipping back after poking around Scout doesn't clobber a
  * manual search or map position on every tab switch. */
+/** Arriving from a [[Street]] link in the AI chat (/canvass?street=…). An
+ * explicit link is an explicit intent, so it beats the Talk→Scout sync that
+ * would otherwise fire at initialize()'s tail — hence the guard stamp below.
+ * The param is consumed so a later tab flip doesn't re-run the search over
+ * whatever the canvasser has typed since. */
+function syncFromQuery(): boolean {
+  const raw = route.query.street
+  if (typeof raw !== 'string' || !raw.trim()) return false
+  const street = raw.trim().slice(0, 80)
+  onListInput(street.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()))
+  // Claim the Talk-sync slot so syncFromTalk() doesn't overwrite this search.
+  syncedFromTalkId = talk.selectedAddress?.id ?? null
+  void router.replace({ path: '/canvass', query: {} })
+  return true
+}
+
 let syncedFromTalkId: string | null = null
 async function syncFromTalk() {
   const current = talk.selectedAddress
@@ -1159,6 +1149,57 @@ function onThumbPointerDown(event: PointerEvent) {
 
 watch(searchResults, () => void nextTick(recomputeThumb))
 
+/** Bring the located house's row to the middle of the list (2026-07-25, user
+ * call): tapping a pin already fills the search with its street and highlights
+ * its row, but on a 100-house street that row was somewhere off in the scroll.
+ * Scrolls the LIST only — never the page, which would yank you off the map you
+ * were just reading. */
+function scrollActiveIntoView() {
+  const el = resultsListEl.value
+  if (!el) return
+  const row = el.querySelector<HTMLElement>('.result-active')
+  if (!row) return
+  const listBox = el.getBoundingClientRect()
+  const rowBox = row.getBoundingClientRect()
+  const target = el.scrollTop + (rowBox.top - listBox.top) - (listBox.height - rowBox.height) / 2
+  el.scrollTo({
+    top: Math.max(0, Math.min(el.scrollHeight - el.clientHeight, target)),
+    behavior: 'smooth',
+  })
+}
+
+// Both halves of "tap a pin, find the house": the results arriving (the search
+// the tap kicked off) and the located door changing (the tap itself, when the
+// street's rows are already listed).
+watch([searchResults, locatedAddressId], () => void nextTick(scrollActiveIntoView))
+
+/** The grab bar above the list: drag it to scroll, at the same 1:1 mapping as
+ * the thumb beside the rows (a full drag covers the full list). The rows are
+ * buttons, so dragging on THEM is unreliable — this is a strip that's only
+ * ever a scroll handle. */
+function onGripPointerDown(event: PointerEvent) {
+  const el = resultsListEl.value
+  if (!el) return
+  event.preventDefault()
+  const grip = event.currentTarget as HTMLElement
+  grip.setPointerCapture(event.pointerId)
+  const startY = event.clientY
+  const startScrollTop = el.scrollTop
+  const scrollableMax = el.scrollHeight - el.clientHeight
+  const travel = Math.max(1, el.clientHeight - thumbHeight.value)
+
+  function onMove(e: PointerEvent) {
+    const scrollDelta = ((e.clientY - startY) / travel) * scrollableMax
+    el!.scrollTop = Math.min(scrollableMax, Math.max(0, startScrollTop + scrollDelta))
+  }
+  function onUp() {
+    grip.removeEventListener('pointermove', onMove)
+    grip.removeEventListener('pointerup', onUp)
+  }
+  grip.addEventListener('pointermove', onMove)
+  grip.addEventListener('pointerup', onUp)
+}
+
 // --- Map fullscreen toggle. Safari (incl. iOS) only ever exposes the
 // webkit-prefixed API, so both directions need a fallback. Google Maps
 // doesn't notice its container resized on its own, so nudge it after the
@@ -1206,6 +1247,12 @@ function onFullscreenChange() {
 let scrollGuard: MapScrollGuard | null = null
 
 onMounted(() => {
+  // A [[Street]] link from the AI chat lands on /canvass, which opens on
+  // whichever tab was last used — flip to Scout so the search it just ran is
+  // the thing on screen. The activeTab watcher does the rest.
+  if (typeof route.query.street === 'string' && route.query.street.trim()) {
+    talk.activeTab = 'hunt'
+  }
   if (resultsListEl.value) {
     resizeObserver = new ResizeObserver(recomputeThumb)
     resizeObserver.observe(resultsListEl.value)
@@ -1429,6 +1476,17 @@ onUnmounted(() => {
     />
 
     <div class="results-list-wrap">
+    <!-- Something to grab: a centered handle whose only job is scrolling the
+         list, since every row under it is a button. -->
+    <div
+      v-if="showThumb"
+      class="list-grip"
+      role="separator"
+      aria-label="Drag to scroll the list"
+      @pointerdown="onGripPointerDown"
+    >
+      <span class="list-grip-bar" aria-hidden="true"></span>
+    </div>
     <div ref="resultsListEl" class="results-list" @scroll="onResultsScroll">
       <p v-if="listQuery.trim().length < 2" class="muted empty">
         Type at least 2 characters of a name or street.
@@ -1759,6 +1817,34 @@ onUnmounted(() => {
 
 .results-list-wrap {
   position: relative;
+}
+
+/* Sheet-handle shape, because that's what it does. Full width so it's easy to
+ * land on with a thumb; the visible bar sits in the middle. */
+.list-grip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  margin-bottom: 0.15rem;
+  cursor: grab;
+  touch-action: none;
+}
+
+.list-grip:active {
+  cursor: grabbing;
+}
+
+.list-grip-bar {
+  width: 44px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--scrollbar-color, var(--accent));
+  opacity: 0.55;
+}
+
+.list-grip:active .list-grip-bar {
+  opacity: 1;
 }
 
 .results-list {

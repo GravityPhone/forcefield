@@ -746,9 +746,10 @@ function updateMemberMarker(member: ChatProfile, plink = false) {
       zIndex: 500,
     })
     // Tap someone's icon in the field and you get the person: their run so
-    // far, their profile, their phone number. Zooming to them is what the
-    // card header does — out here you already know where they are, you're
-    // looking at them.
+    // far, their profile, their phone number — and the map frames the crew's
+    // turf behind the sheet, ready to divide. Zooming to THEM is the sheet's
+    // "Show on map"; out here you already know where they are, you're looking
+    // at them.
     marker.addListener('gmp-click', () => {
       selectedMemberId.value = member.id
       void openMemberSheet(member.id)
@@ -785,8 +786,9 @@ function fitToSquad() {
   if (!bounds.isEmpty()) map.fitBounds(bounds, 48)
 }
 
-/** Tap a member (card or marker): zoom the map to the last door they
- * knocked. From a card we also bring the map into view — that's the point. */
+/** "Show on map" in a member's sheet: zoom to the last door they knocked, and
+ * bring the map into view. Tapping the person themselves frames the crew's
+ * turf instead — see openMemberSheet. */
 function selectMember(memberId: string, scroll = true) {
   selectedMemberId.value = memberId
   for (const m of mySquad.value?.members ?? []) updateMemberMarker(m)
@@ -1491,6 +1493,12 @@ let sheetSeq = 0
 
 async function openMemberSheet(memberId: string) {
   sheetMemberId.value = memberId
+  // Frame OUR TURF, not their last stop (2026-07-25, user call): tapping a
+  // person is the first move of handing them doors, so the map underneath the
+  // sheet should already be the ground you'd divide — hit Assign and you're
+  // set up. Where they physically are is a different question, and it has its
+  // own button in the sheet ("Show on map").
+  focusAssignPool()
   sheetFeed.value = []
   sheetLoading.value = true
   const seq = ++sheetSeq
