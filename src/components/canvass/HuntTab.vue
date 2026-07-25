@@ -99,7 +99,7 @@ const turfShade = ref<TurfShadeMode>(
 )
 const showCity = ref(readMapPref('map-show-city', false))
 
-function setTurfShade(mode: 'mine' | 'all') {
+function setTurfShade(mode: 'mine' | 'doors' | 'all') {
   turfShade.value = turfShade.value === mode ? 'off' : mode
   writeTurfShadeMode('map-turf-shading', turfShade.value)
   // Switching ON "My turf" takes you there — this button replaced the old
@@ -108,7 +108,12 @@ function setTurfShade(mode: 'mine' | 'all') {
   // the map out to fit your whole assignment every time, which reads as the
   // map zooming out on you for no reason. Turning it off never moves the
   // map; you're looking at something.
-  if (turfShade.value === 'mine' && !myTurfInView()) focusMyTurf()
+  if (
+    (turfShade.value === 'mine' || turfShade.value === 'doors') &&
+    !myTurfInView(activeTurfIds.value)
+  ) {
+    focusMyTurf(activeTurfIds.value)
+  }
 }
 
 function toggleCity() {
@@ -264,11 +269,43 @@ async function fetchTurfs() {
  * colors. No extra fetch: fetchTurfs already pulls every row. */
 const allTurfColorById = computed(() => new Map(allTurfs.value.map((t) => [t.id, t.color])))
 
+/** Turf assigned to ME personally, as opposed to my crew's shared ground:
+ * the share a squad leader cut for me (or I claimed for myself) on the squad
+ * page, plus any turf dispatched straight to my name. That's what "My doors"
+ * shows — the list, not the neighborhood. Derived from myTurfIds, so the
+ * same today-currency rules apply: yesterday's split doesn't follow me. */
+const myOwnTurfIds = computed(() => {
+  const me = auth.profile?.id
+  return new Set(
+    allTurfs.value.filter((t) => t.assignee_id === me && myTurfIds.value.has(t.id)).map((t) => t.id),
+  )
+})
+/** No personal share = no "My doors" button. The alternative — offering a
+ * filter that empties the map — reads as the app breaking. */
+const haveMyDoors = computed(() => myOwnTurfIds.value.size > 0)
+
+// The pref outlives the assignment: yesterday's claim is gone this morning,
+// and a stored 'doors' would then hide every pin behind a button that isn't
+// rendered. Fall back to the crew's ground. Guarded on turfs having actually
+// loaded — an empty set during startup isn't the same as "you have none".
+watch([haveMyDoors, allTurfs], () => {
+  if (turfShade.value === 'doors' && allTurfs.value.length && !haveMyDoors.value) {
+    turfShade.value = 'mine'
+    writeTurfShadeMode('map-turf-shading', 'mine')
+  }
+})
+
+/** Which turf set the current mode is about: your own doors, or your crew's
+ * whole assignment. */
+const activeTurfIds = computed(() =>
+  turfShade.value === 'doors' ? myOwnTurfIds.value : myTurfIds.value,
+)
+
 /** Is this door on turf that's mine today? "My turf" filters the map down to
  * exactly these. */
-function isMyDoor(addressId: string): boolean {
+function isMyDoor(addressId: string, ids: Set<string> = myTurfIds.value): boolean {
   const turfId = turfByAddress.value.get(addressId)
-  return !!turfId && myTurfIds.value.has(turfId)
+  return !!turfId && ids.has(turfId)
 }
 
 async function fetchKnockedToday(): Promise<Set<string>> {
@@ -295,14 +332,24 @@ function applyStatusAndSummary(
 }
 
 /** Paint state for one door on the shared canvas layer. The turf layer is a
- * three-way switch over what the map is even showing (2026-07-24, user call):
+ * switch over what the map is even showing (2026-07-24, user call), from the
+ * whole county down to the doors with your name on them:
  *
  * OFF — every house in the county, painted by knock status (doorStatusOutcome,
  *   blue when nobody's been yet), plus the partly-signed green-with-a-
  *   yellow-band so "one of the three signed" doesn't look like a door where
  *   nobody has signed at all.
  *
- * MY TURF — a FILTER, not a coloring: doors outside your assignment aren't
+ * MY DOORS — the narrowest filter, and the other end of the squad page's
+ *   claiming flow: only doors on turf assigned to YOU by name — the share a
+ *   leader cut for you, or that you claimed yourself when the leader handed
+ *   claiming to the crew. Claim on /squad, flip this on, and the map is your
+ *   list. Only offered when you actually have a personal share (haveMyDoors);
+ *   a filter that empties the map is worse than no button.
+ *
+ * MY TURF — the same filter one level out: your CREW's whole assignment (turf
+ *   dispatched to a squad you're on today, plus your own share of it). Doors
+ *   outside it aren't
  *   painted at all (paintFor null = invisible AND untappable), so what's left
  *   on screen is exactly your ground. The doors that stay keep their STATUS
  *   colors — flooding your own turf with one flat color would throw away the
@@ -324,7 +371,13 @@ function applyStatusAndSummary(
  *          be unmistakable against a screen of many. */
 function paintForDoor(id: string): DoorPaintState | null {
   const isLocated = id === locatedAddressId.value
-  if (turfShade.value === 'mine' && !isLocated && !isMyDoor(id)) return null
+  if (
+    (turfShade.value === 'mine' || turfShade.value === 'doors') &&
+    !isLocated &&
+    !isMyDoor(id, activeTurfIds.value)
+  ) {
+    return null
+  }
   const halo = knockedToday.value.has(id) ? TODAY_HALO : null
   const turfColor = turfColorFor(id)
   if (turfColor) {
@@ -378,7 +431,15 @@ const TODAY_HALO = '#111111'
 // only in-place mutations are in the realtime feed below, which repaints
 // explicitly.
 watch(
-  [statusByHousehold, knockedToday, myTurfIds, allTurfColorById, locatedAddressId, turfShade],
+  [
+    statusByHousehold,
+    knockedToday,
+    myTurfIds,
+    myOwnTurfIds,
+    allTurfColorById,
+    locatedAddressId,
+    turfShade,
+  ],
   () => doorLayer?.requestRepaint(),
 )
 
@@ -532,7 +593,10 @@ async function loadMapData() {
   // county-wide pins zooms way out and looks like the map "doesn't know
   // where to start".)
   if (!userMovedMap) {
-    if (haveMyTurf) focusMyTurf()
+    // Opening on the tightest thing that's actually yours: your own claimed
+    // doors if you have any, otherwise the crew's ground.
+    if (haveMyDoors.value) focusMyTurf(myOwnTurfIds.value)
+    else if (haveMyTurf) focusMyTurf()
     else if (lastCenter) {
       map.setCenter(lastCenter)
       map.setZoom(16)
@@ -581,12 +645,14 @@ async function refreshStatuses() {
  * means genuinely separate parts of an assignment. */
 const CLUSTER_CELL_DEG = 0.01
 
-/** Every door of mine, grouped into connected patches, biggest first. */
-function myTurfClusters(): { lat: number; lng: number }[][] {
+/** Every door in the given turf set, grouped into connected patches, biggest
+ * first. Takes the set so "My doors" frames your own share and "My turf"
+ * frames the crew's — same geometry, different scope. */
+function myTurfClusters(ids: Set<string>): { lat: number; lng: number }[][] {
   const cells = new Map<string, { lat: number; lng: number }[]>()
   for (const [addressId, door] of doorInfoByAddress) {
     const turfId = turfByAddress.value.get(addressId)
-    if (!turfId || !myTurfIds.value.has(turfId)) continue
+    if (!turfId || !ids.has(turfId)) continue
     // Longitude cells are widened by 1/cos(lat) so they stay roughly square
     // on the ground rather than skinny this far north.
     const key = `${Math.floor(door.lat / CLUSTER_CELL_DEG)}:${Math.floor(
@@ -626,11 +692,11 @@ function myTurfClusters(): { lat: number; lng: number }[][] {
 /** Is any door of mine inside the current viewport? If so the canvasser is
  * already looking at their ground and the map must stay exactly where it is
  * — see setTurfShade. */
-function myTurfInView(): boolean {
+function myTurfInView(ids: Set<string> = myTurfIds.value): boolean {
   const bounds = map?.getBounds()
   if (!bounds) return false
   for (const [addressId, door] of doorInfoByAddress) {
-    if (isMyDoor(addressId) && bounds.contains(new google.maps.LatLng(door.lat, door.lng))) {
+    if (isMyDoor(addressId, ids) && bounds.contains(new google.maps.LatLng(door.lat, door.lng))) {
       return true
     }
   }
@@ -639,9 +705,9 @@ function myTurfInView(): boolean {
 
 /** Frame your turf: all of it when it's one patch of ground, otherwise the
  * biggest patch — a best fit beats a useless county-wide zoom. */
-function focusMyTurf() {
+function focusMyTurf(ids: Set<string> = myTurfIds.value) {
   if (!map) return
-  const clusters = myTurfClusters()
+  const clusters = myTurfClusters(ids)
   if (!clusters.length) return
   const bounds = new google.maps.LatLngBounds()
   for (const d of clusters[0]) bounds.extend(d)
@@ -1094,11 +1160,25 @@ onUnmounted(() => {
           123
         </button>
       </div>
-      <!-- Map layers: the turf layer (show only your doors / color every
+      <!-- Map layers: the turf layer (My doors = just your own share, only
+           when you have one; My turf = your crew's ground; All turf = every
            turf's doors in its own color — tap the active one for every house
            on plain status pins) and city/village limits. Below the pin-style
            toggle, same chrome. -->
       <div class="layer-toggle" role="group" aria-label="Map layers">
+        <!-- Only when you actually have a share with your name on it — the
+             other end of the squad page's claiming flow. -->
+        <button
+          v-if="haveMyDoors"
+          type="button"
+          class="layer-btn"
+          :class="{ active: turfShade === 'doors' }"
+          :aria-pressed="turfShade === 'doors'"
+          title="Show only the doors assigned to you"
+          @click="setTurfShade('doors')"
+        >
+          My doors
+        </button>
         <button
           type="button"
           class="layer-btn"

@@ -120,6 +120,10 @@ export interface Squad {
   created_by: string | null
   squad_date: string
   created_at: string
+  /** Squad leader handed door-claiming to the crew: any member may cut their
+   * own share out of the squad's turf (see can_member_subcut). Off by
+   * default, and it dies with the squad at midnight. */
+  member_claim: boolean
 }
 
 export interface SquadMember {

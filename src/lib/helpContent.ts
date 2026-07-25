@@ -57,14 +57,15 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Seeing the turf',
         body:
-          'My turf hides every house that isn’t yours, so what’s left on the map is exactly ' +
-          'your assignment — still in its progress colors, so you can see how the day is ' +
-          'going. All turf shows every house and paints each one in its turf’s color, so ' +
-          'you can see where the ground is divided between crews. Tap the lit button to go ' +
-          'back to every house on plain status colors. Turning on My turf also flies you to ' +
-          'your assignment — the biggest part of it, if your turf comes in pieces spread ' +
-          'across the county — unless some of your ground is already on screen, in which ' +
-          'case the map stays put.',
+          'My doors hides everything except the houses assigned to you by name — the share ' +
+          'you claimed (or were handed) on the Squad page. It only appears once you have ' +
+          'one. My turf is the same idea one step out: your whole crew’s assignment. Both ' +
+          'keep their progress colors, so you can still see how the day is going. All turf ' +
+          'shows every house and paints each one in its turf’s color, so you can see where ' +
+          'the ground is divided between crews. Tap the lit button to go back to every ' +
+          'house on plain status colors. Turning on My doors or My turf also flies you ' +
+          'there — the biggest part of it, if your ground comes in pieces spread across the ' +
+          'county — unless some of it is already on screen, in which case the map stays put.',
       },
       {
         heading: 'Spotty signal',
@@ -96,11 +97,32 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
           'or every turf in the campaign (tap the lit one for plain status pins).',
       },
       {
+        heading: 'The crew',
+        body:
+          'Everyone shows up as a tile: their emoji and color, how many of the crew’s doors ' +
+          'they’ve knocked, and their last five. Tap the top of a tile to zoom the map to ' +
+          'them. Tap their last-five list to open their whole run — every knock with its ' +
+          'outcome and who answered, tappable straight back to that door — plus buttons ' +
+          'through to their profile and their phone.',
+      },
+      {
         heading: 'Assign doors',
         body:
-          'If you can split turf, tap "Assign doors" on a member’s card, tap door pins on ' +
-          'the map (two taps take the whole stretch between them), and save — that member gets ' +
-          'their own share of the turf in their color.',
+          'If you can split turf, tap Assign on a member’s tile and pick their doors on the ' +
+          'map: tap pins one at a time, tap one door then another to take the whole stretch ' +
+          'between them, or use the map’s ◯ Lasso (drag a loop around a patch) and ☝ ' +
+          'Streets (tap a door to take its whole street). While either tool is armed, ' +
+          'Add/Erase says whether the sweep gives doors or takes them back. Save, and that ' +
+          'member gets their own share of the turf in their color.',
+      },
+      {
+        heading: 'Who does the dividing',
+        body:
+          'Normally the squad leader (or a campaign manager) hands out the doors. Days go ' +
+          'chaotic, though, so the leader can flip "Crew claims their own doors" on this ' +
+          'page: everyone on the crew can then cut their own share out of the turf from ' +
+          'their own tile. It’s off by default and resets with the squad at midnight. Once ' +
+          'you’ve claimed, flip Scout to "My doors" and the map is just your list.',
       },
       {
         heading: 'Starting or joining',

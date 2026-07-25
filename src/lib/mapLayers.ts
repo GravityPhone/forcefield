@@ -92,17 +92,28 @@ export class CityLimitsLayer {
 
 // --- Per-device layer preferences. ---
 
-/** Turf shading is a tri-state on the Scout, Squad, and Turf maps: shade
- * only YOUR turf, shade ALL turf (yours emphasized), or none. Scout and the
- * cutter share one key (`map-turf-shading`); the Squad map keeps its own —
- * its default is the crew's turf, so a plain squad-page load never pays for
- * the org-wide door download that "All turf" needs there. */
-export type TurfShadeMode = 'off' | 'mine' | 'all'
+/** The turf layer on the Scout and Squad maps. Despite the historical name
+ * nothing is SHADED any more — these pick which doors are painted and what
+ * colors they wear:
+ *
+ * - 'off'   every door, plain status colors.
+ * - 'mine'  filter to your crew's turf (Squad rings it in turf colors).
+ * - 'doors' Scout only: filter to the doors assigned to YOU personally — the
+ *           share you claimed (or were handed) on the squad page. The
+ *           narrowest reading of the map there is: this is my list.
+ * - 'all'   every turf's doors in its own color.
+ *
+ * Scout and the cutter share one key (`map-turf-shading`); the Squad map
+ * keeps its own — its default is the crew's turf, so a plain squad-page load
+ * never pays for the org-wide door download that "All turf" needs there. The
+ * Squad map never writes 'doors', but reads tolerate it (a stored value from
+ * one map must never wedge another). */
+export type TurfShadeMode = 'off' | 'mine' | 'doors' | 'all'
 
 export function readTurfShadeMode(key: string, fallback: TurfShadeMode): TurfShadeMode {
   try {
     const v = localStorage.getItem(key)
-    if (v === 'off' || v === 'mine' || v === 'all') return v
+    if (v === 'off' || v === 'mine' || v === 'doors' || v === 'all') return v
   } catch {
     /* private mode — fall through */
   }

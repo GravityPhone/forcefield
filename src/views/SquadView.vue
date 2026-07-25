@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import AppShell from '@/components/AppShell.vue'
@@ -21,19 +21,21 @@ import type { CanvasDoor, DoorBadge, DoorPaintState } from '@/lib/doorCanvas'
 import { rangeCovers, walkRanges } from '@/lib/doorPath'
 import {
   OUTCOME_HEX,
+  OUTCOME_LABELS,
   PIN_DEFAULT_HEX,
   doorPartlySigned,
   doorStatusOutcome,
 } from '@/lib/outcomes'
 import { avatarUrl } from '@/lib/avatars'
-import { memberColor } from '@/lib/memberColors'
+import { inkOn, memberColor } from '@/lib/memberColors'
 import { telHref } from '@/lib/phone'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import { useAuthStore } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
 import { useSquadsStore, type SquadListItem } from '@/stores/squads'
 import { useTalkStore } from '@/stores/talk'
-import type { ChatProfile, HouseholdLatestKnock, KnockLog } from '@/types'
+import { ROLE_LABELS } from '@/types'
+import type { ChatProfile, HouseholdLatestKnock, KnockLog, KnockOutcome } from '@/types'
 
 // Fallback map center: Richwood, OH (the imported demo subset).
 const FALLBACK_CENTER = { lat: 40.4273, lng: -83.2966 }
@@ -132,12 +134,35 @@ const doorsTotal = computed(() => turfDoors.value.size)
 const doorsKnocked = computed(() => knockedDoors.value.size)
 
 // Splitting the squad's turf among members is a leader's / manager's job —
-// but if nobody on the crew outranks a canvasser today, any member can do it
-// (matches the DB's can_member_subcut). It happens right here on the squad
-// map: pick a member, tap doors, save — a sub-turf assigned to them.
+// with two ways it can fall to the canvassers instead, both mirrored in the
+// DB's can_member_subcut: nobody on the crew outranks a canvasser today, or
+// the leader deliberately handed claiming to the crew for the day
+// (squads.member_claim, the "Crew claims their own doors" switch below —
+// "there's a leader, but it's chaotic out there and I'd rather people grab
+// their own stretch than wait on me"). It happens right here on the squad
+// map: pick a member, sweep doors, save — a sub-turf assigned to them.
 const squadHasRankedMember = computed(() =>
   (mySquad.value?.members ?? []).some((m) => m.role != null && m.role !== 'canvasser'),
 )
+const memberClaimOn = computed(() => mySquad.value?.member_claim ?? false)
+/** Who may flip that switch: managers, a squad leader on the crew, or
+ * whoever started it. Same gate the set_squad_member_claim RPC enforces. */
+const canToggleClaim = computed(() => {
+  const squad = mySquad.value
+  if (!squad) return false
+  const role = auth.profile?.role
+  if (role === 'admin' || role === 'campaign_manager' || role === 'team_lead') return true
+  return squad.created_by === auth.profile?.id
+})
+const claimSaving = ref(false)
+
+async function toggleMemberClaim() {
+  const squad = mySquad.value
+  if (!squad || claimSaving.value) return
+  claimSaving.value = true
+  await squads.setMemberClaim(squad.id, !squad.member_claim)
+  claimSaving.value = false
+}
 /** Top-level squad turfs the current user may divide, mirroring the DB's
  * can_lead_subcut / can_member_subcut so the UI offers exactly what the
  * set_turf_segments RPC will accept. */
@@ -151,13 +176,35 @@ const assignableParentIds = computed<Set<string>>(() => {
     if (role === 'campaign_manager' || role === 'admin') out.add(t.id)
     else if (role === 'team_lead') {
       if (t.assignee_id === me || (t.squad_id !== null && t.squad_id === squadId)) out.add(t.id)
-    } else if (!squadHasRankedMember.value && t.squad_id !== null && t.squad_id === squadId) {
+    } else if (
+      (!squadHasRankedMember.value || memberClaimOn.value) &&
+      t.squad_id !== null &&
+      t.squad_id === squadId
+    ) {
       out.add(t.id)
     }
   }
   return out
 })
 const canAssign = computed(() => assignableParentIds.value.size > 0)
+/** A plain canvasser cutting under the leader's switch picks doors for
+ * THEMSELVES — that's what the leader handed out. (The leaderless fallback is
+ * unchanged: with nobody to do the dividing, any member may hand doors to
+ * anyone.) The DB gate is squad-scoped either way, so this is the product
+ * rule, not the security boundary. */
+const claimSelfOnly = computed(
+  () =>
+    auth.profile?.role === 'canvasser' && squadHasRankedMember.value && memberClaimOn.value,
+)
+function canAssignTo(memberId: string): boolean {
+  if (!canAssign.value) return false
+  return !claimSelfOnly.value || memberId === auth.profile?.id
+}
+/** "Claim mine" when you're picking for yourself, "Assign" when you're
+ * handing them out. Short on purpose — it's a button on a square tile. */
+function assignVerb(memberId: string): string {
+  return memberId === auth.profile?.id && claimSelfOnly.value ? 'Claim mine' : 'Assign'
+}
 const progressPct = computed(() =>
   doorsTotal.value ? Math.round((doorsKnocked.value / doorsTotal.value) * 100) : 0,
 )
@@ -435,7 +482,11 @@ function applyMapData(refit = false) {
 // (defaulting to the crew's turf) because a plain squad-page load must never
 // pay for the org-wide download, which "All turf" fetches on first use. ---
 
-const turfShade = ref<TurfShadeMode>(readTurfShadeMode('squad-turf-shading', 'mine'))
+// 'doors' is Scout's fourth state and this map has no button for it; a value
+// that somehow lands under this key reads as the crew's turf rather than
+// leaving both buttons dark.
+const storedShade = readTurfShadeMode('squad-turf-shading', 'mine')
+const turfShade = ref<TurfShadeMode>(storedShade === 'doors' ? 'mine' : storedShade)
 /** Every turf row, unfiltered — "All turf" paints from these. */
 const allTurfList = ref<TurfLite[]>([])
 
@@ -632,6 +683,13 @@ function applyDoorPins() {
 function onMapClick(e: google.maps.MapMouseEvent) {
   const zoomedIn = (map?.getZoom() ?? 0) >= PINS_MIN_ZOOM
   const id = zoomedIn && e.latLng ? doorLayer?.doorAt(e.latLng) : null
+  if (streetTapActive.value && assigningMemberId.value) {
+    // The whole-street tool resolves off a door, so it needs one under the
+    // finger — say so rather than doing nothing.
+    if (id) handleStreetTap(id)
+    else flashSweep(zoomedIn ? 'Tap a door pin on the street you want.' : 'Zoom in to pick a street.')
+    return
+  }
   if (id) onDoorTap(id)
 }
 
@@ -811,6 +869,40 @@ async function onLiveKnock(knock: KnockLog) {
     doorLayer?.plink(a.id, 2.4, 700)
   }
 
+  // Someone's full-run sheet is open on this exact person — land the knock in
+  // it too. One row fetched with its embeds, prepended: refetching the whole
+  // list would blank the sheet mid-read.
+  if (sheetMemberId.value === knock.canvasser_id) {
+    const { data: row } = await supabase
+      .from('knock_logs')
+      .select('id, outcome, occurred_at, household_id, person:persons(name), addresses(street, city)')
+      .eq('id', knock.id)
+      .maybeSingle()
+    type Row = {
+      id: string
+      outcome: KnockOutcome
+      occurred_at: string
+      household_id: string | null
+      person: { name: string } | null
+      addresses: { street: string; city: string } | null
+    }
+    const r = row as unknown as Row | null
+    if (r && sheetMemberId.value === knock.canvasser_id && !sheetFeed.value.some((f) => f.id === r.id)) {
+      sheetFeed.value = [
+        {
+          id: r.id,
+          outcome: r.outcome,
+          occurredAt: r.occurred_at,
+          addressId: r.household_id,
+          street: r.addresses?.street ?? '',
+          city: r.addresses?.city ?? '',
+          person: r.person?.name ?? null,
+        },
+        ...sheetFeed.value,
+      ]
+    }
+  }
+
   const member = mySquad.value?.members.find((m) => m.id === knock.canvasser_id)
   if (member) updateMemberMarker(member, true)
 }
@@ -890,6 +982,8 @@ function startAssign(memberId: string) {
   }
   assignSelected.value = pre
   assignAnchorId.value = null
+  disarmTools()
+  sweepFlash.value = ''
   mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
@@ -898,6 +992,8 @@ function cancelAssign() {
   assignSelected.value = new Set()
   assignAnchorId.value = null
   assignError.value = ''
+  disarmTools()
+  sweepFlash.value = ''
 }
 
 /** Tap an unselected door: it joins the pile and becomes the walk anchor.
@@ -933,6 +1029,217 @@ function toggleAssignDoor(addressId: string) {
   next.add(addressId)
   assignAnchorId.value = addressId
   assignSelected.value = next
+}
+
+// --- Sweep tools: lasso and whole-street taps -------------------------------
+// Tapping doors one at a time (or two-tapping a walk) is fine for a stretch;
+// it is not fine for "give Angie everything east of the tracks". So the squad
+// map carries the turf cutter's two sweep tools, cut down to what this map
+// needs — the selection here is a set of door ids, not street segments, so
+// there's no draft/claim machinery behind either one.
+//
+// Lasso: freeze the map under a pointer-capture overlay, drag a loop, and
+// every assignable door inside it (or brushed by the line) joins the pile.
+// Streets: tap a door pin and its whole street comes with it.
+// Both share one Add/Erase switch, shown only while a tool is armed.
+
+/** How close (screen px) the lasso LINE must pass to a door to brush it —
+ * scribbling over a few pins works without enclosing them. Same 16px the
+ * cutter uses. */
+const LASSO_BRUSH_PX = 16
+
+const lassoActive = ref(false)
+const streetTapActive = ref(false)
+const sweepMode = ref<'add' | 'erase'>('add')
+const lassoCanvasEl = ref<HTMLCanvasElement | null>(null)
+let lassoPath: { x: number; y: number }[] = []
+let lassoDrawing = false
+
+/** Transient one-liner under the assign bar ("Lasso: added 34 doors") — the
+ * sweep tools take a lot of doors at once and silence reads as "did that
+ * work?". */
+const sweepFlash = ref('')
+let sweepFlashTimer: ReturnType<typeof setTimeout> | undefined
+function flashSweep(msg: string) {
+  sweepFlash.value = msg
+  clearTimeout(sweepFlashTimer)
+  sweepFlashTimer = setTimeout(() => (sweepFlash.value = ''), 3500)
+}
+
+/** Put the map back the way we found it and drop any half-drawn loop. */
+function disarmTools() {
+  if (lassoActive.value) map?.setOptions({ gestureHandling: 'greedy' })
+  lassoActive.value = false
+  streetTapActive.value = false
+  sweepMode.value = 'add'
+  lassoPath = []
+  lassoDrawing = false
+}
+
+function toggleLasso() {
+  const on = !lassoActive.value
+  disarmTools()
+  lassoActive.value = on
+  map?.setOptions({ gestureHandling: on ? 'none' : 'greedy' })
+  if (on) void nextTick(sizeLassoCanvas)
+}
+
+function toggleStreetTap() {
+  const on = !streetTapActive.value
+  disarmTools()
+  streetTapActive.value = on
+}
+
+function sizeLassoCanvas() {
+  const c = lassoCanvasEl.value
+  const host = mapEl.value
+  if (!c || !host) return
+  const dpr = Math.min(window.devicePixelRatio || 1, 2)
+  c.width = Math.round(host.clientWidth * dpr)
+  c.height = Math.round(host.clientHeight * dpr)
+  c.getContext('2d')?.setTransform(dpr, 0, 0, dpr, 0, 0)
+}
+
+function lassoPoint(e: PointerEvent): { x: number; y: number } {
+  const rect = (lassoCanvasEl.value ?? mapEl.value)!.getBoundingClientRect()
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+}
+
+function drawLassoTrail() {
+  const c = lassoCanvasEl.value
+  const ctx = c?.getContext('2d')
+  if (!c || !ctx) return
+  ctx.clearRect(0, 0, c.width, c.height)
+  if (lassoPath.length < 2) return
+  ctx.beginPath()
+  ctx.moveTo(lassoPath[0].x, lassoPath[0].y)
+  for (let i = 1; i < lassoPath.length; i++) ctx.lineTo(lassoPath[i].x, lassoPath[i].y)
+  // The loop draws in the member's own color while adding, and in the
+  // shared "this is a no" red while erasing — the intent reads before the
+  // finger lifts.
+  ctx.strokeStyle =
+    sweepMode.value === 'erase'
+      ? '#d64545'
+      : assigningMember.value
+        ? memberColor(assigningMember.value)
+        : '#1d2433'
+  ctx.lineWidth = 3
+  ctx.lineJoin = 'round'
+  ctx.stroke()
+  ctx.setLineDash([6, 6])
+  ctx.beginPath()
+  ctx.moveTo(lassoPath[lassoPath.length - 1].x, lassoPath[lassoPath.length - 1].y)
+  ctx.lineTo(lassoPath[0].x, lassoPath[0].y)
+  ctx.stroke()
+  ctx.setLineDash([])
+}
+
+function onLassoDown(e: PointerEvent) {
+  sizeLassoCanvas()
+  lassoDrawing = true
+  lassoPath = [lassoPoint(e)]
+  ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+}
+
+function onLassoMove(e: PointerEvent) {
+  if (!lassoDrawing) return
+  const p = lassoPoint(e)
+  const last = lassoPath[lassoPath.length - 1]
+  if (Math.hypot(p.x - last.x, p.y - last.y) < 4) return
+  lassoPath.push(p)
+  drawLassoTrail()
+}
+
+function clearLassoCanvas() {
+  const c = lassoCanvasEl.value
+  c?.getContext('2d')?.clearRect(0, 0, c.width, c.height)
+}
+
+function onLassoUp() {
+  if (!lassoDrawing) return
+  lassoDrawing = false
+  const path = lassoPath
+  lassoPath = []
+  clearLassoCanvas()
+  if (path.length < 3 || !assigningMemberId.value) return
+  const ids = doorLayer?.doorsInPolygon(path, LASSO_BRUSH_PX) ?? []
+  applySweep(ids, 'Lasso')
+}
+
+function onLassoCancel() {
+  lassoDrawing = false
+  lassoPath = []
+  clearLassoCanvas()
+}
+
+/** Tap a door pin while ☝ Streets is armed: its whole street joins (or
+ * leaves) the pile. Resolving off the tapped DOOR rather than reverse
+ * geocoding the point — unlike the cutter, every door this map can act on is
+ * already loaded and painted, so there is nothing to guess at. */
+function handleStreetTap(addressId: string) {
+  const door = turfDoors.value.get(addressId)
+  if (!door) return
+  const key = streetKeyOf(door)
+  const ids: string[] = []
+  for (const d of turfDoors.value.values()) {
+    if (streetKeyOf(d) === key) ids.push(d.id)
+  }
+  applySweep(ids, prettyStreet(streetNameOf(door.street)))
+}
+
+function streetKeyOf(d: TurfDoor): string {
+  return `${streetNameOf(d.street)}|${d.city.toUpperCase()}`
+}
+
+/** Fold a swept batch of door ids into the member's pile (or out of it) and
+ * say what happened. Doors the viewer can't hand out — another crew's turf,
+ * a turf they may not divide — are skipped and counted, never silently
+ * included. Sweeps clear the two-tap walk anchor: the anchor means "the last
+ * door you tapped", and after a loop that's not a thing. */
+function applySweep(ids: string[], what: string) {
+  const next = new Set(assignSelected.value)
+  if (sweepMode.value === 'erase') {
+    let removed = 0
+    for (const id of ids) {
+      if (next.delete(id)) removed++
+    }
+    if (!removed) {
+      flashSweep('Nothing of theirs there — Erase takes doors back out of the pile.')
+      return
+    }
+    assignSelected.value = next
+    assignAnchorId.value = null
+    flashSweep(`${what}: removed ${removed} door${removed === 1 ? '' : 's'}.`)
+    return
+  }
+  let added = 0
+  let skipped = 0
+  for (const id of ids) {
+    const door = turfDoors.value.get(id)
+    if (!door || poolParentOf(door) === null) {
+      if (!next.has(id)) skipped++
+      continue
+    }
+    if (!next.has(id)) {
+      next.add(id)
+      added++
+    }
+  }
+  if (!added) {
+    flashSweep(
+      skipped
+        ? `${what}: nothing to take — ${skipped} door${skipped === 1 ? '' : 's'} belong to turf you can't divide.`
+        : `${what}: those doors are already in the pile.`,
+    )
+    return
+  }
+  assignSelected.value = next
+  assignAnchorId.value = null
+  flashSweep(
+    skipped
+      ? `${what}: added ${added} door${added === 1 ? '' : 's'} · ${skipped} skipped (not yours to divide).`
+      : `${what}: added ${added} door${added === 1 ? '' : 's'}.`,
+  )
 }
 
 interface SegmentDraft {
@@ -1074,12 +1381,90 @@ async function saveAssignment() {
     assigningMemberId.value = null
     assignSelected.value = new Set()
     assignAnchorId.value = null
+    disarmTools()
+    sweepFlash.value = ''
     await loadDashboard()
   } catch {
     assignError.value = "Couldn't save that assignment — try again."
   } finally {
     assignSaving.value = false
   }
+}
+
+// --- Member sheet: the last five on a card, the whole day behind it --------
+// The card's recent list answers "where are they right now" in a glance and
+// then runs out. Tapping it (or the card's ⋯ button) opens the same member's
+// full run — last 60 knocks with outcomes, the people answered, and the way
+// through to their profile page.
+
+const sheetMemberId = ref<string | null>(null)
+const sheetOpen = computed({
+  get: () => sheetMemberId.value !== null,
+  set: (v: boolean) => {
+    if (!v) sheetMemberId.value = null
+  },
+})
+const sheetMember = computed<ChatProfile | null>(
+  () => (sheetMemberId.value ? (memberById.value.get(sheetMemberId.value) ?? null) : null),
+)
+
+interface FeedRow {
+  id: string
+  outcome: KnockOutcome
+  occurredAt: string
+  addressId: string | null
+  street: string
+  city: string
+  person: string | null
+}
+
+const sheetFeed = ref<FeedRow[]>([])
+const sheetLoading = ref(false)
+/** Drops a slower earlier fetch that lands after a newer member's. */
+let sheetSeq = 0
+
+async function openMemberSheet(memberId: string) {
+  sheetMemberId.value = memberId
+  sheetFeed.value = []
+  sheetLoading.value = true
+  const seq = ++sheetSeq
+  const { data } = await supabase
+    .from('knock_logs')
+    .select('id, outcome, occurred_at, household_id, person:persons(name), addresses(street, city)')
+    .eq('canvasser_id', memberId)
+    .order('occurred_at', { ascending: false })
+    .limit(60)
+  if (seq !== sheetSeq) return
+  type Row = {
+    id: string
+    outcome: KnockOutcome
+    occurred_at: string
+    household_id: string | null
+    person: { name: string } | null
+    addresses: { street: string; city: string } | null
+  }
+  sheetFeed.value = ((data ?? []) as unknown as Row[]).map((r) => ({
+    id: r.id,
+    outcome: r.outcome,
+    occurredAt: r.occurred_at,
+    addressId: r.household_id,
+    street: r.addresses?.street ?? '',
+    city: r.addresses?.city ?? '',
+    person: r.person?.name ?? null,
+  }))
+  sheetLoading.value = false
+}
+
+/** A feed row is a way back to the door: same handoff the map pins do. */
+async function openFeedDoor(row: FeedRow) {
+  if (!row.addressId) return
+  sheetMemberId.value = null
+  await openDoor(row.addressId)
+}
+
+function openMemberProfile(memberId: string) {
+  sheetMemberId.value = null
+  void router.push({ name: 'member', params: { id: memberId } })
 }
 
 // --- No-squad state: form or join today's crew right here ---
@@ -1137,8 +1522,23 @@ function knockTime(iso: string): string {
   return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
+/** Sheet rows span days, so they carry the day as well as the clock. */
+function feedStamp(iso: string): string {
+  const d = new Date(iso)
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  if (d.toDateString() === new Date().toDateString()) return `Today ${time}`
+  return `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} ${time}`
+}
+
 function memberName(m: ChatProfile): string {
   return m.display_name || m.username
+}
+
+/** "Squad Leader" and friends — the same labels the roster shows. Canvasser
+ * is the default and says nothing worth a chip. */
+function memberRoleLabel(m: ChatProfile): string | null {
+  if (!m.role || m.role === 'canvasser') return null
+  return ROLE_LABELS[m.role]
 }
 
 function knockedCount(memberId: string): number {
@@ -1183,6 +1583,9 @@ function onFullscreenChange() {
     google.maps.event.trigger(map, 'resize')
     doorLayer?.checkView()
     doorLayer?.requestRepaint()
+    // The lasso surface is sized in pixels off the map div, so it has to be
+    // re-measured too — sweeping is mostly a fullscreen activity.
+    if (lassoActive.value) sizeLassoCanvas()
   }, 0)
 }
 
@@ -1294,6 +1697,36 @@ watch(
           No turf assigned to your squad yet today — your campaign manager sends turf out to
           each day's crews. The map still follows everyone's knocks meanwhile.
         </p>
+
+        <!-- The leader's day switch: keep the dividing, or let the crew grab
+             their own stretch. Off by default, and gone at midnight with the
+             squad. Everyone else just sees the state as a note. -->
+        <div v-if="canToggleClaim" class="claim-row">
+          <label class="claim-switch">
+            <input
+              type="checkbox"
+              :checked="memberClaimOn"
+              :disabled="claimSaving"
+              @change="toggleMemberClaim"
+            />
+            <span class="claim-track" aria-hidden="true"><span class="claim-knob"></span></span>
+            <span class="claim-label">
+              <strong>Crew claims their own doors</strong>
+              <span class="muted claim-hint">
+                {{
+                  memberClaimOn
+                    ? 'On — anyone on this crew can cut their own share out of the turf.'
+                    : 'Off — you hand out the doors. Turn it on when it’s chaotic out there.'
+                }}
+              </span>
+            </span>
+          </label>
+        </div>
+        <p v-else-if="memberClaimOn && canAssign" class="muted claim-note">
+          Your squad leader turned on <strong>crew claiming</strong> — pick your own doors on
+          your card below, then flip Scout to “My doors”.
+        </p>
+        <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>
       </div>
 
       <!-- Map -->
@@ -1305,9 +1738,23 @@ watch(
         >
           <span class="assign-dot" aria-hidden="true"></span>
           <p class="assign-text">
-            Assigning doors to <strong>{{ memberName(assigningMember) }}</strong> — tap doors to
-            add or remove them; tap one door, then another, to take the whole walk between them
-            (even around a corner). <strong>{{ assignSelected.size }}</strong> selected.
+            <template v-if="assigningMemberId === auth.profile?.id && claimSelfOnly">
+              Claiming doors for <strong>yourself</strong> —
+            </template>
+            <template v-else>
+              Assigning doors to <strong>{{ memberName(assigningMember) }}</strong> —
+            </template>
+            <template v-if="lassoActive">
+              drag a loop on the map and every door inside comes with it.
+            </template>
+            <template v-else-if="streetTapActive">
+              tap a door and its whole street comes with it.
+            </template>
+            <template v-else>
+              tap doors to add or remove them; tap one door, then another, to take the whole walk
+              between them. Or use ◯ Lasso / ☝ Streets on the map to sweep a lot at once.
+            </template>
+            <strong class="assign-count">{{ assignSelected.size }}</strong> selected.
           </p>
           <div class="assign-actions">
             <button class="btn btn-sm btn-primary" :disabled="assignSaving" @click="saveAssignment">
@@ -1329,6 +1776,38 @@ watch(
           :class="{ 'map-wrap-fullscreen': isFullscreen }"
         >
           <div ref="mapEl" class="squad-map"></div>
+          <!-- Freehand selection surface — only exists while the lasso is
+               armed, and it swallows the map's own gestures while it does. -->
+          <div
+            v-if="lassoActive"
+            class="lasso-layer"
+            @pointerdown.prevent="onLassoDown"
+            @pointermove.prevent="onLassoMove"
+            @pointerup.prevent="onLassoUp"
+            @pointercancel="onLassoCancel"
+          >
+            <canvas ref="lassoCanvasEl" class="lasso-canvas"></canvas>
+          </div>
+          <!-- Sweep feedback lives ON the map, not in the assign bar above
+               it: sweeping is exactly what people do in fullscreen, where the
+               page chrome (and the running count) isn't on screen at all. -->
+          <div
+            v-if="assigningMember && (sweepFlash || lassoActive || streetTapActive)"
+            class="sweep-toast"
+            :style="{
+              '--assign-color': memberColor(assigningMember),
+              '--assign-ink': inkOn(memberColor(assigningMember)),
+            }"
+          >
+            <span v-if="sweepFlash">{{ sweepFlash }}</span>
+            <span v-else-if="lassoActive">
+              {{ sweepMode === 'erase' ? 'Loop doors to take them back out' : 'Loop doors to add them' }}
+            </span>
+            <span v-else>
+              {{ sweepMode === 'erase' ? 'Tap a door to drop its street' : 'Tap a door to take its street' }}
+            </span>
+            <strong class="sweep-toast-count">{{ assignSelected.size }}</strong>
+          </div>
           <!-- Flip every pin between a colored dot and its house number —
                the same control Scout and the turf cutter carry, top-left
                above the layer toggle. -->
@@ -1376,6 +1855,53 @@ watch(
               </template>
             </svg>
           </button>
+          <!-- Sweep tools, top-right under fullscreen — the turf cutter's
+               pair, cut down to a door-id selection. Only while assigning:
+               with no pile open there's nothing to sweep into. -->
+          <div v-if="assigningMemberId" class="sweep-toggle">
+            <button
+              type="button"
+              class="layer-btn"
+              :class="{ active: lassoActive }"
+              :aria-pressed="lassoActive"
+              title="Draw a loop to take every door inside it"
+              @click="toggleLasso"
+            >
+              ◯ Lasso
+            </button>
+            <button
+              type="button"
+              class="layer-btn"
+              :class="{ active: streetTapActive }"
+              :aria-pressed="streetTapActive"
+              title="Tap a door to take its whole street"
+              @click="toggleStreetTap"
+            >
+              ☝ Streets
+            </button>
+            <template v-if="lassoActive || streetTapActive">
+              <button
+                type="button"
+                class="layer-btn"
+                :class="{ active: sweepMode === 'add' }"
+                :aria-pressed="sweepMode === 'add'"
+                title="Add the sweep to this member's doors"
+                @click="sweepMode = 'add'"
+              >
+                Add
+              </button>
+              <button
+                type="button"
+                class="layer-btn sweep-erase"
+                :class="{ active: sweepMode === 'erase' }"
+                :aria-pressed="sweepMode === 'erase'"
+                title="Take the sweep back out of this member's doors"
+                @click="sweepMode = 'erase'"
+              >
+                Erase
+              </button>
+            </template>
+          </div>
           <!-- Turf layer, tri-state: ring the crew's doors in their turf
                colors, ring EVERY turf's doors (the whole campaign's cut), or
                (tap the active button again) plain status pins. No area
@@ -1406,7 +1932,9 @@ watch(
         </div>
       </div>
 
-      <!-- Member cards -->
+      <!-- Member cards. Three tap targets, each its own thing: the header
+           zooms the map to that person, the recent list opens their full run,
+           and the action row is the buttons. -->
       <div class="member-grid">
         <div
           v-for="(m, i) in orderedMembers"
@@ -1417,47 +1945,66 @@ watch(
           :style="{
             '--member-color': memberColor(m),
           }"
-          role="button"
-          tabindex="0"
-          @click="selectMember(m.id)"
-          @keydown.enter.self.prevent="selectMember(m.id)"
         >
-          <div class="member-top">
+          <button
+            type="button"
+            class="member-top"
+            :aria-label="`Zoom the map to ${memberName(m)}`"
+            @click="selectMember(m.id)"
+          >
             <span class="member-avatar" :style="!avatarUrl(m.avatar) ? { background: memberColor(m) } : {}">
               <img v-if="avatarUrl(m.avatar)" :src="avatarUrl(m.avatar)" alt="" />
               <template v-else>{{ memberName(m).slice(0, 1).toUpperCase() }}</template>
             </span>
-            <span class="member-name">
-              {{ memberName(m) }}
-              <span v-if="m.id === auth.profile?.id" class="muted you-tag">(you)</span>
+            <span class="member-id">
+              <span class="member-name">
+                {{ memberName(m) }}
+                <span v-if="m.id === auth.profile?.id" class="muted you-tag">(you)</span>
+              </span>
+              <span v-if="memberRoleLabel(m)" class="member-sub">
+                <span class="role-chip">{{ memberRoleLabel(m) }}</span>
+              </span>
             </span>
-            <span v-if="squadTurfs.length" class="member-count" :title="'Turf doors knocked'">
+            <span v-if="squadTurfs.length" class="member-count" title="Turf doors knocked">
               {{ knockedCount(m.id) }}
             </span>
-          </div>
-          <ul v-if="recentByMember.get(m.id)?.length" class="recent-list">
-            <li v-for="r in recentByMember.get(m.id)" :key="r.addressId">
-              <span class="recent-street">{{ prettyStreet(r.street) }}</span>
-              <span class="recent-time muted">{{ knockTime(r.occurredAt) }}</span>
-            </li>
-          </ul>
-          <p v-else class="muted no-knocks">No doors knocked yet.</p>
-          <div v-if="(m.phone && m.id !== auth.profile?.id) || canAssign" class="member-actions">
+          </button>
+
+          <!-- The last five, and the way to the rest of them. -->
+          <button
+            type="button"
+            class="recent-block"
+            :aria-label="`See ${memberName(m)}'s knocks`"
+            @click="openMemberSheet(m.id)"
+          >
+            <ul v-if="recentByMember.get(m.id)?.length" class="recent-list">
+              <li v-for="r in recentByMember.get(m.id)" :key="r.addressId">
+                <span class="recent-street">{{ prettyStreet(r.street) }}</span>
+                <span class="recent-time muted">{{ knockTime(r.occurredAt) }}</span>
+              </li>
+            </ul>
+            <p v-else class="muted no-knocks">No doors knocked yet.</p>
+            <span class="recent-more">
+              {{ recentByMember.get(m.id)?.length ? 'See all their knocks' : 'Open their card' }} ›
+            </span>
+          </button>
+
+          <div class="member-actions">
+            <button class="btn btn-sm ghost-btn" @click="openMemberProfile(m.id)">Profile</button>
             <a
               v-if="m.phone && m.id !== auth.profile?.id"
-              class="btn btn-sm call-btn"
+              class="btn btn-sm ghost-btn"
               :href="telHref(m.phone)"
               :aria-label="`Call ${memberName(m)}`"
-              @click.stop
             >
               Call
             </a>
             <button
-              v-if="canAssign"
+              v-if="canAssignTo(m.id)"
               class="btn btn-sm assign-btn"
-              @click.stop="startAssign(m.id)"
+              @click="startAssign(m.id)"
             >
-              {{ assigningMemberId === m.id ? 'Picking doors…' : 'Assign doors' }}
+              {{ assigningMemberId === m.id ? 'Picking…' : assignVerb(m.id) }}
             </button>
           </div>
         </div>
@@ -1465,6 +2012,75 @@ watch(
     </div>
 
     <p v-else class="muted">Loading your squad…</p>
+
+    <!-- One member's whole run — the card's last-five, opened out. -->
+    <BottomSheet
+      v-model:open="sheetOpen"
+      :aria-label="sheetMember ? `${memberName(sheetMember)}’s knocks` : 'Member'"
+    >
+      <template #header>
+        <div v-if="sheetMember" class="sheet-head" :style="{ '--member-color': memberColor(sheetMember) }">
+          <span
+            class="member-avatar"
+            :style="!avatarUrl(sheetMember.avatar) ? { background: memberColor(sheetMember) } : {}"
+          >
+            <img v-if="avatarUrl(sheetMember.avatar)" :src="avatarUrl(sheetMember.avatar)" alt="" />
+            <template v-else>{{ memberName(sheetMember).slice(0, 1).toUpperCase() }}</template>
+          </span>
+          <span class="sheet-id">
+            <strong>{{ memberName(sheetMember) }}</strong>
+            <span class="muted sheet-sub">
+              {{ memberRoleLabel(sheetMember) ?? 'Canvasser' }}
+              <template v-if="squadTurfs.length"> · {{ knockedCount(sheetMember.id) }} of our doors</template>
+            </span>
+          </span>
+        </div>
+      </template>
+
+      <div v-if="sheetMember" class="sheet-body">
+        <div class="sheet-actions">
+          <button class="btn btn-sm btn-primary" @click="openMemberProfile(sheetMember.id)">
+            View profile
+          </button>
+          <a
+            v-if="sheetMember.phone && sheetMember.id !== auth.profile?.id"
+            class="btn btn-sm ghost-btn"
+            :href="telHref(sheetMember.phone)"
+          >
+            Call
+          </a>
+          <button
+            v-if="canAssignTo(sheetMember.id)"
+            class="btn btn-sm ghost-btn"
+            @click="sheetMemberId = null; startAssign(sheetMember.id)"
+          >
+            {{ assignVerb(sheetMember.id) }}
+          </button>
+        </div>
+
+        <p v-if="sheetLoading" class="muted">Loading their knocks…</p>
+        <p v-else-if="!sheetFeed.length" class="muted">No knocks logged yet.</p>
+        <ul v-else class="feed-list">
+          <li v-for="row in sheetFeed" :key="row.id">
+            <button
+              type="button"
+              class="feed-row"
+              :disabled="!row.addressId"
+              @click="openFeedDoor(row)"
+            >
+              <span class="feed-dot" :style="{ background: OUTCOME_HEX[row.outcome] }" aria-hidden="true"></span>
+              <span class="feed-main">
+                <span class="feed-street">{{ prettyStreet(row.street) || 'Door' }}</span>
+                <span class="muted feed-meta">
+                  {{ OUTCOME_LABELS[row.outcome] }}<template v-if="row.person"> · {{ row.person }}</template>
+                </span>
+              </span>
+              <span class="muted feed-time">{{ feedStamp(row.occurredAt) }}</span>
+            </button>
+          </li>
+        </ul>
+      </div>
+    </BottomSheet>
 
     <!-- New squad sheet (no-squad state) -->
     <BottomSheet v-model:open="composing" title="New squad" aria-label="New squad">
@@ -1640,6 +2256,82 @@ watch(
   font-size: 0.9rem;
 }
 
+/* --- "Crew claims their own doors" switch --- */
+
+.claim-row {
+  border-top: 1px solid var(--border);
+  padding-top: 0.55rem;
+}
+
+.claim-switch {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  cursor: pointer;
+}
+
+.claim-switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.claim-track {
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 18%, transparent);
+  border: 1px solid var(--border);
+  transition: background 0.15s ease;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+}
+
+.claim-knob {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 0.15s ease;
+}
+
+.claim-switch input:checked + .claim-track {
+  background: var(--accent);
+}
+
+.claim-switch input:checked + .claim-track .claim-knob {
+  transform: translateX(18px);
+}
+
+.claim-switch input:focus-visible + .claim-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.claim-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  font-size: 0.9rem;
+  min-width: 0;
+}
+
+.claim-hint {
+  font-size: 0.82rem;
+}
+
+.claim-note {
+  margin: 0;
+  font-size: 0.86rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.55rem;
+}
+
 /* --- Map --- */
 
 .map-card {
@@ -1772,6 +2464,70 @@ watch(
   padding: 1rem;
 }
 
+/* Sweep tools, top-right under the fullscreen button — same chrome as the
+   layer buttons, same spot the turf cutter puts them. */
+.sweep-toggle {
+  position: absolute;
+  top: calc(0.6rem + 36px + 0.5rem);
+  right: 0.6rem;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+}
+
+.sweep-erase.active {
+  background: #d64545;
+}
+
+/* The lasso capture surface sits over the whole map while armed — it takes
+   the pointer, which is why the map is frozen underneath it. */
+.lasso-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  touch-action: none;
+  cursor: crosshair;
+  overflow: hidden;
+}
+
+.lasso-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.sweep-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 0.6rem;
+  transform: translateX(-50%);
+  max-width: min(92%, 30rem);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  border-radius: 999px;
+  background: rgba(17, 20, 30, 0.88);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  z-index: 7;
+  pointer-events: none;
+}
+
+.sweep-toast-count {
+  flex-shrink: 0;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: var(--assign-color, #fff);
+  color: var(--assign-ink, #111);
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- Assign mode --- */
 
 .assign-bar {
@@ -1812,22 +2568,41 @@ watch(
   width: 100%;
 }
 
+.assign-count {
+  white-space: nowrap;
+}
+
 .member-actions {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  margin-top: auto;
 }
 
 .assign-btn,
-.call-btn {
-  border: 1.5px solid var(--member-color);
-  color: var(--member-color);
+.ghost-btn {
+  border: 1.5px solid var(--member-color, var(--border));
+  color: var(--member-color, var(--text));
   background: transparent;
   font-weight: 700;
+  text-decoration: none;
 }
 
-.call-btn {
-  text-decoration: none;
+.ghost-btn {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+/* Tiles are half a phone wide — the buttons have to be too. */
+.member-card .member-actions .btn {
+  padding: 0.25rem 0.5rem;
+  min-height: 30px;
+  font-size: 0.74rem;
+}
+
+.assign-btn {
+  margin-left: auto;
 }
 
 .member-card.assigning .assign-btn {
@@ -1837,30 +2612,43 @@ watch(
 
 /* --- Member cards --- */
 
+/* Two per row, always — the crew reads as a grid of squares people snap
+   into, not a column of stacked strips (user call, 2026-07-24). Phones get
+   exactly two; wide screens widen to four rather than growing the tiles into
+   billboards. The aspect ratio is a FLOOR, not a fixed height: a long name or
+   a five-door list is allowed to push the tile taller rather than clip. */
 .member-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+@media (min-width: 900px) {
+  .member-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* Square tiles. Grid items keep `min-height: auto`, so a long name or a full
+   five-door list still pushes the tile taller instead of being clipped —
+   aspect-ratio is the floor, not a cage. */
+.member-card {
+  aspect-ratio: 1 / 1;
 }
 
 .member-card {
   font: inherit;
   color: var(--text);
   text-align: left;
-  cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.75rem;
+  gap: 0.45rem;
+  padding: 0.7rem;
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--member-color) 7%, var(--surface));
   border: 2px solid color-mix(in srgb, var(--member-color) 45%, var(--border));
   border-left: 6px solid var(--member-color);
-  transition: border-color 0.12s ease, transform 0.12s ease;
-}
-
-.member-card:hover {
-  transform: translateY(-1px);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
 .member-card.selected {
@@ -1868,16 +2656,89 @@ watch(
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--member-color) 35%, transparent);
 }
 
+/* Header, recent list and actions are three separate targets — the header
+   zooms the map, the list opens the member sheet. A whole-card click handler
+   made every button a stop-propagation fight. */
 .member-top {
   display: flex;
   align-items: center;
   gap: 0.55rem;
   min-width: 0;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.member-top:hover .member-name,
+.recent-block:hover .recent-more {
+  text-decoration: underline;
+}
+
+.member-id {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.member-sub {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  min-width: 0;
+}
+
+.member-sub .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.role-chip {
+  flex-shrink: 0;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.7rem;
+  background: color-mix(in srgb, var(--member-color) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--member-color) 50%, transparent);
+}
+
+.recent-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  padding: 0.4rem 0.45rem;
+  border: 1px dashed color-mix(in srgb, var(--member-color) 40%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+
+.recent-block:hover {
+  background: var(--surface);
+}
+
+.recent-more {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--member-color);
 }
 
 .member-avatar {
-  width: 40px;
-  height: 40px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
   flex-shrink: 0;
   display: flex;
@@ -1899,6 +2760,7 @@ watch(
 
 .member-name {
   font-weight: 700;
+  font-size: 0.9rem;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1907,17 +2769,17 @@ watch(
 
 .you-tag {
   font-weight: 500;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
 }
 
 .member-count {
   margin-left: auto;
   flex-shrink: 0;
-  min-width: 2em;
+  min-width: 1.9em;
   text-align: center;
   font-weight: 800;
-  font-size: 0.95rem;
-  padding: 0.15rem 0.45rem;
+  font-size: 0.85rem;
+  padding: 0.1rem 0.4rem;
   border-radius: 999px;
   background: var(--member-color);
   color: #fff;
@@ -1929,14 +2791,14 @@ watch(
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
+  gap: 0.1rem;
 }
 
 .recent-list li {
   display: flex;
   justify-content: space-between;
-  gap: 0.5rem;
-  font-size: 0.8rem;
+  gap: 0.4rem;
+  font-size: 0.74rem;
   line-height: 1.35;
 }
 
@@ -1954,6 +2816,108 @@ watch(
 .no-knocks {
   margin: 0;
   font-size: 0.8rem;
+}
+
+/* --- Member sheet: the full run --- */
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.sheet-id {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.sheet-sub {
+  font-size: 0.8rem;
+}
+
+.sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.sheet-actions {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.feed-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.feed-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 0.5rem 0.15rem;
+  cursor: pointer;
+}
+
+.feed-row:disabled {
+  cursor: default;
+}
+
+.feed-row:not(:disabled):hover {
+  background: var(--surface-2);
+}
+
+.feed-dot {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.feed-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.feed-street {
+  font-weight: 600;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-meta {
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feed-time {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 </style>

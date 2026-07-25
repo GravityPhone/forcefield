@@ -69,6 +69,7 @@ export const useSquadsStore = defineStore('squads', {
           created_by: row.created_by,
           squad_date: row.squad_date,
           created_at: row.created_at,
+          member_claim: row.member_claim ?? false,
           members,
           isMember: members.some((m) => m.id === this.myId),
         }
@@ -99,6 +100,27 @@ export const useSquadsStore = defineStore('squads', {
       const { error } = await supabase.rpc('join_squad', { target_squad_id: squadId })
       if (error) this.actionError = 'Could not join that squad — try again.'
       await this.loadToday()
+    },
+
+    /** Squad leader's day-scoped call: let the crew claim their own doors, or
+     * take the dividing back. The RPC is the gate (leader / manager / the
+     * person who started the crew) — the optimistic local flip is only so the
+     * switch answers instantly; a failure puts it back. */
+    async setMemberClaim(squadId: string, allow: boolean): Promise<boolean> {
+      this.actionError = ''
+      const squad = this.squads.find((s) => s.id === squadId)
+      const before = squad?.member_claim ?? false
+      if (squad) squad.member_claim = allow
+      const { error } = await supabase.rpc('set_squad_member_claim', {
+        target_squad_id: squadId,
+        allow,
+      })
+      if (error) {
+        if (squad) squad.member_claim = before
+        this.actionError = "Couldn't change who can claim doors — try again."
+        return false
+      }
+      return true
     },
 
     async leaveSquad(squadId: string) {
