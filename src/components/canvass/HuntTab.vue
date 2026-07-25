@@ -28,6 +28,7 @@ import {
   doorStatusOutcome,
   knockButtonHex,
 } from '@/lib/outcomes'
+import { inkOn } from '@/lib/memberColors'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import OutcomeIndicatorGrid from './OutcomeIndicatorGrid.vue'
 import { fadeUp } from '@/lib/motion'
@@ -101,6 +102,10 @@ const showCity = ref(readMapPref('map-show-city', false))
 function setTurfShade(mode: 'mine' | 'all') {
   turfShade.value = turfShade.value === mode ? 'off' : mode
   writeTurfShadeMode('map-turf-shading', turfShade.value)
+  // Switching ON "My turf" also takes you there — this button replaced the
+  // old "Zoom to my turf" chip. Turning it off doesn't move the map; you're
+  // looking at something.
+  if (turfShade.value === 'mine') focusMyTurf()
 }
 
 function toggleCity() {
@@ -281,46 +286,66 @@ function applyStatusAndSummary(
   if (todayData) knockedToday.value = todayData
 }
 
-/** Paint state for one door on the shared canvas layer — the Scout reading
- * of the same three-band model every map uses: outermost halo, membership
- * ring, then the status fill.
+/** Paint state for one door on the shared canvas layer. Scout has TWO
+ * readings and the turf layer button is the switch between them:
  *
- * fill      = the door's effective knock status (doorStatusOutcome), blue
- *             when nobody's been yet.
- * innerRing = PARTLY SIGNED: green fill with a yellow band, so "one of the
- *             three signed" reads as progress-with-work-left rather than
- *             looking the same as a door where nobody has signed at all
- *             (that stays a plain yellow 'maybe').
- * ring      = whose ground this is — the owning turf's own color, and ONLY
- *             while the turf layer is on. The LOCATED door takes the ring
- *             for itself in near-black regardless: whatever you just tapped
- *             has to be unmistakable against a screen of many.
- * halo      = somebody in the org already knocked here TODAY — the
- *             "don't double-knock" cue, and the one band that survives at
- *             tiny-dot zooms.
+ * TURF LAYER OFF — the progress reading. fill = the door's effective knock
+ *   status (doorStatusOutcome, blue when nobody's been yet), plus the
+ *   partly-signed green-with-a-yellow-band so "one of the three signed"
+ *   doesn't look like a door where nobody has signed at all.
+ *
+ * TURF LAYER ON — the ground reading. Every door in a turf the layer covers
+ *   goes SOLID in that turf's color, inside and ring, so a turf reads as one
+ *   block of color and you can see where it ends at a glance. Status colors
+ *   step aside for as long as the layer is on and come straight back when
+ *   it's off — that's the whole point of it being a toggle. Doors the layer
+ *   doesn't cover (someone else's turf in "My turf" mode, unassigned ground
+ *   in either) keep their status colors, which is what makes your own turf
+ *   pop out of the map.
+ *
+ * Both readings keep the two navigation bands, because they answer "where am
+ * I" rather than "how is it going":
+ *   halo = somebody in the org already knocked here TODAY (don't
+ *          double-knock) — the one band that survives at tiny-dot zooms.
+ *   ring = near-black on the LOCATED door: whatever you just tapped has to
+ *          be unmistakable against a screen of many.
  *
  * Never returns null: unlike the turf cutter (which paints only the street
  * being worked), Scout shows every geocoded door, so every door is also
  * tappable. */
 function paintForDoor(id: string): DoorPaintState {
+  const isLocated = id === locatedAddressId.value
+  const halo = knockedToday.value.has(id) ? TODAY_HALO : null
+  const turfColor = turfColorFor(id)
+  if (turfColor) {
+    return {
+      fill: turfColor,
+      ring: isLocated ? LOCATED_RING : turfColor,
+      halo,
+      // Palette hues run light (#eab308) to dark (#7c3aed), so the house
+      // number has to pick its own contrast.
+      ink: inkOn(turfColor),
+      emphasis: isLocated,
+    }
+  }
   const row = statusByHousehold.value.get(id)
   const outcome = doorOutcomeFor(id)
   const partly = doorPartlySigned(row?.outcome, row?.signed_count, row?.person_count)
-  const isLocated = id === locatedAddressId.value
   return {
     fill: partly ? OUTCOME_HEX.signed : outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX,
     innerRing: partly ? OUTCOME_HEX.maybe : null,
-    ring: isLocated ? LOCATED_RING : turfRingFor(id),
-    halo: knockedToday.value.has(id) ? TODAY_HALO : null,
+    ring: isLocated ? LOCATED_RING : null,
+    halo,
     emphasis: isLocated,
   }
 }
 
-/** The turf layer, as a ring color: your own turf's color in "My turf",
- * every turf's own color in "All turf", nothing when it's off. Scout already
- * loads every address (with its turf_id) and every turf row, so "all" needs
- * no extra fetch — it's the same repaint with more rings. */
-function turfRingFor(addressId: string): string | null {
+/** The turf color this door should wear, or null to leave it on status
+ * colors: your own turf's color in "My turf", every turf's own color in
+ * "All turf", nothing when the layer is off. Scout already loads every
+ * address (with its turf_id) and every turf row, so "All turf" needs no
+ * extra fetch — it's the same repaint, different colors. */
+function turfColorFor(addressId: string): string | null {
   if (turfShade.value === 'off') return null
   const turfId = turfByAddress.value.get(addressId)
   if (!turfId) return null
@@ -484,22 +509,21 @@ async function loadMapData() {
   }
 
   const bounds = new google.maps.LatLngBounds()
-  const myTurfBounds = new google.maps.LatLngBounds()
+  let haveMyTurf = false
   for (const a of mapAddresses) {
     if (a.lat == null || a.lng == null) continue
     registerDoor(a)
     bounds.extend({ lat: a.lat, lng: a.lng })
-    if (a.turf_id && myTurfIds.value.has(a.turf_id)) {
-      myTurfBounds.extend({ lat: a.lat, lng: a.lng })
-    }
+    if (a.turf_id && myTurfIds.value.has(a.turf_id)) haveMyTurf = true
   }
   doorLayer?.requestRepaint()
-  // Opening frame, best anchor first: all of your (and your today-squad's)
-  // turf together — the crew's whole assignment in one look — then your last
-  // knocked door, then every pin. (Fitting all ~10k county-wide pins zooms
-  // way out and looks like the map "doesn't know where to start".)
+  // Opening frame, best anchor first: your (and your today-squad's) turf —
+  // the biggest connected patch of it, same best-fit the "My turf" button
+  // uses — then your last knocked door, then every pin. (Fitting all ~10k
+  // county-wide pins zooms way out and looks like the map "doesn't know
+  // where to start".)
   if (!userMovedMap) {
-    if (!myTurfBounds.isEmpty()) map.fitBounds(myTurfBounds, 64)
+    if (haveMyTurf) focusMyTurf()
     else if (lastCenter) {
       map.setCenter(lastCenter)
       map.setZoom(16)
@@ -533,29 +557,71 @@ async function refreshStatuses() {
   doorLayer?.requestRepaint()
 }
 
-/** Pan/zoom to a turf's doors (the chips above the map). Works off door
- * data, not markers. */
-function focusTurf(turfId: string) {
-  if (!map) return
-  const bounds = new google.maps.LatLngBounds()
-  for (const [addressId, door] of doorInfoByAddress) {
-    if (turfByAddress.value.get(addressId) === turfId) {
-      bounds.extend({ lat: door.lat, lng: door.lng })
-    }
-  }
-  if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
-}
+// --- Framing your turf ---
+// Turning on "My turf" also flies you there, which is why there's no
+// "Zoom to my turf" chip above the map anymore (2026-07-24) — the toggle
+// that colors your ground is also the one that takes you to it.
+//
+// Fitting EVERY door of yours is wrong when your assignment is in pieces:
+// two streets in Richwood plus one in Marysville would frame 20km of empty
+// county and read as "the map doesn't know where to start". So the doors get
+// clustered first and only the biggest cluster is framed.
 
-/** Re-frame around every turf that's yours — same view the map opens with. */
-function focusAllMyTurf() {
-  if (!map) return
-  const bounds = new google.maps.LatLngBounds()
+/** Cell edge for clustering, degrees latitude (~1.1km). Doors in the same or
+ * a touching cell count as the same patch of ground; a gap wider than that
+ * means genuinely separate parts of an assignment. */
+const CLUSTER_CELL_DEG = 0.01
+
+/** Every door of mine, grouped into connected patches, biggest first. */
+function myTurfClusters(): { lat: number; lng: number }[][] {
+  const cells = new Map<string, { lat: number; lng: number }[]>()
   for (const [addressId, door] of doorInfoByAddress) {
     const turfId = turfByAddress.value.get(addressId)
-    if (turfId && myTurfIds.value.has(turfId)) {
-      bounds.extend({ lat: door.lat, lng: door.lng })
-    }
+    if (!turfId || !myTurfIds.value.has(turfId)) continue
+    // Longitude cells are widened by 1/cos(lat) so they stay roughly square
+    // on the ground rather than skinny this far north.
+    const key = `${Math.floor(door.lat / CLUSTER_CELL_DEG)}:${Math.floor(
+      (door.lng * Math.cos((door.lat * Math.PI) / 180)) / CLUSTER_CELL_DEG,
+    )}`
+    const list = cells.get(key)
+    if (list) list.push(door)
+    else cells.set(key, [door])
   }
+  // Flood-fill touching cells (8-neighbour) into clusters.
+  const seen = new Set<string>()
+  const clusters: { lat: number; lng: number }[][] = []
+  for (const key of cells.keys()) {
+    if (seen.has(key)) continue
+    const doors: { lat: number; lng: number }[] = []
+    const stack = [key]
+    seen.add(key)
+    while (stack.length) {
+      const k = stack.pop()!
+      doors.push(...(cells.get(k) ?? []))
+      const [cx, cy] = k.split(':').map(Number)
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const n = `${cx + dx}:${cy + dy}`
+          if (cells.has(n) && !seen.has(n)) {
+            seen.add(n)
+            stack.push(n)
+          }
+        }
+      }
+    }
+    clusters.push(doors)
+  }
+  return clusters.sort((a, b) => b.length - a.length)
+}
+
+/** Frame your turf: all of it when it's one patch of ground, otherwise the
+ * biggest patch — a best fit beats a useless county-wide zoom. */
+function focusMyTurf() {
+  if (!map) return
+  const clusters = myTurfClusters()
+  if (!clusters.length) return
+  const bounds = new google.maps.LatLngBounds()
+  for (const d of clusters[0]) bounds.extend(d)
   if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
 }
 
@@ -967,32 +1033,9 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- Turf assigned to you (or a squad you're in today) gets a
-         "Zoom to my turf" chip framing all of it, plus one chip per turf
-         when the crew holds several. Campaign-wide framing needs no chip —
-         the map's "Turf" layer toggle shades every turf already. -->
-    <div v-if="myTurfs.length" class="turf-chips">
-      <button
-        class="turf-chip"
-        :style="{ '--turf-color': myTurfs.length === 1 ? myTurfs[0].color : 'var(--accent)' }"
-        @click="focusAllMyTurf"
-      >
-        <span class="turf-chip-dot" aria-hidden="true"></span>
-        Zoom to my turf
-      </button>
-      <template v-if="myTurfs.length > 1">
-        <button
-          v-for="t in myTurfs"
-          :key="t.id"
-          class="turf-chip"
-          :style="{ '--turf-color': t.color }"
-          @click="focusTurf(t.id)"
-        >
-          <span class="turf-chip-dot" aria-hidden="true"></span>
-          {{ t.name }}
-        </button>
-      </template>
-    </div>
+    <!-- No "Zoom to my turf" chip strip anymore (2026-07-24): the map's
+         "My turf" layer button both colors your ground and flies you to it,
+         so a second control for the same intent was one too many. -->
 
     <div ref="mapWrapEl" class="map-wrap" :class="{ 'map-wrap-fullscreen': isFullscreen }">
       <div ref="mapEl" class="map"></div>
@@ -1201,42 +1244,6 @@ onUnmounted(() => {
 
 .map-wrap {
   position: relative;
-}
-
-/* "Your turf" chips — each in its turf's map color. */
-.turf-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-}
-
-.turf-chip {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  min-height: 36px;
-  padding: 0.3rem 0.7rem;
-  font: inherit;
-  font-size: 0.85rem;
-  font-weight: 700;
-  color: var(--text);
-  background: color-mix(in srgb, var(--turf-color) 10%, var(--surface));
-  border: 1.5px solid var(--turf-color);
-  border-radius: 999px;
-  cursor: pointer;
-}
-
-.turf-chip:hover {
-  background: color-mix(in srgb, var(--turf-color) 18%, var(--surface));
-}
-
-.turf-chip-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--turf-color);
-  border: 1.5px solid #fff;
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
 }
 
 .map {

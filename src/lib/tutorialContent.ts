@@ -89,7 +89,7 @@ export const TUTORIAL_CHAPTERS: TutorialChapter[] = [
           'green = everyone there signed, yellow = somebody (but not everybody) signed, red = a ' +
           'no, a skip, or a hostile door. Zoomed out, pins collapse into density dots — tap one ' +
           'to dive in.',
-        tip: '"Zoom to my turf" frames your assignment; the shading toggles show how the ground is cut.',
+        tip: 'The My turf button flies you to your assignment and colors every door by turf; tap it again for status colors.',
       },
       {
         emoji: '🚪',

@@ -47,11 +47,21 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         heading: 'Pin colors',
         body:
           'Blue means nobody has knocked yet. Green means everyone in the household ' +
-          'signed. Yellow means take another look — someone signed but not everybody, ' +
-          'or the door was a maybe. Red means done, don’t go back: didn’t sign, skip, ' +
-          'or hostile. Gray is not home. If a yellow door’s remaining names look stale ' +
-          '(people who moved away), log Skip to retire it. These colors never change ' +
-          'with your theme.',
+          'signed — green with a yellow ring means someone signed but not everybody, so ' +
+          'there are still names to get. Plain yellow means the door was a maybe and ' +
+          'nobody has signed yet. Red means done, don’t go back: didn’t sign, skip, or ' +
+          'hostile. Gray is not home. If a partly-signed door’s remaining names look ' +
+          'stale (people who moved away), log Skip to retire it. These colors never ' +
+          'change with your theme.',
+      },
+      {
+        heading: 'Seeing the turf',
+        body:
+          'The My turf / All turf buttons on the map flip it from progress colors to turf ' +
+          'colors: every door in a turf goes solid in that turf’s color, so you can see ' +
+          'exactly where the ground is divided. Tap the lit button to go back to status ' +
+          'colors. Turning on My turf also flies you to your assignment — to the biggest ' +
+          'part of it, if your turf comes in pieces spread across the county.',
       },
       {
         heading: 'Spotty signal',
@@ -79,8 +89,8 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
           'means a closed no. Doors knocked today also wear the knocker’s avatar, so the map ' +
           'doubles as a live picture of who covered what. Tap a door pin to open it in Talk ' +
           'mode. Tap a squadmate’s card to zoom to the last door they knocked. The Our turf / ' +
-          'All turf buttons shade turf areas — just your crew’s ground, or the whole ' +
-          'campaign’s cut (tap the lit one to turn shading off).',
+          'All turf buttons ring each door in its turf’s color — just your crew’s ground, ' +
+          'or every turf in the campaign (tap the lit one for plain status pins).',
       },
       {
         heading: 'Assign doors',
