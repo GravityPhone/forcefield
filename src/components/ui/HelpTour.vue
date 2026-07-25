@@ -16,8 +16,23 @@
  * which also keeps it glued through scrolling, map moves, and layout shifts).
  */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import type { HelpTopic } from '@/lib/helpContent'
+import type { HelpSwatch, HelpTopic } from '@/lib/helpContent'
 import { hapticTap } from '@/lib/native'
+
+/** One dot of a color key: the fill, an optional inner band (partly-signed
+ * green-with-yellow), an optional outer halo (knocked today). Same three
+ * bands the canvas renderer paints, so the key and the map agree by
+ * construction. */
+function swatchStyle(sw: HelpSwatch) {
+  const shadows = [
+    sw.band ? `inset 0 0 0 3px ${sw.band}` : '',
+    sw.halo ? `0 0 0 2.5px ${sw.halo}` : '',
+  ].filter(Boolean)
+  return {
+    background: sw.fill,
+    boxShadow: shadows.length ? shadows.join(', ') : undefined,
+  }
+}
 
 const props = defineProps<{ topic: HelpTopic | null }>()
 const open = defineModel<boolean>('open', { required: true })
@@ -232,6 +247,15 @@ onBeforeUnmount(() => {
         </div>
         <h3 v-if="step.heading" class="tour-title">{{ step.heading }}</h3>
         <p class="tour-body">{{ step.body }}</p>
+        <!-- Color mappings are shown, not described (2026-07-25): a labelled
+             dot painted with the map's own literal hexes can't drift out of
+             sync with the pins the way a sentence about "yellow" did. -->
+        <ul v-if="step.swatches" class="tour-key">
+          <li v-for="sw in step.swatches" :key="sw.label" class="tour-key-row">
+            <span class="tour-swatch" :style="swatchStyle(sw)" aria-hidden="true"></span>
+            {{ sw.label }}
+          </li>
+        </ul>
         <div class="tour-dots" aria-hidden="true">
           <span v-for="n in total" :key="n" class="tour-dot" :class="{ on: n - 1 === index }"></span>
         </div>
@@ -341,11 +365,38 @@ onBeforeUnmount(() => {
   font-weight: 800;
 }
 
+/* pre-line so a step can be a short list — the copy is written as manual
+   lines, not paragraphs (2026-07-25). */
 .tour-body {
   margin: 0;
   font-size: 0.95rem;
   line-height: 1.5;
   color: var(--text-muted);
+  white-space: pre-line;
+}
+
+.tour-key {
+  list-style: none;
+  margin: 0.55rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.tour-key-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.tour-swatch {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
 }
 
 .tour-dots {

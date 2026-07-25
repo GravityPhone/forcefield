@@ -1,7 +1,7 @@
 /**
  * Per-screen help, shown from the "?" button in the app header (AppShell).
  * This is where explanatory copy lives INSTEAD of inline paragraphs on the
- * pages themselves — screens stay lean, the full story is one tap away.
+ * pages themselves — screens stay lean, the reference is one tap away.
  * Keyed by route path; screens without an entry simply don't show the button.
  *
  * The "?" plays these as a WALKTHROUGH (HelpTour.vue): one section per step,
@@ -12,13 +12,32 @@
  * stays tappable while the tour is open. A target that isn't on screen (wrong
  * tab, role without that button) costs nothing: the step just shows as a
  * plain card. Sections are written to read fine either way.
+ *
+ * REGISTER (2026-07-25, user call): dry manual, not prose. Fragments over
+ * sentences, no second person where a label will do, no rationale — the app
+ * is meant to be intuitive enough that help is a reference, not a lesson.
+ * Bodies render with `white-space: pre-line`, so `\n` is a real line break
+ * and a step can be a short list. Anything that is purely a color mapping
+ * goes in `swatches`, not in words.
  */
+
+export interface HelpSwatch {
+  /** Main fill. */
+  fill: string
+  /** Band inside the fill — the partly-signed green-with-yellow door. */
+  band?: string
+  /** Ring outside the dot — the "knocked today" halo. */
+  halo?: string
+  label: string
+}
 
 export interface HelpSection {
   heading?: string
   body: string
   /** Matches `data-help="<key>"` in the view. Optional — see above. */
   target?: string
+  /** Color key, rendered as labelled dots under the body. */
+  swatches?: HelpSwatch[]
 }
 
 export interface HelpTopic {
@@ -26,84 +45,62 @@ export interface HelpTopic {
   sections: HelpSection[]
 }
 
+/** The door-pin color model, identical on Scout, Squad and the cutter — so
+ * it's written once and shown wherever doors are painted. Hexes mirror
+ * outcomes.ts (fixed literals, never themed). */
+const DOOR_COLORS: HelpSwatch[] = [
+  { fill: '#2f6fed', label: 'Not knocked' },
+  { fill: '#2e9e5b', label: 'Everyone signed' },
+  { fill: '#2e9e5b', band: '#e0a02e', label: 'Some signed — names left' },
+  { fill: '#e0a02e', label: 'Maybe — nobody signed yet' },
+  { fill: '#d64545', label: 'Didn’t sign / skip / hostile' },
+  { fill: '#8a90a5', label: 'Not home' },
+  { fill: '#2f6fed', halo: '#111111', label: 'Dark ring: knocked today' },
+]
+
 export const HELP_TOPICS: Record<string, HelpTopic> = {
   '/canvass': {
     title: 'Canvassing',
     sections: [
       {
-        heading: 'Two modes',
+        heading: 'Modes',
         target: 'canvass-tabs',
-        body:
-          'Scout is the map — see nearby doors, find your turf, and tap a pin to open that ' +
-          'address. Talk is the door screen — the household roster, past visits, notes, and ' +
-          'the outcome buttons for logging the knock. Flip back to Scout and it lands on the ' +
-          'door Talk was working, with that street filled into the search below the map.',
+        body: 'Scout: the map.\nTalk: the door — roster, past visits, outcome buttons.\nTap a pin in Scout to open that door in Talk.',
       },
       {
-        heading: 'Logging outcomes',
+        heading: 'Outcomes',
         target: 'talk-outcomes',
-        body:
-          'Signed, Didn’t Sign, and Maybe need a specific person picked from the roster. ' +
-          'Not Home, Skip, and Hostile log against the whole household — no person needed.',
+        body: 'Signed, Didn’t Sign, Maybe — pick a person first.\nNot Home, Skip, Hostile — household only.',
       },
       {
-        heading: 'Moving on',
+        heading: 'Next / Back',
         target: 'talk-advance',
-        body:
-          'Next moves you along the street per your walk pattern, and ‹ Back steps back ' +
-          'through the doors YOU’ve knocked, newest first — neither needs an outcome logged ' +
-          'first (with one pending, moving on doubles as the confirm). My doors keeps the ' +
-          'whole walk — Next, Back and the chips below — to houses assigned to you today; ' +
-          'off, it offers every door on the street.',
+        body: 'Next: next door on the walk.\nBack: doors you knocked, newest first.\nNeither needs an outcome logged first.\nMy doors: limits both to doors assigned to you today.',
       },
       {
-        heading: 'Walking the street',
+        heading: 'Up next',
         target: 'talk-upnext',
-        body:
-          'The walk pattern (direction, side of the street, partly-signed doors) drives ' +
-          'the Up next grid at the bottom of the screen — the next four doors worth ' +
-          'knocking, each with its status color. Tap one to jump straight to that door.',
+        body: 'The next four doors on the walk. Tap one to jump.',
       },
       {
         heading: 'Pin colors',
         target: 'scout-map',
-        body:
-          'Blue means nobody has knocked yet. Green means everyone in the household ' +
-          'signed — green with a yellow ring means someone signed but not everybody, so ' +
-          'there are still names to get. Plain yellow means the door was a maybe and ' +
-          'nobody has signed yet. Red means done, don’t go back: didn’t sign, skip, or ' +
-          'hostile. Gray is not home. If a partly-signed door’s remaining names look ' +
-          'stale (people who moved away), log Skip to retire it. These colors never ' +
-          'change with your theme.',
+        body: 'An avatar on a pin: who knocked it today.\nThese colors are fixed — themes never change them.',
+        swatches: DOOR_COLORS,
       },
       {
-        heading: 'Seeing the turf',
+        heading: 'Layers',
         target: 'scout-layers',
-        body:
-          'My doors hides everything except the houses assigned to you by name — the share ' +
-          'you claimed (or were handed) on the Squad page. It only appears once you have ' +
-          'one. My turf is the same idea one step out: your whole crew’s assignment. Both ' +
-          'keep their progress colors, so you can still see how the day is going. All turf ' +
-          'shows every house and paints each one in its turf’s color, so you can see where ' +
-          'the ground is divided between crews. Tap the lit button to go back to every ' +
-          'house on plain status colors. Turning on My doors or My turf also flies you ' +
-          'there — the biggest part of it, if your ground comes in pieces spread across the ' +
-          'county — unless some of it is already on screen, in which case the map stays put.',
+        body: 'My doors: only doors assigned to you.\nMy turf: your crew’s ground.\nAll turf: every turf in its own color.\nCity: village limits.\nTap a lit button to clear it. My doors and My turf also fly there.',
       },
       {
-        heading: 'Finding a street',
+        heading: 'Search',
         target: 'scout-search',
-        body:
-          'Type a name or a street to filter the list under the map, or tap the map itself: ' +
-          'tapping a pin fills the search with that door’s street and opens the house, and ' +
-          'tapping open ground looks up whatever road is there. The list is the same street ' +
-          'in walk order, so it doubles as your route.',
+        body: 'Streets first, then people.\nTap a street for its houses in walk order; tap a person for their door.\nTapping the map searches the street you touched.',
       },
       {
-        heading: 'Spotty signal',
-        body:
-          'Knocks logged without signal queue on your phone and send themselves the moment ' +
-          'you’re back online. Keep knocking.',
+        heading: 'No signal',
+        body: 'Knocks queue on the phone and send themselves when signal returns.',
       },
     ],
   },
@@ -112,87 +109,44 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     title: 'Your squad',
     sections: [
       {
-        heading: 'What a squad is',
         target: 'squad-map',
-        body:
-          'Squads are today’s door-knocking crews — everyone in one shares a chat, this ' +
-          'page, and turf. They reset at midnight, so start or join a fresh one each day.',
+        body: 'A squad is one day of crew: shared chat, page and turf. Resets at midnight.',
       },
       {
         heading: 'The map',
         target: 'squad-layers',
-        body:
-          'Door pins wear the same status colors as the Scout map — blue means nobody has ' +
-          'knocked yet, green means everyone there signed, yellow means partly signed, red ' +
-          'means a closed no. Doors knocked today also wear the knocker’s avatar, so the map ' +
-          'doubles as a live picture of who covered what. Tap a door pin to open it in Talk ' +
-          'mode. Tap a squadmate’s card to zoom to the last door they knocked. The Our turf / ' +
-          'All turf buttons ring each door in its turf’s color — just your crew’s ground, ' +
-          'or every turf in the campaign (tap the lit one for plain status pins).',
+        body: 'Fill: knock status, same colors as Scout.\nAvatar: who knocked that door today.\nOur turf / All turf: ring doors in their turf’s color.\nTap a door to open it in Talk.',
+        swatches: DOOR_COLORS,
       },
       {
-        heading: 'How the day is going',
+        heading: 'Progress',
         target: 'squad-progress',
-        body:
-          'The bar counts the crew’s turf doors knocked TODAY — a squad lasts one day, so ' +
-          'that’s the day’s work. All time answers the other question: has a door ever been ' +
-          'reached at all. Open Our doors underneath for the same map colors counted out — ' +
-          'signed, partly signed, closed, not home, never knocked.',
+        body: 'The bar counts turf doors knocked today. All time counts doors ever reached.\nOur doors: the same colors, counted out.',
       },
       {
         heading: 'Who has what',
         target: 'squad-owners',
-        body:
-          'Our doors rings each house in the color of whoever it’s assigned to, and puts ' +
-          'their face on doors nobody has knocked yet. It stacks with the turf buttons, so ' +
-          'you can filter to the crew’s ground and still see how it’s split. Today’s knocker ' +
-          'wins the middle of a pin — what happened outranks what was planned.',
+        body: 'Our doors rings each door in its owner’s color and puts their face on the ones nobody has knocked. Today’s knocker takes the middle.',
       },
       {
         heading: 'The crew',
         target: 'squad-members',
-        body:
-          'Everyone shows up as a tile: their emoji and color, how many of the crew’s doors ' +
-          'they’ve knocked, and the last few they knocked today. Tap the tile — the whole ' +
-          'thing is one button — and everything about that person opens in a sheet: their ' +
-          'day’s knocks (each one tappable straight back to that door), assigning them ' +
-          'doors, their profile, showing them on the map, and calling them.',
+        body: 'One tile per member: emoji, color, doors knocked, today’s doors.\nTap a tile for the sheet — assign, profile, show on map, call.',
       },
       {
         heading: 'Assign doors',
         target: 'squad-assign',
-        body:
-          'If you can split turf, hit ✎ Assign doors on the map (or Assign in someone’s ' +
-          'sheet), pick the person, then pick their doors: tap pins one at a time, tap one ' +
-          'door then another to take the whole stretch between them, or arm ◯ Lasso (drag a ' +
-          'loop around a patch) or ☝ Streets (tap a door to take its whole street). While ' +
-          'either tool is armed, Add/Erase says whether the sweep gives doors or takes them ' +
-          'back, and Undo puts a whole sweep back. Save, and that member gets their own ' +
-          'share of the turf in their color.',
+        body: 'Pick a person, then pick doors:\n• tap pins one at a time\n• tap two doors to take the stretch between\n• ◯ Lasso — drag a loop\n• ☝ Streets — tap a door for its whole street\nAdd/Erase sets direction. Undo reverts one sweep. Save.',
       },
       {
-        heading: 'Who does the dividing',
+        heading: 'Claiming',
         target: 'squad-claim',
-        body:
-          'Normally the squad leader (or a campaign manager) hands out the doors. Days go ' +
-          'chaotic, though, so the leader can flip "Crew claims their own doors" on this ' +
-          'page: everyone on the crew can then cut their own share out of the turf from ' +
-          'their own tile. It’s off by default and resets with the squad at midnight. Once ' +
-          'you’ve claimed, flip Scout to "My doors" and the map is just your list.',
+        body: 'Leaders and managers hand out doors.\n"Squad members claim their own doors" lets each member cut their own share instead. Off by default, resets at midnight.',
       },
       {
-        heading: 'Starting or joining',
+        heading: 'Start or join',
         target: 'squad-start',
-        body:
-          'No squad yet? Start one — name the crew, optionally add people, and a squad chat ' +
-          'is created automatically. Anyone can also join an existing squad on their own.',
-      },
-      {
-        heading: 'Cards and colors',
-        target: 'squad-members',
-        body:
-          'Your card’s accent color and your emoji are yours to pick — both live on the ' +
-          'About me page.',
+        body: 'Name a crew, add people or let them join. A squad chat comes with it.',
       },
     ],
   },
@@ -202,25 +156,12 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'squads-card',
-        body:
-          'Squads are today’s door-knocking crews — everyone in one shares a squad chat ' +
-          'and shows up together on the leaderboard. They reset at midnight, so start a fresh ' +
-          'one each day.',
+        body: 'Today’s crews. They reset at midnight.\nSquads you’re in sort to the top — Open goes to the full squad page.',
       },
       {
         heading: 'Starting one',
         target: 'squads-new',
-        body:
-          'Name the crew and optionally add people right away — anyone can also join on their ' +
-          'own from this page. A squad chat is created automatically.',
-      },
-      {
-        heading: 'Your own squad',
-        target: 'squads-card',
-        body:
-          'Squads you’re in sort to the top with an Open button — it goes to the full squad ' +
-          'page: the turf map with live knock progress, member cards, door assignment, and ' +
-          'leaving the crew.',
+        body: 'Name the crew; add people now or let them join. Chat is created with it.',
       },
     ],
   },
@@ -230,20 +171,12 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'feed-list',
-        body:
-          'Live activity from the whole operation, today only, newest first — every ' +
-          'signature as it lands (and every knock, if the campaign manager left those on). ' +
-          'It resets each morning, like squads do.',
+        body: 'Today’s activity across the whole operation, newest first. Resets each morning.\nTap a name for that person’s profile.',
       },
       {
         heading: 'Milestones',
         target: 'feed-options',
-        body:
-          'Along the way the feed celebrates progress: personal door counts (every 5 by ' +
-          'default), squads heating up (doors and signatures for the day), and whole-team ' +
-          'moments like passing 100 doors. Doors count once per household; signatures once ' +
-          'per person. Campaign managers pick what shows and where the lines fall right ' +
-          'here — the Feed options card at the top.',
+        body: 'Personal door counts, squad doors and signatures, whole-team totals.\nDoors count once per household, signatures once per person.\nManagers set the steps here.',
       },
     ],
   },
@@ -251,19 +184,8 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
   '/bulletin': {
     title: 'Bulletin',
     sections: [
-      {
-        target: 'bulletin-post',
-        body:
-          'Announcements from leadership, newest first. Check here for meetup spots, turf ' +
-          'plans, and anything else the whole team should see.',
-      },
-      {
-        heading: 'Posting',
-        target: 'bulletin-composer',
-        body:
-          'Campaign managers write announcements right on this screen — the composer at ' +
-          'the top posts to everyone, and Delete retires stale ones.',
-      },
+      { target: 'bulletin-post', body: 'Announcements from leadership, newest first.' },
+      { target: 'bulletin-composer', body: 'Managers post and delete from this screen.' },
     ],
   },
 
@@ -272,22 +194,16 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'board-canvassers',
-        body:
-          'Standings count knocks logged since midnight — canvassers and squads each get a ' +
-          'board. Squads reset daily, so every morning is a clean slate.',
+        body: 'Standings since midnight. Canvassers and squads rank separately.',
       },
       {
         target: 'board-options',
-        body:
-          'Whether the main board ranks signatures or doors knocked is a campaign setting — ' +
-          'campaign managers set it right here in the Board options card.',
+        body: 'Managers choose whether the main board ranks signatures or doors.',
       },
       {
         heading: 'Other days',
         target: 'board-history',
-        body:
-          'All time is the career board; Today is the day so far; the date picker opens any ' +
-          'past day’s standings, squads and all.',
+        body: 'All time: career. Today: the day so far. Date picker: any past day.',
       },
     ],
   },
@@ -297,17 +213,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'roster-list',
-        body:
-          'Everyone on your team, leadership first. Tap a person to see their intro and ' +
-          'the doors they’ve knocked lately.',
+        body: 'Your team, leadership first. Tap a person for their intro and recent knocks.',
       },
       {
-        heading: 'Calling teammates',
         target: 'roster-call',
-        body:
-          'A Call button appears next to anyone who saved a phone number on their About me ' +
-          'page — one tap opens your dialer. No number saved means no button, and numbers ' +
-          'are only ever visible inside your own team.',
+        body: 'Call shows when someone saved a number. Numbers are visible to their own team only.',
       },
     ],
   },
@@ -315,32 +225,9 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
   '/history': {
     title: 'My knocks',
     sections: [
-      {
-        target: 'knocks-search',
-        body:
-          'Every door you’ve knocked, newest first — your own trail, for when you’re ' +
-          'wondering "did I already hit that street?" Search by street or name, or filter ' +
-          'to one outcome.',
-      },
-      {
-        heading: 'Filter the trail',
-        target: 'knocks-filters',
-        body:
-          'The chips cut the list to one outcome and carry its count — the fast way to find ' +
-          'every Maybe you owe a second visit.',
-      },
-      {
-        heading: 'Jump back to a door',
-        target: 'knocks-list',
-        body:
-          'Tap any visit to open that door in Talk mode — handy for following up on a ' +
-          'Maybe or a Not Home.',
-      },
-      {
-        heading: 'Teammates',
-        body:
-          'Curious where someone else has been? Their recent knocks are on their Roster page.',
-      },
+      { target: 'knocks-search', body: 'Your own knocks, newest first. Search by street or name.' },
+      { target: 'knocks-filters', body: 'Chips filter to one outcome and carry its count.' },
+      { target: 'knocks-list', body: 'Tap a visit to reopen that door in Talk.' },
     ],
   },
 
@@ -349,42 +236,27 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'profile-identity',
-        body:
-          'A short intro your teammates can read — it shows when someone opens your entry ' +
-          'in the team roster. Every field is optional; fill in whatever feels right.',
+        body: 'Your intro, shown on your roster entry. Every field is optional.',
       },
       {
         heading: 'Display name',
         target: 'profile-name',
-        body:
-          'The name everyone sees next to you — chat, squad page, leaderboard, all of it. ' +
-          'Handy if you go by a nickname. Leave it blank to show your username; your login ' +
-          'name never changes either way.',
+        body: 'What everyone sees. Blank: your username. Your login never changes.',
       },
       {
-        heading: 'Pick my emoji',
+        heading: 'Emoji',
         target: 'profile-emoji',
-        body:
-          'Your emoji is your face on the squad map, in chat, and on member lists — 260+ to ' +
-          'choose from, each with its name shown so the crew knows what to call you. Search ' +
-          'by name (“dragon”, “taco”, “disco”) or browse the groups.',
+        body: 'Your face in chat, on maps, and in member lists. Search by name or browse the groups.',
       },
       {
-        heading: 'Pick my color',
+        heading: 'Color',
         target: 'profile-color',
-        body:
-          'Your accent color tints your Squad-page card and map marker, your roster row, and ' +
-          'your name in chat. Grab one from the team palette or mix your own — hue, punch, ' +
-          'and brightness sliders, or type any hex code. Until you pick, one is assigned ' +
-          'automatically.',
+        body: 'Your accent on squad cards, map markers, roster rows and your name in chat. Team palette or any hex.',
       },
       {
-        heading: 'Phone number',
+        heading: 'Phone',
         target: 'profile-phone',
-        body:
-          'Save a number and teammates get a one-tap Call button next to your name on the ' +
-          'roster and squad pages. Only people on YOUR team can ever see it — that’s enforced ' +
-          'by the database, not just hidden. Leave it blank and no one can call you.',
+        body: 'A saved number gives teammates a Call button. Your team only, enforced by the database. Blank: no button.',
       },
     ],
   },
@@ -394,40 +266,19 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'appearance-schemes',
-        body:
-          'Everything here is purely cosmetic and only changes how the app looks on YOUR ' +
-          'account. The knock-outcome buttons and map pins always keep their own fixed colors ' +
-          'so they stay readable no matter what you choose. The High visibility schemes are ' +
-          'built for hard conditions — glare, direct sunlight, tired eyes — with maximum ' +
-          'contrast everywhere.',
+        body: 'Cosmetic, and only on your account. Outcome buttons and map pins keep their fixed colors.',
       },
       {
-        heading: 'Background flair',
         target: 'appearance-patterns',
-        body:
-          'Streaks, squiggles, and grids behind the page — drawn from your scheme’s own ' +
-          'colors and kept faint enough to never fight the text. Weighs nothing, downloads nothing.',
+        body: 'Background pattern, inked from the scheme’s own colors.',
       },
       {
-        heading: 'Sunlight boost',
         target: 'appearance-sunlight',
-        body:
-          'Pushes faint text, labels and outlines up to near-full contrast for reading a ' +
-          'phone in direct sun. On by default, and it works with any scheme.',
+        body: 'Raises contrast on text, labels and outlines. On by default.',
       },
       {
-        heading: 'Text & fonts',
         target: 'appearance-text',
-        body:
-          'Text size scales the whole app — names, streets, outcomes, feeds. Tabs, map ' +
-          'buttons and typing fields stay put so nothing runs off a small screen. Fonts are ' +
-          'system faces only: nothing to download, so nothing gets slower.',
-      },
-      {
-        heading: 'Emoji & color',
-        body:
-          'Your personal emoji and accent color moved to the About me page — they’re part ' +
-          'of who you are, not how the app looks.',
+        body: 'Text size scales the app. Tabs, map buttons and typing fields stay put. Fonts are system faces.',
       },
     ],
   },
@@ -436,63 +287,34 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     title: 'Turf cutter',
     sections: [
       {
-        heading: 'What cutting does',
+        heading: 'Cutting',
         target: 'turf-create',
-        body:
-          'Take whole streets into a turf, then assign it to a squad or a single canvasser. ' +
-          'Squads last one day but turf is durable — re-point it at today’s crew each ' +
-          'morning ("Not out today" flags turf still aimed at a past day’s squad).',
+        body: '+ Create new turf, take streets, assign to a squad or one canvasser.\nTurf is durable, squads are not — re-point it at today’s crew each morning ("Not out today" flags stale turf).',
       },
       {
         heading: 'Search, then add',
         target: 'turf-search',
-        body:
-          'The map starts blank. Type a street name, tap a match to zoom to it (its doors ' +
-          'appear as dots), then Add takes the house-number range shown on the row — the ' +
-          'whole street unless you narrow the numbers first. Doors you take stay on the ' +
-          'map as ringed dots, so the turf builds up visibly.',
+        body: 'Type a street, tap a match to zoom, narrow the house numbers if needed, Add.',
       },
       {
-        heading: 'Sweeping with the map tools',
+        heading: 'Map tools',
         target: 'turf-tools',
-        body:
-          'Both tools share an Add/Erase switch. ◯ Lasso freezes the map so you can drag a ' +
-          'loop — every dot inside joins, or comes back out in Erase; it can only catch ' +
-          'doors already showing as dots. ☝ Streets looks up the road you tap right on the ' +
-          'basemap, dots or no dots, and takes or drops that whole street. Undo steps back ' +
-          'one gesture at a time.',
+        body: '◯ Lasso: drag a loop; catches dots inside it or under the line.\n☝ Streets: tap a road to take or drop the whole street.\nAdd/Erase sets direction. Undo steps back one gesture.',
       },
       {
-        heading: 'The streets table',
+        heading: 'Streets table',
         target: 'turf-streets',
-        body:
-          'Everything the draft holds, one row per street: the house-number ranges, the door ' +
-          'count, and ✕ to drop the street. Tap a row to open its editor — from/to numbers ' +
-          'and both/even/odd — which also focuses that street on the map for trimming single ' +
-          'houses. A street split into chunks lists each range as its own tappable chip.',
+        body: 'One row per street: ranges, door count, ✕ to drop.\nTap a row to edit from/to and both/even/odd, and to trim single houses on the map.',
       },
       {
         heading: 'Reading the map',
         target: 'turf-map',
-        body:
-          'The Turf button shades the turfs that are out today (dispatched to one of ' +
-          'today’s crews or assigned to a canvasser), and your draft shades in its own ' +
-          'color as you build. While a street is showing, a door’s fill is its knock ' +
-          'status (blue = never knocked) and its ring is who holds it — doors inside your ' +
-          'ranges that another turf already owns show that turf’s ring and stay out of ' +
-          'your save. Tap any dot (with ' +
-          'no tool armed) to see who’s registered there (✓ = has signed — two names with ' +
-          'one check is why a door is yellow, not green) and its recent knocks. Existing turfs ' +
-          'live in the dropdown at the bottom — picking one zooms to it and opens its ' +
-          'management card (edit, delete, reassign).',
+        body: 'Fill: knock status. Ring: owning turf.\nCrossed-out symbol: a door another turf already holds — it stays out of your save.\nTap a dot for its residents (✓ = signed) and recent knocks.',
       },
       {
         heading: 'Sub-turfs',
         target: 'turf-list',
-        body:
-          'Squad leaders split their own assigned turf into per-member shares — easiest from ' +
-          'the Squad page’s "Assign doors" mode. Re-dispatching a turf to a new squad ' +
-          'dissolves yesterday’s splits back into the parent.',
+        body: 'Squad leaders split their own turf into member shares — easiest from the Squad page. Re-dispatching a turf dissolves those splits.',
       },
     ],
   },
@@ -502,11 +324,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'admin-cards',
-        body:
-          'Org-level setup: role and team placement, campaigns, and (soon) the voter-data ' +
-          'import. Everything day-to-day lives on its own screen now — post on the ' +
-          'Bulletin, tune the boards and team feed from their pages, cut turf from the ' +
-          'Turf tab.',
+        body: 'Org setup only: roles, campaigns and teams, voter import.\nDay-to-day controls live on the screens they affect.',
       },
     ],
   },
@@ -515,47 +333,22 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     title: 'Roles',
     sections: [
       {
-        heading: 'The roles',
         target: 'roles-filters',
-        body:
-          'Admin runs the org; Campaign Managers run the day-to-day (turf, squads, AI chat, ' +
-          'settings); Squad Leaders and Canvassers knock doors. New sign-ups start as Canvasser.',
+        body: 'Admin: the org. Campaign Manager: day-to-day. Squad Leader and Canvasser: doors.\nNew sign-ups start as Canvasser.',
       },
       {
-        heading: 'Placement',
         target: 'roles-list',
-        body:
-          'Assign each person to a team here, and drop them into one of today’s squads. ' +
-          'Squads form on the Squads page and reset at midnight. Admins belong to no campaign, ' +
-          'team, or squad — they oversee, they don’t participate.',
+        body: 'Set team and today’s squad here. Admins belong to no campaign, team or squad.',
       },
-      {
-        heading: 'Just looking for someone?',
-        target: 'roles-search',
-        body:
-          'This page is for changing roles and placement. To browse people — intros, recent ' +
-          'knocks, phone numbers — use the Roster instead.',
-      },
+      { target: 'roles-search', body: 'For intros, knocks and phone numbers, use the Roster.' },
     ],
   },
 
   '/admin/campaigns': {
     title: 'Campaigns & teams',
     sections: [
-      {
-        target: 'campaigns-list',
-        body:
-          'Campaigns are the big efforts your org runs; each team works exactly one campaign. ' +
-          'Day-to-day crews (squads) aren’t managed here — they form themselves on the ' +
-          'Squads page and reset daily.',
-      },
-      {
-        heading: 'Teams',
-        target: 'campaigns-teams',
-        body:
-          'Every team is pointed at the campaign it works. People land on a team from the ' +
-          'Roles page, and their leaderboard, roster and feed follow from there.',
-      },
+      { target: 'campaigns-list', body: 'Each team works exactly one campaign.' },
+      { target: 'campaigns-teams', body: 'People land on a team from the Roles page.' },
     ],
   },
 
@@ -563,18 +356,12 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     title: 'Settings',
     sections: [
       {
-        heading: 'AI assistant key',
         target: 'settings-key',
-        body:
-          'A shared demo key is already configured — the AI assistant works out of the box. ' +
-          'Optionally save your own Anthropic API key; it follows your account across devices.',
+        body: 'A shared demo key is already configured. Your own Anthropic key is optional and follows your account.',
       },
       {
-        heading: 'Data sources',
         target: 'settings-sources',
-        body:
-          'Voter-roll CSV import and direct VAN/Minivan sync are both on the roadmap — ' +
-          'addresses currently come from the imported county subset.',
+        body: 'CSV import and VAN sync aren’t built. Addresses come from the imported county subset.',
       },
     ],
   },
@@ -584,18 +371,9 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'aichat-input',
-        body:
-          'Ask questions about the campaign in plain English — signatures by day, hot streets, ' +
-          'canvasser pace. The assistant reads the live database directly (read-only, enforced ' +
-          'at the database level) and can look up addresses on the map.',
+        body: 'Ask in plain English. Read-only database access, enforced at the database.',
       },
-      {
-        heading: 'Follow-ups',
-        target: 'aichat-suggestions',
-        body:
-          'Every answer comes with three suggested next questions — tap one to send it. ' +
-          'Faster than typing, and a decent map of what the assistant can dig into.',
-      },
+      { target: 'aichat-suggestions', body: 'Three follow-ups after each answer. Tap to send.' },
     ],
   },
 }
@@ -608,50 +386,31 @@ export function helpFor(path: string): HelpTopic | null {
  * Per-TAB help for /admin/analytics. The Analytics view passes the active
  * tab's topic into AppShell (helpTopic prop), so the header "?" always
  * teaches the tab on screen. This is the ONLY place analytics gets explained
- * — chart subtitles stay at 2–3 word hints, never sentences. Written for
- * someone with a working-but-not-expert grasp of statistics: whiskers,
- * averages, and floors get plain-language treatment, and every hidden
- * interaction (tap a bar, tap a legend, day chips) is called out so the page
- * can be learned by poking at it.
+ * — chart subtitles stay at 2–3 word hints, never sentences. Same dry
+ * register as above: definitions and interactions, no coaching.
  */
 export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
   overview: {
     title: 'Overview tab',
     sections: [
       {
-        heading: 'Six views, one dataset',
         target: 'analytics-tabs',
-        body:
-          'Overview is the campaign as a whole. Areas, Turfs, Squads and Canvassers each cut ' +
-          'the same knocks a different way, and Odds is about when and how often doors open. ' +
-          'Every tab carries its own help — hit ? again after switching.',
+        body: 'Six cuts of the same knocks. Every tab carries its own help.',
       },
       {
-        heading: 'The tiles',
+        heading: 'Tiles',
         target: 'analytics-tiles',
-        body:
-          'Campaign totals for the day window picked on the chips. Doors counts each ' +
-          'household once no matter how many visits; knocks counts every attempt. Answer ' +
-          'rate: of all knocks, how often anyone opened. Close rate: of all real ' +
-          'conversations (signed, didn’t sign, or maybe), how many signed.',
+        body: 'Doors: households, counted once.\nKnocks: every attempt.\nAnswer rate: knocks that opened.\nClose rate: conversations that signed.',
       },
       {
-        heading: 'The bold dashed line',
+        heading: 'Bold dashed line',
         target: 'overview-trend',
-        body:
-          'That’s the 7-day average — each point averages the last week, smoothing out ' +
-          'weekend spikes and rainy Tuesdays so the real direction shows. Rising means the ' +
-          'campaign is speeding up. It needs a week of history before it can start, so it ' +
-          'skips the first six days of any window.',
+        body: '7-day average. Needs a week of history, so it starts six days into any window.',
       },
       {
-        heading: 'Learn by poking',
+        heading: 'Interactions',
         target: 'analytics-scope',
-        body:
-          'The day chips re-cut every number on the tab. Tap a name in a chart’s legend to ' +
-          'hide that line — the chart re-zooms to what’s left, which is the trick for ' +
-          'reading a small line squeezed under a big one. Every chart has a Table button ' +
-          'with the exact numbers behind the picture.',
+        body: 'Day chips re-cut the tab.\nTap a legend name to hide that series; the chart re-scales.\nTable: the exact numbers.',
       },
     ],
   },
@@ -660,44 +419,18 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     title: 'Areas tab',
     sections: [
       {
-        heading: 'One question',
         target: 'analytics-areachips',
-        body:
-          'Which parts of the county deserve more knocking? Tap an area chip — or any bar — ' +
-          'to zoom into one area: its own totals, daily trend, outcomes, plus the turfs and ' +
-          'canvassers working it. Inside, tapping a turf or a canvasser jumps straight to ' +
-          'their tab.',
+        body: 'Tap a chip or a bar to focus one area. Turfs and canvassers inside link to their own tabs.',
       },
       {
-        heading: 'Whiskers, plainly',
+        heading: 'Whiskers & marker',
         target: 'areas-rate',
-        body:
-          'The thin line through a bar is a 95% confidence range: given how many knocks the ' +
-          'area has, its TRUE rate very likely sits somewhere on that whisker. Short whisker ' +
-          '= lots of data, trust the bar. Long whisker = small sample, could be luck. When ' +
-          'two bars’ whiskers overlap a lot, don’t crown a winner.',
+        body: 'Whisker: 95% confidence range — long whisker, small sample.\nDashed line: campaign average.\nAreas below the knock floor are off the charts, on the table.',
       },
       {
-        heading: 'The dashed avg marker',
-        target: 'areas-rate',
-        body:
-          'On rate charts, the dashed line is the whole campaign’s average — bars reaching ' +
-          'past it are above-average ground, at a glance.',
-      },
-      {
-        heading: 'Sign rate vs coverage',
+        heading: 'The two rates',
         target: 'areas-coverage',
-        body:
-          'Sign rate is signatures per conversation — how persuadable an area is. Coverage ' +
-          'is the share of its doors knocked at least once — how much ground is left. High ' +
-          'sign rate plus low coverage is where the next crew should go.',
-      },
-      {
-        heading: 'Missing areas',
-        target: 'areas-rate',
-        body:
-          'Areas with too few knocks are left off the rate charts on purpose — a 2-for-3 ' +
-          'afternoon would chart like a jackpot. The Table button shows everything.',
+        body: 'Sign rate: signatures ÷ conversations.\nCoverage: doors knocked ÷ doors in the area.',
       },
     ],
   },
@@ -706,29 +439,16 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     title: 'Turfs tab',
     sections: [
       {
-        heading: 'What counts here',
         target: 'turfs-table',
-        body:
-          'Every knock is stamped with the turf its door sat in at that moment, so history ' +
-          'stays honest even after turf gets re-cut. Knocks at doors that weren’t in any ' +
-          'turf gather in the "No turf" row of the table and stay off the charts — that ' +
-          'bucket would dwarf the real bars.',
+        body: 'Each knock is stamped with the turf it sat in at the time. "No turf" is table-only.',
       },
       {
-        heading: 'Coverage',
         target: 'turfs-coverage',
-        body:
-          'Doors knocked divided by the doors in the turf as it’s cut today. Whiskers on ' +
-          'the rate chart are 95% confidence ranges — a long whisker means a small sample, ' +
-          'so treat that bar as a rough guess.',
+        body: 'Coverage: doors knocked ÷ doors in the turf as cut today.\nWhiskers are 95% confidence ranges.',
       },
       {
-        heading: 'Dig in',
         target: 'turfs-rate',
-        body:
-          'Tap any bar or table row to open one turf: its totals, daily signatures, the ' +
-          'crews that worked it, and the canvassers who knocked it. Crews and canvassers in ' +
-          'there are tappable too — the whole page cross-links.',
+        body: 'Tap a bar or row for one turf: crews, canvassers, daily signatures.',
       },
     ],
   },
@@ -737,28 +457,12 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     title: 'Squads tab',
     sections: [
       {
-        heading: 'Day crews',
         target: 'squads-table',
-        body:
-          'A squad lives one day. But a crew that keeps the same name day after day ' +
-          'accumulates here as one row — its whole run, not just today. Solo knocking with ' +
-          'no squad that day lands in the table’s "No squad" row.',
+        body: 'One row per squad name, across every day it ran. "No squad" = solo knocking.\nTap a row for its run, turf and members.',
       },
       {
-        heading: 'The rates',
         target: 'squads-chart',
-        body:
-          'Close rate is signatures per conversation; answer rate is doors opened per ' +
-          'knock. Whiskers are 95% confidence ranges — a hot-looking crew with a long ' +
-          'whisker may just be a small sample having a good day.',
-      },
-      {
-        heading: 'Dig in',
-        target: 'squads-table',
-        body:
-          'Tap a squad to see its run: signatures across the days it went out, the turf it ' +
-          'worked, and its members ranked. Members and turf are tappable — jump to a ' +
-          'person or a turf from right there.',
+        body: 'Close rate: signatures ÷ conversations.\nAnswer rate: opens ÷ knocks.\nWhiskers are 95% confidence ranges.',
       },
     ],
   },
@@ -767,30 +471,16 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     title: 'Odds tab',
     sections: [
       {
-        heading: 'Attempts',
         target: 'odds-attempts',
-        body:
-          'Attempt 2 means a door’s second visit (knocks within ten minutes of each other ' +
-          'count as one visit). Answer odds usually RISE with attempts — the people you ' +
-          'catch on visit three are the ones nobody catches on visit one. That’s the case ' +
-          'for going back. The dashed marker is the overall average, so you can see which ' +
-          'attempts beat it.',
+        body: 'Attempt N: the door’s Nth visit (knocks within ten minutes count as one).\nAnswer odds usually rise with attempts. Dashed line: overall average.',
       },
       {
-        heading: 'When doors answer',
         target: 'odds-heatmap',
-        body:
-          'The grid is answer rate by weekday and hour — darker means more doors opened. ' +
-          'Tap a cell for its exact rate and how many knocks it’s based on. Cells with ' +
-          'under 15 knocks stay blank rather than show noise.',
+        body: 'Answer rate by weekday and hour. Tap a cell for its rate and sample size. Under 15 knocks: blank.',
       },
       {
-        heading: 'The funnel',
         target: 'odds-funnel',
-        body:
-          'Unique doors surviving each stage: knocked → answered → conversation → signed. ' +
-          'Each stage’s percentage is of the stage before it, so it points at exactly ' +
-          'where doors fall out of the pipeline.',
+        body: 'Unique doors per stage: knocked → answered → conversation → signed. Each percentage is of the stage before it.',
       },
     ],
   },
@@ -799,27 +489,12 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     title: 'Canvassers tab',
     sections: [
       {
-        heading: 'The dots',
         target: 'canvassers-scatter',
-        body:
-          'Each dot is one canvasser: further right = more knocks, higher up = better ' +
-          'close rate. The faint line is the team-wide trend — flat means knocking a lot ' +
-          'doesn’t cost closing quality. Tap a dot (or an earner bar, or a table row) to ' +
-          'open that person.',
+        body: 'One dot per canvasser: right = more knocks, up = better close rate.\nFaint line: team trend. Floor: 20+ conversations. The table has everyone.',
       },
       {
-        heading: 'Fair floors',
-        target: 'canvassers-scatter',
-        body:
-          'Dots only show for people with 20+ conversations — below that, one lucky ' +
-          'afternoon charts like talent. The table has everyone regardless.',
-      },
-      {
-        heading: 'One person’s page',
         target: 'canvassers-table',
-        body:
-          'A canvasser’s view shows their daily signatures with the 7-day average, their ' +
-          'outcome mix, and the turf and crews they worked — tap those to keep exploring.',
+        body: 'Tap a dot, bar or row for one person: daily signatures, outcome mix, turf and crews.',
       },
     ],
   },
