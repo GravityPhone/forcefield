@@ -66,7 +66,7 @@ function memberNames(squad: SquadListItem): string {
 <template>
   <AppShell title="Squads">
     <div class="stack">
-      <button class="btn btn-primary new-squad-btn" @click="openComposer">+ New squad</button>
+      <button class="btn btn-primary new-squad-btn" data-help="squads-new" @click="openComposer">+ New squad</button>
 
       <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>
       <p v-if="squads.loading && !squads.squads.length" class="muted">Loading today's squads…</p>
@@ -79,6 +79,7 @@ function memberNames(squad: SquadListItem): string {
         :key="s.id"
         v-motion="fadeUp(Math.min(i, 8) * 45)"
         class="card squad-card"
+        data-help="squads-card"
       >
         <div class="squad-info">
           <span class="squad-name">👥 {{ s.name }}</span>

@@ -8,7 +8,7 @@ import AppShell from '@/components/AppShell.vue'
 
 <template>
   <AppShell title="Admin Dashboard">
-    <div class="grid">
+    <div class="grid" data-help="admin-cards">
       <!-- Campaign managers manage all non-admin roles; true admins
            additionally manage admin accounts (the Roles screen adapts). -->
       <div class="card">

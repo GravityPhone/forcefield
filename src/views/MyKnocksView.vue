@@ -138,12 +138,13 @@ async function openDoor(v: VisitRow) {
       <input
         v-model="query"
         class="knock-search"
+        data-help="knocks-search"
         type="search"
         placeholder="Search street or name…"
         aria-label="Search your knock history"
       />
 
-      <div class="filter-chips" role="group" aria-label="Filter by outcome">
+      <div class="filter-chips" role="group" aria-label="Filter by outcome" data-help="knocks-filters">
         <button
           class="chip"
           :class="{ active: outcomeFilter === 'all' }"
@@ -181,7 +182,7 @@ async function openDoor(v: VisitRow) {
               {{ g.rows.length }} knock{{ g.rows.length === 1 ? '' : 's' }}
             </span>
           </h3>
-          <div class="card visit-list">
+          <div class="card visit-list" data-help="knocks-list">
             <component
               :is="v.household_id ? 'button' : 'div'"
               v-for="v in g.rows"

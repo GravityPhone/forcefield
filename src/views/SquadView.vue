@@ -1960,7 +1960,7 @@ watch(
       <p class="muted intro">
         You're not in a squad yet today — start one, or join a crew that's already out.
       </p>
-      <button class="btn btn-primary big-btn" @click="openComposer">+ Start today's squad</button>
+      <button class="btn btn-primary big-btn" data-help="squad-start" @click="openComposer">+ Start today's squad</button>
       <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>
       <p v-if="squads.squads.length" class="muted join-heading">…or join one that's out already:</p>
       <div v-for="(s, i) in squads.squads" :key="s.id" v-motion="fadeUp(Math.min(i, 8) * 45)" class="card join-card">
@@ -2046,6 +2046,7 @@ watch(
           ref="mapWrapEl"
           class="squad-map-wrap"
           :class="{ 'map-wrap-fullscreen': isFullscreen }"
+          data-help="squad-map"
         >
           <div ref="mapEl" class="squad-map"></div>
           <!-- Freehand selection surface — only exists while the lasso is
@@ -2217,6 +2218,7 @@ watch(
             v-if="canAssign && !assigningMemberId"
             type="button"
             class="layer-btn map-assign-btn"
+            data-help="squad-assign"
             :title="claimSelfOnly ? 'Pick the doors you\'re taking' : 'Pick doors for someone on the crew'"
             @click="startAssignFromMap"
           >
@@ -2227,7 +2229,7 @@ watch(
                every turf in its own color, or (tap the active button again)
                every door we know on plain status pins. Who owns what is the
                separate "Our doors" switch below. -->
-          <div class="layer-toggle" role="group" aria-label="Turf layer">
+          <div class="layer-toggle" role="group" aria-label="Turf layer" data-help="squad-layers">
             <button
               type="button"
               class="layer-btn"
@@ -2257,6 +2259,7 @@ watch(
           <button
             type="button"
             class="layer-btn owner-layer-btn"
+            data-help="squad-owners"
             :class="{ active: ownerLayer || !!assigningMemberId }"
             :aria-pressed="ownerLayer || !!assigningMemberId"
             :disabled="!!assigningMemberId"
@@ -2273,7 +2276,7 @@ watch(
       </div>
 
       <!-- Turf progress, under the map -->
-      <div class="card progress-card">
+      <div class="card progress-card" data-help="squad-progress">
         <template v-if="squadTurfs.length">
           <div class="progress-row">
             <strong>Our turf</strong>
@@ -2356,7 +2359,7 @@ watch(
            the person opens their sheet, and the buttons — profile, call,
            assign, show on map — live there. A tile half a phone wide can't
            carry a button row and still show anything worth reading. -->
-      <div class="member-grid">
+      <div class="member-grid" data-help="squad-members">
         <button
           v-for="(m, i) in orderedMembers"
           :key="m.id"
@@ -2413,6 +2416,7 @@ watch(
         v-if="canToggleClaim"
         type="button"
         class="claim-btn"
+        data-help="squad-claim"
         :class="{ on: memberClaimOn }"
         :aria-pressed="memberClaimOn"
         :disabled="claimSaving"

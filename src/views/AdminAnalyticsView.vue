@@ -887,7 +887,7 @@ const focusRanks = computed<FocusRank[]>(() => {
     </div>
 
     <template v-else>
-      <div class="tabs" role="tablist">
+      <div class="tabs" role="tablist" data-help="analytics-tabs">
         <button
           v-for="t in TABS"
           :key="t.id"
@@ -904,7 +904,7 @@ const focusRanks = computed<FocusRank[]>(() => {
       <section class="stack">
         <!-- Every tab's own scope row: day chips + live knock count, plus the
              back chip and entity name once something is focused. -->
-        <div class="scope">
+        <div class="scope" data-help="analytics-scope">
           <template v-if="focus">
             <button class="chip back-chip" type="button" @click="clearFocus">
               ‹ {{ focus.all }}
@@ -929,7 +929,7 @@ const focusRanks = computed<FocusRank[]>(() => {
         </div>
 
         <!-- The Areas tab's picker lives IN the tab, not above the page. -->
-        <div v-if="tab === 'areas'" class="chip-row" role="group" aria-label="Area">
+        <div v-if="tab === 'areas'" class="chip-row" role="group" aria-label="Area" data-help="analytics-areachips">
           <button type="button" class="chip" :class="{ on: !areaFocus }" @click="areaFocus = ''">
             All areas
           </button>
@@ -987,7 +987,7 @@ const focusRanks = computed<FocusRank[]>(() => {
 
         <!-- ============================== Overview -->
         <template v-else-if="tab === 'overview'">
-          <div class="tiles">
+          <div class="tiles" data-help="analytics-tiles">
             <div v-for="k in kpis" :key="k.label" class="tile">
               <span class="tile-label muted">{{ k.label }}</span>
               <span class="tile-value">{{ k.value }}</span>
@@ -1006,6 +1006,7 @@ const focusRanks = computed<FocusRank[]>(() => {
 
             <ChartCard
               title="Knocks per day"
+              data-help="overview-trend"
               :columns="['Day', 'Knocks', '7-day avg']"
               :rows="knockRows"
             >
@@ -1038,6 +1039,7 @@ const focusRanks = computed<FocusRank[]>(() => {
           <div class="two-col">
             <ChartCard
               title="Sign rate by area"
+              data-help="areas-rate"
               subtitle="signed ÷ conversations"
               :columns="['Area', 'Sign rate', 'Detail']"
               :rows="rateRows(signRateByCity)"
@@ -1073,6 +1075,7 @@ const focusRanks = computed<FocusRank[]>(() => {
 
           <ChartCard
             title="Door coverage by area"
+            data-help="areas-coverage"
             subtitle="knocked ÷ on file"
             :columns="['Area', 'Coverage', 'Detail']"
             :rows="rateRows(coverageByCity)"
@@ -1094,6 +1097,7 @@ const focusRanks = computed<FocusRank[]>(() => {
 
             <ChartCard
               title="Sign rate by turf"
+              data-help="turfs-rate"
               subtitle="signed ÷ conversations"
               :columns="['Turf', 'Sign rate', 'Detail']"
               :rows="rateRows(signRateByTurf)"
@@ -1112,6 +1116,7 @@ const focusRanks = computed<FocusRank[]>(() => {
 
           <ChartCard
             title="Turf coverage"
+            data-help="turfs-coverage"
             subtitle="knocked ÷ doors in turf"
             :columns="['Turf', 'Coverage', 'Detail']"
             :rows="rateRows(coverageByTurf)"
@@ -1121,6 +1126,7 @@ const focusRanks = computed<FocusRank[]>(() => {
 
           <ChartCard
             title="All turf, by the numbers"
+            data-help="turfs-table"
             :columns="['Turf', ...GROUP_COLUMNS.slice(1)]"
             :rows="groupRows(turfStats)"
             table-only
@@ -1134,6 +1140,7 @@ const focusRanks = computed<FocusRank[]>(() => {
           <div class="two-col">
             <ChartCard
               title="Signatures by squad"
+              data-help="squads-chart"
               :columns="['Squad', 'Signatures', 'Detail']"
               :rows="signaturesBySquad.map((i) => [i.label, i.value, i.detail ?? ''])"
             >
@@ -1160,6 +1167,7 @@ const focusRanks = computed<FocusRank[]>(() => {
 
           <ChartCard
             title="All squads, by the numbers"
+            data-help="squads-table"
             :columns="['Squad', ...GROUP_COLUMNS.slice(1)]"
             :rows="groupRows(squadStats)"
             table-only
@@ -1173,6 +1181,7 @@ const focusRanks = computed<FocusRank[]>(() => {
           <div class="two-col">
             <ChartCard
               title="Answers by attempt"
+              data-help="odds-attempts"
               subtitle="answered ÷ knocks"
               :columns="['Attempt', 'Answer rate', 'Detail']"
               :rows="rateRows(answerByAttempt)"
@@ -1204,6 +1213,7 @@ const focusRanks = computed<FocusRank[]>(() => {
 
           <ChartCard
             title="When doors answer"
+            data-help="odds-heatmap"
             subtitle="answer rate"
             :columns="['Weekday', ...HOURS.map((h) => `${h}:00`)]"
             :rows="WEEKDAYS.map((w, r) => [w, ...heat.values[r].map((v) => (v == null ? '—' : fmtPct(v)))])"
@@ -1219,6 +1229,7 @@ const focusRanks = computed<FocusRank[]>(() => {
 
           <ChartCard
             title="The funnel"
+            data-help="odds-funnel"
             subtitle="unique doors"
             :columns="['Stage', 'Doors', 'Conversion']"
             :rows="funnel.map((i) => [i.label, i.value, i.detail ?? ''])"
@@ -1232,6 +1243,7 @@ const focusRanks = computed<FocusRank[]>(() => {
           <div class="two-col">
             <ChartCard
               title="Volume vs. close rate"
+              data-help="canvassers-scatter"
               subtitle="one dot per canvasser"
               :columns="CANVASSER_COLUMNS"
               :rows="canvasserRows"
@@ -1277,6 +1289,7 @@ const focusRanks = computed<FocusRank[]>(() => {
 
           <ChartCard
             title="Everyone, by the numbers"
+            data-help="canvassers-table"
             :columns="CANVASSER_COLUMNS"
             :rows="canvasserRows"
             table-only

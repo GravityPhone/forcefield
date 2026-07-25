@@ -91,10 +91,6 @@ const router = createRouter({
     // splitting lives on the Squad page. Kept only for stale bookmarks.
     { path: '/team', redirect: '/canvass' },
 
-    // The click-through app tour (More → Tutorial) — one linear retro deck
-    // from canvasser basics to campaign-manager tools, open to every role.
-    { path: '/tutorial', name: 'tutorial', component: () => import('@/views/TutorialView.vue'), meta: { roles: [] } },
-
     // "The Campaign" (More, last item, every role) — why the signatures are
     // being gathered and what to say at the door. Pure briefing copy from
     // src/lib/campaignContent.ts plus the live progress card.

@@ -380,7 +380,7 @@ function ms(item: FeedItem): MilestoneItem {
       </div>
 
       <!-- Manager knobs live on the feed itself, not the dashboard. -->
-      <div v-if="canManage" class="card options-card">
+      <div v-if="canManage" class="card options-card" data-help="feed-options">
         <button class="options-head" :aria-expanded="optionsOpen" @click="optionsOpen = !optionsOpen">
           <span>Feed options</span>
           <span class="options-caret" aria-hidden="true">{{ optionsOpen ? '▴' : '▾' }}</span>
@@ -434,7 +434,7 @@ function ms(item: FeedItem): MilestoneItem {
         Nothing yet today — the first knock lights this up.
       </p>
 
-      <ul v-else class="feed">
+      <ul v-else class="feed" data-help="feed-list">
         <li
           v-for="(item, i) in visible"
           :key="item.key"

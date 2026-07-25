@@ -218,12 +218,13 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
       <input
         v-model="query"
         class="user-search"
+        data-help="roles-search"
         type="search"
         placeholder="Search by name or username…"
         aria-label="Search users"
       />
 
-      <div class="filter-chips" role="group" aria-label="Filter by role">
+      <div class="filter-chips" role="group" aria-label="Filter by role" data-help="roles-filters">
         <button
           v-for="f in FILTERS"
           :key="f.value"
@@ -241,7 +242,7 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
       <p v-if="loading" class="muted">Loading users…</p>
       <p v-else-if="!filtered.length" class="muted">No users match.</p>
 
-      <div v-else class="user-list card">
+      <div v-else class="user-list card" data-help="roles-list">
         <button
           v-for="(u, i) in filtered"
           :key="u.id"

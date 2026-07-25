@@ -238,7 +238,7 @@ onUnmounted(() => {
 
       <template v-else>
         <!-- Manager knobs live on the leaderboard itself, not the dashboard. -->
-        <div v-if="canManage && settings" class="card options-card">
+        <div v-if="canManage && settings" class="card options-card" data-help="board-options">
           <button class="options-head" :aria-expanded="optionsOpen" @click="optionsOpen = !optionsOpen">
             <span>Board options</span>
             <span class="options-caret" aria-hidden="true">{{ optionsOpen ? '▴' : '▾' }}</span>
@@ -268,7 +268,7 @@ onUnmounted(() => {
 
         <!-- History: browse any past day's standings, or jump back to
              career totals / today. -->
-        <div class="history-row">
+        <div class="history-row" data-help="board-history">
           <div class="history-buttons">
             <button
               class="btn btn-sm"
@@ -296,7 +296,7 @@ onUnmounted(() => {
           <span v-if="dayLoading" class="spinner" aria-hidden="true"></span>
         </div>
 
-        <div class="card">
+        <div class="card" data-help="board-canvassers">
           <h3>Canvassers — {{ METRIC_LABELS[primaryMetric] }}{{ dateSuffix }}</h3>
           <div class="board-scroll">
           <table class="board">

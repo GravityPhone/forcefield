@@ -295,7 +295,7 @@ async function send() {
         </div>
         <!-- Tappable next questions: curated starters on a fresh chat, then
              the assistant's own three follow-ups after every reply. -->
-        <div v-if="activeSuggestions.length" class="suggestions" aria-label="Suggested questions">
+        <div v-if="activeSuggestions.length" class="suggestions" data-help="aichat-suggestions" aria-label="Suggested questions">
           <button
             v-for="(q, i) in activeSuggestions"
             :key="`${q}-${i}`"
@@ -307,7 +307,7 @@ async function send() {
           </button>
         </div>
       </div>
-      <form class="chat-input" @submit.prevent="send">
+      <form class="chat-input" data-help="aichat-input" @submit.prevent="send">
         <input
           ref="inputEl"
           v-model="draft"

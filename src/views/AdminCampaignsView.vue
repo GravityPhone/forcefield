@@ -159,7 +159,7 @@ const campaignOptions = computed(() => [
         <!-- Assignment first: teams on the left (each with its campaign
              picker), the campaign list on the right. Stacks on phones. -->
         <div class="columns">
-          <div class="card">
+          <div class="card" data-help="campaigns-teams">
             <h3>Teams</h3>
             <p class="muted desc">Assign each team to the campaign it works.</p>
             <p v-if="!teams.length" class="muted desc">No teams yet — create one below.</p>
@@ -175,7 +175,7 @@ const campaignOptions = computed(() => [
             </div>
           </div>
 
-          <div class="card">
+          <div class="card" data-help="campaigns-list">
             <h3>Campaigns</h3>
             <p v-if="!campaigns.length" class="muted desc">No campaigns yet — create one below.</p>
             <div v-for="c in campaigns" :key="c.id" class="campaign-row">

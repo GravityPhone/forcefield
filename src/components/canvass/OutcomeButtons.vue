@@ -49,7 +49,7 @@ function disabledFor(requiresPerson: boolean): boolean {
 
 <template>
   <div class="outcome-row">
-    <div class="outcome-grid">
+    <div class="outcome-grid" data-help="talk-outcomes">
       <button
         v-for="o in OUTCOMES"
         :key="o.value"
@@ -67,7 +67,7 @@ function disabledFor(requiresPerson: boolean): boolean {
          Next walks the street per the direction pref above; Back steps
          back through YOUR knock history (the doors you've logged, newest
          first) — retracing your day, not the street. -->
-    <div v-if="talk.selectedAddress" v-motion="popIn()" class="advance-row">
+    <div v-if="talk.selectedAddress" v-motion="popIn()" class="advance-row" data-help="talk-advance">
       <button class="btn prev-btn" title="Back through the doors you've knocked" @click="confirmPrevious">‹ Back</button>
       <button class="btn btn-primary next-btn" @click="confirmNext">Next ›</button>
       <!-- The walk's one filter, right where the walking happens: on, Next,

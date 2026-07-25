@@ -67,7 +67,7 @@ async function saveKey() {
 <template>
   <AppShell title="Admin Settings">
     <div class="stack">
-      <div class="card">
+      <div class="card" data-help="settings-key">
         <h3>AI Assistant — Anthropic API Key</h3>
         <p class="muted">
           A shared demo key already works out of the box — optionally save your own here to use
@@ -92,7 +92,7 @@ async function saveKey() {
         <p v-else class="muted">Loading…</p>
       </div>
 
-      <div class="card">
+      <div class="card" data-help="settings-sources">
         <h3>Data Sources</h3>
         <div class="source-row">
           <div>

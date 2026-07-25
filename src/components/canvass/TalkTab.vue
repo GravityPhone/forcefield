@@ -186,7 +186,7 @@ const PARTLY_SIGNED_OPTIONS = [
          the next four houses the pattern above will visit, two by two —
          tap one to jump straight to it without logging anything. Dot =
          that door's status color (blue = never knocked). -->
-    <div v-if="talk.selectedAddress" class="up-next">
+    <div v-if="talk.selectedAddress" class="up-next" data-help="talk-upnext">
       <span class="muted up-label">Up next:</span>
       <span v-if="talk.upcoming === null" class="muted up-none">…</span>
       <div v-else-if="talk.upcoming.length" class="up-grid">

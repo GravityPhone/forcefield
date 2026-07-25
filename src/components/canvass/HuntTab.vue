@@ -1338,7 +1338,12 @@ onUnmounted(() => {
          "My turf" layer button both colors your ground and flies you to it,
          so a second control for the same intent was one too many. -->
 
-    <div ref="mapWrapEl" class="map-wrap" :class="{ 'map-wrap-fullscreen': isFullscreen }">
+    <div
+      ref="mapWrapEl"
+      class="map-wrap"
+      :class="{ 'map-wrap-fullscreen': isFullscreen }"
+      data-help="scout-map"
+    >
       <div ref="mapEl" class="map"></div>
       <div v-if="pinsLoading" class="pins-loading" role="status" aria-live="polite">
         <span class="pins-loading-spinner" aria-hidden="true"></span>
@@ -1377,7 +1382,7 @@ onUnmounted(() => {
            turf's doors in its own color — tap the active one for every house
            on plain status pins) and city/village limits. Below the pin-style
            toggle, same chrome. -->
-      <div class="layer-toggle" role="group" aria-label="Map layers">
+      <div class="layer-toggle" role="group" aria-label="Map layers" data-help="scout-layers">
         <!-- Only when you actually have a share with your name on it — the
              other end of the squad page's claiming flow. -->
         <button
@@ -1468,6 +1473,7 @@ onUnmounted(() => {
     <input
       :value="listQuery"
       class="street-search"
+      data-help="scout-search"
       type="search"
       placeholder="Search a name or street…"
       aria-label="Search people or addresses"

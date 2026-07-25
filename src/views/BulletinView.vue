@@ -90,7 +90,7 @@ onUnmounted(() => {
 <template>
   <AppShell title="Campaign Bulletin">
     <div class="stack">
-      <div v-if="canPost" class="card">
+      <div v-if="canPost" class="card" data-help="bulletin-composer">
         <h3>Post an announcement</h3>
         <form @submit.prevent="post">
           <div class="field">
@@ -126,7 +126,7 @@ onUnmounted(() => {
         No announcements yet{{ canPost ? ' — post the first one above.' : '.' }}
       </p>
 
-      <article v-for="b in bulletins" :key="b.id" class="card bulletin">
+      <article v-for="b in bulletins" :key="b.id" class="card bulletin" data-help="bulletin-post">
         <div class="bulletin-head">
           <h3>{{ b.title }}</h3>
           <button v-if="canPost" class="btn btn-ghost btn-sm" @click="remove(b)">Delete</button>

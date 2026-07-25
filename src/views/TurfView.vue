@@ -2824,6 +2824,7 @@ onUnmounted(() => {
         v-if="draftOpen"
         :value="streetQuery"
         class="street-search"
+        data-help="turf-search"
         type="search"
         placeholder="Type a street name to start"
         aria-label="Search streets"
@@ -2872,7 +2873,12 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div ref="mapWrapEl" class="map-wrap" :class="{ 'map-wrap-fullscreen': isFullscreen }">
+      <div
+        ref="mapWrapEl"
+        class="map-wrap"
+        :class="{ 'map-wrap-fullscreen': isFullscreen }"
+        data-help="turf-map"
+      >
         <div ref="mapEl" class="map"></div>
         <!-- Freehand selection surface — only exists while Lasso is armed. -->
         <div
@@ -2982,7 +2988,7 @@ onUnmounted(() => {
              loop) and Streets (tap the road itself to take a whole
              street). While either is armed, Add/Erase picks what it does.
              Cutting only — in overview there's no draft to sweep into. -->
-        <div v-if="draftOpen" class="lasso-toggle">
+        <div v-if="draftOpen" class="lasso-toggle" data-help="turf-tools">
           <button
             type="button"
             class="layer-btn"
@@ -3079,7 +3085,7 @@ onUnmounted(() => {
 
       <!-- Overview: cutting starts only when you ask for it. -->
       <div v-if="!draftOpen && !(isSubcutter && !myParentTurfs.length)" class="new-turf-bar">
-        <button class="btn btn-primary new-turf-btn" @click="startNewTurf">
+        <button class="btn btn-primary new-turf-btn" data-help="turf-create" @click="startNewTurf">
           + {{ isSubcutter ? 'Create new sub-turf' : 'Create new turf' }}
         </button>
       </div>
@@ -3140,7 +3146,7 @@ onUnmounted(() => {
                the row (or a chip) opens the editor below AND focuses TRIM
                mode on that street (its doors paint; each map tap
                drops/restores a house). -->
-          <div class="seg-table" role="table" aria-label="Streets in this turf">
+          <div class="seg-table" role="table" aria-label="Streets in this turf" data-help="turf-streets">
             <div class="seg-thead" role="row">
               <span role="columnheader">Street</span>
               <span role="columnheader">Numbers</span>
@@ -3279,6 +3285,7 @@ onUnmounted(() => {
         <template v-else>
           <AppSelect
             class="turf-pick"
+            data-help="turf-list"
             :options="turfPickOptions"
             :model-value="selectedTurfId ?? 'none'"
             aria-label="Zoom to a turf"

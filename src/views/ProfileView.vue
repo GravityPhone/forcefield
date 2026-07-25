@@ -159,7 +159,7 @@ async function save() {
   <AppShell title="About me">
     <div v-if="auth.profile" class="about-page">
       <!-- Who this is — the avatar doubles as a shortcut into the picker. -->
-      <div class="card identity" :style="{ '--member-color': memberColor(auth.profile) }">
+      <div class="card identity" data-help="profile-identity" :style="{ '--member-color': memberColor(auth.profile) }">
         <button
           class="identity-avatar"
           :style="!avatarUrl(auth.profile.avatar) ? { background: memberColor(auth.profile) } : {}"
@@ -179,7 +179,7 @@ async function save() {
 
       <!-- The two identity submenus: emoji + color. -->
       <div class="picker-row">
-        <button class="picker-btn" @click="emojiOpen = true">
+        <button class="picker-btn" data-help="profile-emoji" @click="emojiOpen = true">
           <span class="picker-preview">
             <img v-if="avatarUrl(auth.profile.avatar)" :src="avatarUrl(auth.profile.avatar)" alt="" />
             <template v-else>🙂</template>
@@ -192,7 +192,7 @@ async function save() {
           </span>
           <span class="muted picker-chevron" aria-hidden="true">›</span>
         </button>
-        <button class="picker-btn" @click="colorOpen = true">
+        <button class="picker-btn" data-help="profile-color" @click="colorOpen = true">
           <span
             class="picker-preview picker-color"
             :style="{ background: memberColor(auth.profile) }"
@@ -207,7 +207,7 @@ async function save() {
         </button>
       </div>
 
-      <div class="field">
+      <div class="field" data-help="profile-name">
         <label for="about-name">Display name</label>
         <input
           id="about-name"
@@ -253,7 +253,7 @@ async function save() {
         />
       </div>
 
-      <div v-if="showPhone" class="field phone-field">
+      <div v-if="showPhone" class="field phone-field" data-help="profile-phone">
         <label for="about-phone">Phone number (optional)</label>
         <input
           id="about-phone"

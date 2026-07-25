@@ -7,6 +7,7 @@ import { supabase } from '@/lib/supabase'
 import AppLogo from '@/components/AppLogo.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import ChatDrawer from '@/components/chat/ChatDrawer.vue'
+import HelpTour from '@/components/ui/HelpTour.vue'
 import { hapticTap } from '@/lib/native'
 import { canvassGameOpen } from '@/lib/easterEgg'
 import { helpFor, type HelpTopic } from '@/lib/helpContent'
@@ -31,6 +32,22 @@ async function handleLogout() {
   await auth.logOut()
   router.push('/')
 }
+
+// The header row only has room for one word — "Firstname Lastname" used to run
+// into the Log out button and get clipped mid-name. Show the first word of
+// whatever they go by (display name if set, else username); the full name is
+// in the tooltip, and tapping it opens About me.
+const headerName = computed(() => {
+  const p = auth.profile
+  if (!p) return ''
+  const full = (p.display_name || p.username || '').trim()
+  return full.split(/\s+/)[0] || full
+})
+const headerNameFull = computed(() => {
+  const p = auth.profile
+  if (!p) return ''
+  return (p.display_name || p.username || '').trim()
+})
 
 // --- Phone navigation: a native-style bottom tab bar (the constantly-used
 // destinations sit in thumb reach) plus a "More" sheet for the rest. The
@@ -87,9 +104,6 @@ const moreItems = computed<NavItem[]>(() => {
   const myKnocks: NavItem = { to: '/history', label: 'My knocks', icon: 'clock' }
   const aboutMe: NavItem = { to: '/profile', label: 'About me', icon: 'person' }
   const appearance: NavItem = { to: '/appearance', label: 'Appearance', icon: 'palette' }
-  // The guided tour — every role gets it (it's a demo; the deck covers all
-  // roles and says so).
-  const tutorial: NavItem = { to: '/tutorial', label: 'Tutorial', icon: 'book' }
   // Why we're knocking, and what to say — the same briefing for every role,
   // deliberately LAST in every list: it's read once and referred back to, not
   // navigated to daily.
@@ -99,7 +113,6 @@ const moreItems = computed<NavItem[]>(() => {
     return [
       { to: '/admin/analytics', label: 'Analytics', icon: 'chart' },
       roster,
-      tutorial,
       aboutMe,
       appearance,
       campaign,
@@ -114,7 +127,6 @@ const moreItems = computed<NavItem[]>(() => {
       { to: '/admin/chat', label: 'AI Chat', icon: 'sparkle' },
       // Turf lives in the bottom tab bar now, not here.
       { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
-      tutorial,
       aboutMe,
       appearance,
       { to: '/admin/settings', label: 'Settings', icon: 'sliders' },
@@ -122,7 +134,7 @@ const moreItems = computed<NavItem[]>(() => {
     ]
   }
   // Squad leaders split turf right on the Squad page now — no Turf link.
-  return [myKnocks, roster, tutorial, aboutMe, appearance, campaign]
+  return [myKnocks, roster, aboutMe, appearance, campaign]
 })
 
 const moreOpen = ref(false)
@@ -207,7 +219,6 @@ const ICONS = {
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l2.9 1.9"/>',
   chart: '<path d="M4 4v16h16"/><path d="M8 16v-5M12 16V7M16 16v-8"/>',
   sliders: '<path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>',
-  book: '<path d="M12 6.5C10.8 4.9 8.9 4 6.5 4H4v14h2.5c2.4 0 4.3.9 5.5 2.5 1.2-1.6 3.1-2.5 5.5-2.5H20V4h-2.5c-2.4 0-4.3.9-5.5 2.5z"/><path d="M12 6.5v14"/>',
   flag: '<path d="M6 21V4"/><path d="M6 5h11l-2.2 3.5L17 12H6z"/>',
   more: '<circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>',
   logout: '<path d="M14 4h-8a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h8M10 12h11M18 8.5L21.5 12 18 15.5"/>',
@@ -260,7 +271,8 @@ onUnmounted(() => {
           <button
             v-if="activeHelp"
             class="help-btn"
-            :aria-label="`About this screen: ${activeHelp.title}`"
+            :aria-label="`Walk me through this screen: ${activeHelp.title}`"
+            title="Walk me through this screen"
             @click="helpOpen = true"
           >
             ?
@@ -280,7 +292,13 @@ onUnmounted(() => {
             <span class="role-label-full">{{ ROLE_LABELS[auth.profile.role] }}</span>
             <span class="role-label-short">{{ ROLE_LABELS_SHORT[auth.profile.role] }}</span>
           </span>
-          <span class="username">{{ auth.profile.username }}</span>
+          <!-- Your own name is the way to your own page — About me is where
+               the display name, emoji, color and phone live. -->
+          <router-link
+            to="/profile"
+            class="username"
+            :title="`${headerNameFull} — About me`"
+          >{{ headerName }}</router-link>
           <button class="btn btn-ghost btn-sm logout-top" @click="handleLogout">Log out</button>
         </div>
       </div>
@@ -320,7 +338,6 @@ onUnmounted(() => {
         </template>
         <router-link to="/profile">About me</router-link>
         <router-link to="/appearance">Appearance</router-link>
-        <router-link to="/tutorial">Tutorial</router-link>
         <router-link to="/campaign">The Campaign</router-link>
       </nav>
       <span v-if="canScrollNavLeft" class="nav-scroll-hint nav-scroll-hint-left" aria-hidden="true">‹</span>
@@ -421,20 +438,9 @@ onUnmounted(() => {
       <p v-if="roleSwitching" class="role-demo-note">Switching…</p>
     </BottomSheet>
 
-    <!-- Per-screen help sheet ("?" in the header) -->
-    <BottomSheet
-      v-if="activeHelp"
-      v-model:open="helpOpen"
-      :title="activeHelp.title"
-      aria-label="Screen help"
-    >
-      <div class="help-body">
-        <template v-for="(s, i) in activeHelp.sections" :key="i">
-          <h3 v-if="s.heading" class="help-heading">{{ s.heading }}</h3>
-          <p class="help-text">{{ s.body }}</p>
-        </template>
-      </div>
-    </BottomSheet>
+    <!-- Per-screen help ("?" in the header): a step-by-step walkthrough that
+         rings the control each step is about. -->
+    <HelpTour v-model:open="helpOpen" :topic="activeHelp" />
   </div>
 </template>
 
@@ -461,15 +467,25 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  /* Tight on purpose — every rem spent between these blocks is a rem a long
+     name doesn't get. */
+  gap: 0.5rem;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.35rem;
   font-weight: 800;
   font-size: 1.05rem;
+  /* The brand yields first: it's the one thing here everybody already knows. */
+  min-width: 0;
+}
+
+.brand-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand-mark {
@@ -491,7 +507,10 @@ onUnmounted(() => {
 .user-area {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.4rem;
+  /* Keeps its width; the brand block is what gives ground. */
+  flex-shrink: 0;
+  min-width: 0;
 }
 
 .help-btn {
@@ -515,25 +534,6 @@ onUnmounted(() => {
 .help-btn:hover {
   color: var(--accent);
   border-color: var(--accent);
-}
-
-.help-body {
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-
-.help-heading {
-  margin: 0.4rem 0 0;
-  font-size: 0.95rem;
-  font-weight: 800;
-}
-
-.help-text {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 0.95rem;
-  line-height: 1.5;
 }
 
 /* The role badge doubles as the demo role switcher — keep the badge look,
@@ -567,6 +567,10 @@ onUnmounted(() => {
 }
 
 @media (max-width: 539px) {
+  .shell-header-inner {
+    padding: 0.7rem 0.85rem;
+  }
+
   .role-label-full {
     display: none;
   }
@@ -576,7 +580,7 @@ onUnmounted(() => {
   }
 
   .username {
-    max-width: 6.5rem;
+    max-width: 8.5rem;
   }
 }
 
@@ -656,10 +660,17 @@ onUnmounted(() => {
 .username {
   font-weight: 600;
   font-size: 0.92rem;
-  max-width: 9rem;
+  /* First name only (headerName) — this leash is for one very long word. */
+  max-width: 12rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.username:hover {
+  color: var(--accent);
 }
 
 .admin-nav-wrap {

@@ -86,7 +86,7 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
 <template>
   <AppShell title="Appearance">
     <!-- ============ Color scheme ============ -->
-    <section v-for="group in groupedThemes" :key="group.id" class="scheme-group">
+    <section v-for="group in groupedThemes" :key="group.id" class="scheme-group" data-help="appearance-schemes">
       <h3 class="group-heading">
         {{ group.label }}
         <span class="group-blurb muted">{{ group.blurb }}</span>
@@ -123,7 +123,7 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
 
     <!-- ============ Background flair ============ -->
     <h2 class="section-heading">Background flair</h2>
-    <div class="pattern-grid">
+    <div class="pattern-grid" data-help="appearance-patterns">
       <button
         v-for="p in PATTERNS"
         :key="p.id"
@@ -166,7 +166,7 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
     <!-- ============ Text & readability ============ -->
     <h2 class="section-heading">Text &amp; readability</h2>
 
-    <div class="pref-block">
+    <div class="pref-block" data-help="appearance-text">
       <span class="pref-title">Text size</span>
       <div class="seg size-seg">
         <button
@@ -208,6 +208,7 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
 
     <button
       class="switch-row"
+      data-help="appearance-sunlight"
       role="switch"
       :aria-checked="theme.prefs.sunlight"
       @click="setPrefs({ sunlight: !theme.prefs.sunlight })"

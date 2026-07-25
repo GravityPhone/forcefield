@@ -125,7 +125,7 @@ function openMember(id: string) {
       <p v-else-if="loading" class="muted empty">Loading…</p>
       <p v-else-if="!members.length" class="muted empty">No one on this team yet.</p>
 
-      <div v-else class="roster-list">
+      <div v-else class="roster-list" data-help="roster-list">
         <div
           v-for="m in orderedMembers"
           :key="m.id"
@@ -154,6 +154,7 @@ function openMember(id: string) {
           <a
             v-if="m.phone && m.id !== auth.profile?.id"
             class="btn btn-sm call-btn"
+            data-help="roster-call"
             :href="telHref(m.phone)"
             :aria-label="`Call ${memberName(m)}`"
             @click.stop

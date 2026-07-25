@@ -13,7 +13,7 @@ const talk = useTalkStore()
 
 <template>
   <AppShell>
-    <div class="tab-bar" role="tablist">
+    <div class="tab-bar" role="tablist" data-help="canvass-tabs">
       <button
         class="tab"
         role="tab"

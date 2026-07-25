@@ -13,7 +13,7 @@
  * entries, and the view re-renders around them. Nothing in the app derives
  * behavior from this file.
  *
- * (Kept as a lib file, same as tutorialContent.ts, so copy edits never mean
+ * (Kept as a lib file, same as helpContent.ts, so copy edits never mean
  * touching a Vue component.)
  */
 
