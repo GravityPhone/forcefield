@@ -53,7 +53,9 @@ export const useThemeStore = defineStore('theme', {
      * paint cache. Every state change funnels through here. */
     repaint() {
       const theme = getTheme(this.current)
-      const tokens = this.prefs.sunlight ? sunlightTokens(theme.tokens) : theme.tokens
+      const tokens = this.prefs.sunlight
+        ? sunlightTokens(theme.tokens, theme.dark)
+        : theme.tokens
       applyThemeTokens(tokens)
       applyDisplayPrefs(this.prefs, tokens)
       localStorage.setItem(PAINT_CACHE_KEY, JSON.stringify(this.settingsJson))

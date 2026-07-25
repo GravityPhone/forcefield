@@ -11,7 +11,7 @@ import { hapticTap } from '@/lib/native'
 import { canvassGameOpen } from '@/lib/easterEgg'
 import { helpFor, type HelpTopic } from '@/lib/helpContent'
 
-// Easter-egg mini game (25 rapid taps on the chat handle) — async so the
+// Easter-egg mini game (25 rapid taps on your own name, /profile) — async so the
 // canvas code never ships to anyone who hasn't found it.
 const CanvassGame = defineAsyncComponent(() => import('@/components/game/CanvassGame.vue'))
 
@@ -822,7 +822,9 @@ onUnmounted(() => {
   border: none;
   background: transparent;
   font: inherit;
-  font-size: 0.68rem;
+  /* Six labels share a phone's width — this row takes the capped scale
+     (style.css --ui-scale), not the full Text size. */
+  font-size: calc(0.68rem * var(--ui-scale, 1));
   font-weight: 700;
   letter-spacing: 0.01em;
   color: var(--text-muted);

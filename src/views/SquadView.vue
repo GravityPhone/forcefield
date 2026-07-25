@@ -2422,7 +2422,7 @@ watch(
   background: var(--surface);
   color: var(--text);
   font: inherit;
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--ui-scale, 1));
   font-weight: 700;
   cursor: pointer;
 }
@@ -2481,7 +2481,7 @@ watch(
   background: var(--surface);
   color: var(--text);
   font: inherit;
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--ui-scale, 1));
   font-weight: 700;
   cursor: pointer;
 }

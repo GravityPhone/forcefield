@@ -596,12 +596,25 @@ export function applyThemeTokens(tokens: ThemeTokens) {
 
 /** Sunlight boost: rebuilds the scheme's weakest-contrast tokens much closer
  * to full text color. Works on ANY scheme — glare-proofing without forcing
- * anyone off the palette they like. */
-export function sunlightTokens(t: ThemeTokens): ThemeTokens {
+ * anyone off the palette they like. ON BY DEFAULT since 2026-07-24 (user
+ * call): this app is used outdoors, in the sun, at arm's length — the
+ * high-contrast reading is the normal one, and the schemes' softer tones are
+ * the opt-out.
+ *
+ * Turned up the same day: muted text lands almost on the body color, borders
+ * read as real lines rather than hints, and the body text itself is pushed
+ * the last step toward black (light schemes) or white (dark ones) — `dark`
+ * comes from the scheme definition, since a token set alone can't tell which
+ * way "more contrast" points. */
+export function sunlightTokens(t: ThemeTokens, dark = false): ThemeTokens {
+  const pole = dark ? '#ffffff' : '#000000'
   return {
     ...t,
-    textMuted: `color-mix(in srgb, ${t.textMuted} 25%, ${t.text})`,
-    border: `color-mix(in srgb, ${t.border} 45%, ${t.text})`,
+    // 85/15/32: enough that every scheme reads in glare, gentle enough that
+    // a scheme with colored text (the retro ones) still looks like itself.
+    text: `color-mix(in srgb, ${t.text} 85%, ${pole})`,
+    textMuted: `color-mix(in srgb, ${t.textMuted} 15%, ${t.text})`,
+    border: `color-mix(in srgb, ${t.border} 32%, ${t.text})`,
     shadow: 'none',
   }
 }
@@ -626,7 +639,9 @@ export const TEXT_SCALES: { value: number; label: string }[] = [
 export const DEFAULT_PREFS: DisplayPrefs = {
   textScale: 1,
   bold: false,
-  sunlight: false,
+  // On by default — see sunlightTokens. Someone who turns it off has that
+  // choice saved explicitly, so the default never overrides them.
+  sunlight: true,
   font: 'system',
   corners: 'theme',
   compact: false,
@@ -648,7 +663,9 @@ export function normalizeThemeSettings(raw: unknown): { scheme: ThemeId; prefs: 
         ? (obj.textScale as number)
         : DEFAULT_PREFS.textScale,
       bold: obj.bold === true,
-      sunlight: obj.sunlight === true,
+      // Absent (legacy rows, fresh accounts) = on; only an explicit false
+      // turns it off.
+      sunlight: obj.sunlight !== false,
       font:
         typeof obj.font === 'string' && obj.font in FONT_STACKS
           ? (obj.font as FontId)

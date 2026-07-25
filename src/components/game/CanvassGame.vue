@@ -4,7 +4,8 @@
 // between fences, brick walls and hedges (watch for NO SOLICITING signs).
 // Nothing moves except you and the scrolling world, Flappy Bird-style, and
 // the difficulty ramps the same way: a touch faster and a touch tighter
-// with every door knocked. Unlocked by tapping the chat handle 25 times.
+// with every door knocked. Unlocked by tapping your own name on /profile
+// 25 times in a row.
 import { onMounted, onUnmounted, ref } from 'vue'
 import { hapticTap } from '@/lib/native'
 

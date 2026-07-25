@@ -180,22 +180,30 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
           <span class="seg-sub">{{ s.label }}</span>
         </button>
       </div>
+      <span class="pref-hint muted">Grows what you read. Tabs, map buttons and typing fields stay put.</span>
     </div>
 
+    <!-- A dropdown, not a row of chips (2026-07-24, user call): four faces
+         already crowd a phone row, the list is the kind of thing that grows,
+         and the closed control gets to show the chosen face itself. -->
     <div class="pref-block">
-      <span class="pref-title">Font</span>
-      <div class="seg">
-        <button
+      <label class="pref-title" for="font-pick">Font</label>
+      <select
+        id="font-pick"
+        class="font-pick"
+        :value="theme.prefs.font"
+        :style="{ fontFamily: FONT_STACKS[theme.prefs.font] }"
+        @change="setPrefs({ font: ($event.target as HTMLSelectElement).value as FontId })"
+      >
+        <option
           v-for="f in FONT_CHOICES"
           :key="f.id"
-          class="seg-btn"
-          :class="{ active: theme.prefs.font === f.id }"
+          :value="f.id"
           :style="{ fontFamily: FONT_STACKS[f.id] }"
-          @click="setPrefs({ font: f.id })"
         >
           {{ f.label }}
-        </button>
-      </div>
+        </option>
+      </select>
     </div>
 
     <button
@@ -207,8 +215,8 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
       <span class="switch-copy">
         <span class="switch-title">Sunlight boost</span>
         <span class="switch-desc muted">
-          Pushes faint text and outlines up to near-full contrast — made for direct sun, works
-          with any scheme.
+          On by default. Pushes text, faint labels and outlines to full contrast — made for
+          direct sun, works with any scheme.
         </span>
       </span>
       <span class="switch" aria-hidden="true"></span>
@@ -469,6 +477,12 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
   margin-top: 1rem;
 }
 
+.pref-hint {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+}
+
 .pref-title {
   display: block;
   font-weight: 700;
@@ -480,6 +494,24 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
+}
+
+/* The font dropdown wears the app's control shape and the chosen face. */
+.font-pick {
+  width: 100%;
+  min-height: 48px;
+  padding: 0.45rem 0.8rem;
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.font-pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .seg-btn {

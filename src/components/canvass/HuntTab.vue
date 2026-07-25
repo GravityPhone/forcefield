@@ -1630,7 +1630,7 @@ onUnmounted(() => {
   background: var(--surface);
   color: var(--text);
   font: inherit;
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--ui-scale, 1));
   font-weight: 700;
   cursor: pointer;
 }
@@ -1667,7 +1667,7 @@ onUnmounted(() => {
   background: var(--surface);
   color: var(--text);
   font: inherit;
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--ui-scale, 1));
   font-weight: 700;
   cursor: pointer;
 }
@@ -1709,7 +1709,9 @@ onUnmounted(() => {
   width: 100%;
   min-height: 48px;
   padding: 0.7rem 0.9rem;
-  font-size: 1rem;
+  /* Typed-in text takes the capped scale (style.css --ui-scale): a street
+     name has to fit the field on one line at every Text size. */
+  font-size: max(16px, calc(1rem * var(--ui-scale, 1)));
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);

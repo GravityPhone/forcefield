@@ -56,6 +56,19 @@ html {
    * --font-scale is the user's Text size pref — because the whole app is
    * rem-based, this one multiplier scales everything together. */
   font-size: calc(clamp(14px, 3.5vw, 16px) * var(--font-scale, 1));
+
+  /* …except for chrome that CAN'T grow with it (2026-07-24, user call).
+   * Text size is for reading — the words at a door, a name, a street. Map
+   * buttons live in fixed 36px boxes, the bottom tab bar has six labels in a
+   * phone's width, and a text field has to fit an address on one line. At
+   * Jumbo those all overflow, which reads as the app breaking rather than as
+   * bigger text.
+   *
+   * --ui-scale is the factor that UNDOES the root scale back down to a gentle
+   * cap: multiply any rem font-size by it and that element tops out at ~1.1x
+   * however far the reading text goes. Everything else — body copy, names,
+   * outcomes, feeds — scales all the way, which is the point of the pref. */
+  --ui-scale: calc(min(var(--font-scale, 1), 1.1) / var(--font-scale, 1));
 }
 
 body {
@@ -256,13 +269,29 @@ a {
   color: var(--text-muted);
 }
 
+/* Typed text sits inside a fixed-width box — an address, a name, a search —
+ * so it takes the capped --ui-scale rather than the full Text size. The
+ * max(16px, …) floor is separate and non-negotiable: iOS Safari zooms the
+ * whole page in whenever a focused field is under 16px. */
+.field input,
+.field textarea,
+.field select,
+input[type='text'],
+input[type='search'],
+input[type='number'],
+input[type='tel'],
+input[type='password'],
+textarea,
+select {
+  font-size: max(16px, calc(1rem * var(--ui-scale, 1)));
+}
+
 .field input,
 .field textarea,
 .field select {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: clamp(0.6rem, 2vw, 0.75rem) clamp(0.7rem, 2.5vw, 0.9rem);
-  font-size: 1rem;
   background: var(--surface);
   color: var(--text);
   min-height: clamp(40px, 11vw, 48px);
