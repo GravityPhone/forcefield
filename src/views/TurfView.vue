@@ -72,7 +72,12 @@ import type { StreetAtPoint } from '@/lib/geocode'
 import { avatarUrl } from '@/lib/avatars'
 import { localToday } from '@/lib/day'
 import { memberColor } from '@/lib/memberColors'
-import { OUTCOME_HEX, OUTCOME_LABELS, doorStatusOutcome } from '@/lib/outcomes'
+import {
+  OUTCOME_HEX,
+  OUTCOME_LABELS,
+  doorPartlySigned,
+  doorStatusOutcome,
+} from '@/lib/outcomes'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
 import { useAuthStore } from '@/stores/auth'
@@ -940,7 +945,7 @@ async function fetchKnockStatuses() {
     for (const r of rows) {
       const eff = doorStatusOutcome(r.outcome, r.signed_count, r.person_count) ?? r.outcome
       status.set(r.household_id, eff)
-      if (eff === 'maybe' && (r.signed_count ?? 0) > 0) partly.add(r.household_id)
+      if (doorPartlySigned(r.outcome, r.signed_count, r.person_count)) partly.add(r.household_id)
     }
     statusByAddress.value = status
     partlySignedDoors.value = partly

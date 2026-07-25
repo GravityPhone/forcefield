@@ -543,6 +543,10 @@ export class DoorCanvasLayer {
     dot(ctx, x, y, r + 1.5, '#fff')
     if (badge) {
       dot(ctx, x, y, r, paint.fill)
+      // With a badge the innerRing can't be a band (the avatar owns the
+      // middle), so it strokes the fill's rim instead — a partly-signed door
+      // someone covered today still shows its yellow edge.
+      if (paint.innerRing) strokeCircle(ctx, x, y, r - 1, paint.innerRing, 2)
       drawBadge(ctx, x, y, r - 2.6, badge)
       return
     }

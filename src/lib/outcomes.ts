@@ -75,6 +75,30 @@ export function doorStatusOutcome(
   return latest ?? null
 }
 
+/** Is this door PARTLY signed — somebody living there signed, but not
+ * everybody, and nothing has closed the door since? Exactly the condition
+ * that makes rule 3 above fire, surfaced as its own state because the maps
+ * paint it differently from a genuine latest-outcome 'maybe':
+ *
+ *   partly signed  → GREEN fill with a YELLOW ring (progress here, but
+ *                    there are still names to get)
+ *   latest 'maybe' → plain yellow fill (nobody has signed yet)
+ *
+ * doorStatusOutcome folds both into 'maybe', which is right for anything
+ * that just needs one color; call this alongside it when you can draw two.
+ * Every map does (2026-07-24); Talk's roster bubbles deliberately don't. */
+export function doorPartlySigned(
+  latest: KnockOutcome | null | undefined,
+  signedCount: number | null | undefined,
+  personCount: number | null | undefined,
+): boolean {
+  const signed = signedCount ?? 0
+  const total = personCount ?? 0
+  if (signed <= 0) return false
+  if (total > 0 && signed >= total) return false
+  return latest !== 'skip' && latest !== 'hostile'
+}
+
 /** Coarse 4-bucket status color for the Hunt "Knock" button — green once
  * signed, yellow while still a maybe, red once it's a closed no (didn't
  * sign / skip / hostile), blue for not-home or never-visited (nothing

@@ -19,7 +19,12 @@ import type { PinMode, TurfShadeMode } from '@/lib/mapLayers'
 import { DoorCanvasLayer, PINS_MIN_ZOOM } from '@/lib/doorCanvas'
 import type { CanvasDoor, DoorBadge, DoorPaintState } from '@/lib/doorCanvas'
 import { rangeCovers, walkRanges } from '@/lib/doorPath'
-import { OUTCOME_HEX, PIN_DEFAULT_HEX, doorStatusOutcome } from '@/lib/outcomes'
+import {
+  OUTCOME_HEX,
+  PIN_DEFAULT_HEX,
+  doorPartlySigned,
+  doorStatusOutcome,
+} from '@/lib/outcomes'
 import { avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
 import { telHref } from '@/lib/phone'
@@ -548,17 +553,23 @@ function paintForDoor(id: string): DoorPaintState | null {
   const turfId = door ? door.turf_id : foreign!.turf_id
   const status = statusByDoor.value.get(id) ?? orgStatusByDoor.value.get(id)
   const outcome = doorStatusOutcome(status?.outcome, status?.signed_count, status?.person_count)
-  const fill = outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
+  // Partly signed draws GREEN with a YELLOW band rather than plain yellow —
+  // "one of the three signed" is progress with work left, and shouldn't look
+  // identical to a door where nobody has signed at all.
+  const partly = doorPartlySigned(status?.outcome, status?.signed_count, status?.person_count)
+  const fill = partly ? OUTCOME_HEX.signed : outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
+  const innerRing = partly ? OUTCOME_HEX.maybe : null
   // Rings are the turf layer. Off = plain status pins, nothing else to read.
   const turfColor =
     turfShade.value === 'off' ? null : (anyTurfColorById.value.get(turfId) ?? null)
 
   const assignee = assigningMember.value
   if (assignee) {
-    if (!door) return { fill, ring: turfColor, emphasis: false, alpha: 0.35 }
+    if (!door) return { fill, innerRing, ring: turfColor, emphasis: false, alpha: 0.35 }
     const picked = assignSelected.value.has(id)
     return {
       fill: picked ? memberColor(assignee) : fill,
+      innerRing: picked ? null : innerRing,
       ring: picked ? '#ffffff' : turfColor,
       emphasis: picked,
       pulse: picked && id === assignAnchorId.value,
@@ -566,7 +577,7 @@ function paintForDoor(id: string): DoorPaintState | null {
     }
   }
 
-  if (!door) return { fill, ring: turfColor, emphasis: false }
+  if (!door) return { fill, innerRing, ring: turfColor, emphasis: false }
 
   const knocker = todayKnockerByDoor.value.get(id)
   const member = knocker ? memberById.value.get(knocker.canvasserId) : undefined
@@ -580,6 +591,9 @@ function paintForDoor(id: string): DoorPaintState | null {
   }
   return {
     fill,
+    // Coexists with the badge: the avatar owns the pin's middle, so the
+    // partly-signed yellow strokes the rim instead of filling a band.
+    innerRing,
     ring: turfColor,
     // Today's covered doors are the map's live story — they draw bigger and
     // above their plain neighbors.
