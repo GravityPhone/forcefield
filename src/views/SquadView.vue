@@ -1788,25 +1788,36 @@ watch(
           >
             <canvas ref="lassoCanvasEl" class="lasso-canvas"></canvas>
           </div>
-          <!-- Sweep feedback lives ON the map, not in the assign bar above
-               it: sweeping is exactly what people do in fullscreen, where the
-               page chrome (and the running count) isn't on screen at all. -->
+          <!-- The whole assign flow lives ON the map, not only in the bar
+               above it: sweeping is exactly what people do in fullscreen,
+               where the page chrome — the count, and Save — isn't on screen
+               at all. Sits above the lasso surface so it stays reachable
+               while a tool is armed. -->
           <div
-            v-if="assigningMember && (sweepFlash || lassoActive || streetTapActive)"
-            class="sweep-toast"
+            v-if="assigningMember"
+            class="assign-mapbar"
             :style="{
               '--assign-color': memberColor(assigningMember),
               '--assign-ink': inkOn(memberColor(assigningMember)),
             }"
           >
-            <span v-if="sweepFlash">{{ sweepFlash }}</span>
-            <span v-else-if="lassoActive">
-              {{ sweepMode === 'erase' ? 'Loop doors to take them back out' : 'Loop doors to add them' }}
+            <span class="assign-mapbar-msg">
+              <template v-if="sweepFlash">{{ sweepFlash }}</template>
+              <template v-else-if="lassoActive">
+                {{ sweepMode === 'erase' ? 'Loop doors to take them back out' : 'Loop doors to add them' }}
+              </template>
+              <template v-else-if="streetTapActive">
+                {{ sweepMode === 'erase' ? 'Tap a door to drop its street' : 'Tap a door to take its street' }}
+              </template>
+              <template v-else>{{ memberName(assigningMember) }}</template>
             </span>
-            <span v-else>
-              {{ sweepMode === 'erase' ? 'Tap a door to drop its street' : 'Tap a door to take its street' }}
-            </span>
-            <strong class="sweep-toast-count">{{ assignSelected.size }}</strong>
+            <strong class="assign-mapbar-count">{{ assignSelected.size }}</strong>
+            <button class="btn btn-sm btn-primary" :disabled="assignSaving" @click="saveAssignment">
+              {{ assignSaving ? 'Saving…' : 'Save' }}
+            </button>
+            <button class="btn btn-sm assign-mapbar-cancel" :disabled="assignSaving" @click="cancelAssign">
+              ✕
+            </button>
           </div>
           <!-- Flip every pin between a colored dot and its house number —
                the same control Scout and the turf cutter carry, top-left
@@ -2499,33 +2510,56 @@ watch(
   height: 100%;
 }
 
-.sweep-toast {
+/* Above the lasso surface (z-index 5) on purpose — Save has to stay
+   reachable while a tool is armed. */
+.assign-mapbar {
   position: absolute;
-  left: 50%;
+  left: 0.6rem;
+  right: 0.6rem;
   bottom: 0.6rem;
-  transform: translateX(-50%);
-  max-width: min(92%, 30rem);
+  margin: 0 auto;
+  max-width: 32rem;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 0.7rem;
+  gap: 0.4rem;
+  padding: 0.35rem 0.4rem 0.35rem 0.7rem;
   border-radius: 999px;
-  background: rgba(17, 20, 30, 0.88);
+  background: rgba(17, 20, 30, 0.9);
   color: #fff;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 600;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
   z-index: 7;
-  pointer-events: none;
 }
 
-.sweep-toast-count {
+.assign-mapbar-msg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assign-mapbar-count {
   flex-shrink: 0;
-  padding: 0.05rem 0.45rem;
+  padding: 0.1rem 0.45rem;
   border-radius: 999px;
   background: var(--assign-color, #fff);
   color: var(--assign-ink, #111);
   font-variant-numeric: tabular-nums;
+}
+
+.assign-mapbar .btn {
+  flex-shrink: 0;
+  min-height: 30px;
+  padding: 0.2rem 0.6rem;
+  font-size: 0.76rem;
+}
+
+.assign-mapbar-cancel {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  color: #fff;
 }
 
 /* --- Assign mode --- */
