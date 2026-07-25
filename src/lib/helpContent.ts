@@ -314,13 +314,13 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Reading the map',
         target: 'turf-map',
-        body: 'Every door shows from the moment the page opens, colored by knock status.\nThe Turf layer adds ownership on top: a colored ring per door, and a rough outline around each turf.\nWhile cutting, doors another turf holds cross out in that turf’s color.\nTap a dot for its residents and recent knocks.',
+        body: 'Every door shows from the moment the page opens, colored by knock status.\nThe Turf layer adds ownership on top: a colored ring per door.\nWhile cutting, doors another turf holds cross out in that turf’s color.\nTap a dot at any zoom for its turf, residents and recent knocks. Edit this turf opens it for cutting.',
         swatches: DOOR_COLORS,
       },
       {
         heading: 'Dispatch',
         target: 'turf-dispatch',
-        body: 'Every turf out today, with the crew on it. Change the crew from the row.\nTap a name to zoom the map to it.',
+        body: 'Every turf out today, with the crew on it. Change the crew from the row.\nTap a name to zoom the map to it. Tap it again to scroll up to the map.',
       },
       {
         heading: 'One turf at a time',

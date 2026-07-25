@@ -28,88 +28,12 @@ export interface DoorPoint {
 // the grid-boundary tracer went with it — see git history if area shading
 // is ever wanted back.
 //
-// TurfOutlineLayer below is NOT that coming back. It is stroke-only — zero
-// fill — so two turfs whose hulls overlap read as two lines crossing rather
-// than as a third muddy color, which was the entire problem. It answers a
-// different question too: not "which turf owns this door" (the door rings
-// already say that) but "where is each turf, roughly, at a glance" — the
-// 2026-07-25 ask for turf shapes "irrespective of doors".
-
-export interface TurfOutline {
-  id: string
-  color: string
-  points: { lat: number; lng: number }[]
-}
-
-/** Convex hull (Andrew's monotone chain). O(n log n), no dependencies. The
- * hull is deliberately coarse: a turf is a handful of streets and the point
- * is its rough footprint, not a faithful boundary. */
-function convexHull(pts: { lat: number; lng: number }[]): { lat: number; lng: number }[] {
-  if (pts.length < 3) return pts
-  const p = [...pts].sort((a, b) => a.lng - b.lng || a.lat - b.lat)
-  const cross = (
-    o: { lat: number; lng: number },
-    a: { lat: number; lng: number },
-    b: { lat: number; lng: number },
-  ) => (a.lng - o.lng) * (b.lat - o.lat) - (a.lat - o.lat) * (b.lng - o.lng)
-  const half = (src: typeof p) => {
-    const out: typeof p = []
-    for (const pt of src) {
-      while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], pt) <= 0) out.pop()
-      out.push(pt)
-    }
-    out.pop()
-    return out
-  }
-  return [...half(p), ...half([...p].reverse())]
-}
-
-/** Rough per-turf footprints, drawn as colored outlines with no fill. */
-export class TurfOutlineLayer {
-  private map: google.maps.Map
-  private shapes: google.maps.Polygon[] = []
-  private visible = false
-
-  constructor(map: google.maps.Map) {
-    this.map = map
-  }
-
-  setVisible(v: boolean) {
-    if (this.visible === v) return
-    this.visible = v
-    for (const s of this.shapes) s.setMap(v ? this.map : null)
-  }
-
-  /** Replaces every outline. Turfs with fewer than 3 located doors are
-   * skipped — a hull needs a triangle, and one or two dots is already
-   * legible as dots. */
-  setTurfs(turfs: TurfOutline[]) {
-    for (const s of this.shapes) s.setMap(null)
-    this.shapes = []
-    for (const t of turfs) {
-      const hull = convexHull(t.points)
-      if (hull.length < 3) continue
-      this.shapes.push(
-        new google.maps.Polygon({
-          paths: hull,
-          map: this.visible ? this.map : null,
-          strokeColor: t.color,
-          strokeOpacity: 0.9,
-          strokeWeight: 2,
-          fillOpacity: 0,
-          // The outline is scenery: taps must reach the door canvas beneath.
-          clickable: false,
-          zIndex: 1,
-        }),
-      )
-    }
-  }
-
-  dispose() {
-    for (const s of this.shapes) s.setMap(null)
-    this.shapes = []
-  }
-}
+// The stroke-only per-turf convex hulls that briefly replaced it (2026-07-25
+// morning, TurfOutlineLayer) are gone the same day, user call: "it's showing
+// this big polygon that's not filled in... I actually don't want that, just
+// having the individual dots colored is good enough." No map in this app
+// draws a turf as a SHAPE any more — membership is a color on the door, and
+// nothing else. Both are in git history.
 
 /** City/village boundary overlay. GeoJSON is fetched lazily the first time
  * the layer turns on and kept for the map's lifetime. */

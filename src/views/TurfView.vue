@@ -54,13 +54,12 @@ import { attachPoiTapGuard, loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
   CityLimitsLayer,
-  TurfOutlineLayer,
   readMapPref,
   readPinMode,
   writeMapPref,
   writePinMode,
 } from '@/lib/mapLayers'
-import type { PinMode, TurfOutline } from '@/lib/mapLayers'
+import type { PinMode } from '@/lib/mapLayers'
 import {
   DoorCanvasLayer,
   NUMBERS_MIN_ZOOM,
@@ -304,7 +303,6 @@ const assignChoice = ref('none')
 
 let map: google.maps.Map | null = null
 let cityLayer: CityLimitsLayer | null = null
-let outlineLayer: TurfOutlineLayer | null = null
 let doorLayer: DoorCanvasLayer | null = null
 let initStarted = false
 
@@ -542,32 +540,15 @@ const showCity = ref(readMapPref('map-show-city', false))
 function toggleTakenDoors() {
   showTakenDoors.value = !showTakenDoors.value
   writeMapPref('cutter-turf-layer', showTakenDoors.value)
-  outlineLayer?.setVisible(showTakenDoors.value)
 }
 
-/** Rough footprint per top-level turf out today, stroked in that turf's
- * identity color. Sub-turfs are folded into their parent: their doors count
- * toward the parent's shape rather than drawing a second outline inside it,
- * because a crew's ground is one shape however it's split up inside. */
-function rebuildOutlines() {
-  if (!outlineLayer) return
-  const byTurf = new Map<string, { lat: number; lng: number }[]>()
-  for (const a of addressById.values()) {
-    if (!a.turf_id || a.lat == null || a.lng == null) continue
-    const t = turfById.value.get(a.turf_id)
-    if (!t || !isTodayTurf(t)) continue
-    const key = t.parent_turf_id ?? t.id
-    const arr = byTurf.get(key)
-    if (arr) arr.push({ lat: a.lat, lng: a.lng })
-    else byTurf.set(key, [{ lat: a.lat, lng: a.lng }])
-  }
-  const out: TurfOutline[] = []
-  for (const [id, points] of byTurf) {
-    const t = turfById.value.get(id)
-    if (t) out.push({ id, color: turfDisplayColor(t), points })
-  }
-  outlineLayer.setTurfs(out)
-}
+// Turf FOOTPRINTS are gone (2026-07-25, user call — "I actually don't want
+// that; just having the individual dots colored is good enough"). The
+// stroke-only convex hulls drawn around each turf read as a big empty
+// polygon over the map, and the colored dots already say which ground is
+// whose — at every zoom, since below PINS_MIN_ZOOM a door's turf ring paints
+// as the halo around its 2px dot. TurfOutlineLayer went with it; see git
+// history if a shape-per-turf is ever wanted back.
 
 // Dots vs. house-number pills — same control as Scout's pin-style toggle,
 // re-added to the cutter (2026-07-24 later still, user call). Own
@@ -1134,12 +1115,6 @@ async function initialize() {
   cityLayer = new CityLimitsLayer(map)
   if (showCity.value) void cityLayer.setVisible(true)
 
-  // Rough turf footprints, stroke-only, riding the same Turf toggle as the
-  // door rings and taken symbols.
-  outlineLayer = new TurfOutlineLayer(map)
-  outlineLayer.setVisible(showTakenDoors.value)
-  rebuildOutlines()
-
   // Fly to where the user is standing — cutting usually starts on the
   // ground — while the street data streams in behind the map.
   void zoomToMe()
@@ -1206,7 +1181,6 @@ async function loadCutterData() {
     indexAddresses(rows)
     doorLayer?.setDoors(locatedCanvasDoors())
     refreshStaleTurfs()
-    rebuildOutlines()
     // Every door paints on its knock status from the moment the page opens
     // (see paintForDoor), so the statuses are no longer a lazy trim-mode
     // extra — they ARE the map. Unawaited on purpose: the doors are already
@@ -1237,7 +1211,6 @@ async function reloadAll() {
   doorLayer?.setDoors(locatedCanvasDoors())
   defaultDraftParent()
   refreshStaleTurfs()
-  rebuildOutlines()
   doorLayer?.requestRepaint()
 }
 
@@ -1281,15 +1254,23 @@ function onMapClick(e: google.maps.MapMouseEvent) {
     void handleStreetTap(e.latLng)
     return
   }
-  const zoomedIn = (map.getZoom() ?? 14) >= PINS_MIN_ZOOM
   if (focusedStreet.value) {
-    if (!zoomedIn) return
+    // Trimming keeps its zoom floor: dropping ONE house out of a range wants
+    // pins you can actually aim at, not 2px dots.
+    if ((map.getZoom() ?? 14) < PINS_MIN_ZOOM) return
     const id = doorLayer?.doorAt(e.latLng, TAP_RADIUS_PX)
     if (id) toggleTrimDoor(id)
     else expandedSegKey.value = null
     return
   }
-  const id = zoomedIn ? doorLayer?.doorAt(e.latLng, TAP_RADIUS_PX) : null
+  // The history bubble works at EVERY zoom (2026-07-25, user call: "I wanna
+  // be able to tap one of the dots in one of the turfs and edit that turf").
+  // Turf colors are exactly what you read zoomed OUT — the whole county's
+  // ground at a glance — and the old PINS_MIN_ZOOM floor meant that at the
+  // one zoom where you can see which turf is which, tapping it did nothing.
+  // Nearest painted door wins, so a fat-fingered tap at town zoom still
+  // lands in the right turf.
+  const id = doorLayer?.doorAt(e.latLng, TAP_RADIUS_PX)
   if (id) void showDoorInfo(id)
   else doorInfo.value = null
 }
@@ -1935,8 +1916,14 @@ function locateStreet(m: { street_name: string; city: string; lo: number; hi: nu
   locatedStreet.value = { name: m.street_name, city: m.city }
   locatedFrom.value = m.lo
   locatedTo.value = m.hi
-  mapEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  scrollMapIntoView()
   void materializeStreetPins(m.street_name, m.city, true)
+}
+
+/** Ride the page back up to the map. `nearest` scrolls the minimum needed,
+ * so tapping something already beside the map doesn't jump. */
+function scrollMapIntoView() {
+  mapEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 
 // --- Skipped-door stealing ---
@@ -2755,6 +2742,25 @@ function onPickTurf(value: string) {
   if (selectedTurfId.value) focusTurf(selectedTurfId.value)
 }
 
+// --- Tapping a turf in the lists below the map ---
+// One tap picks it and frames it on the map; tapping the SAME row again
+// rides the page back up to the map, because from down in the dispatch list
+// the thing that just moved is off screen (2026-07-25, user call: "double
+// tapping it should also scroll the screen up"). Deliberately the second tap
+// and not the first: each row carries its own assignment dropdown, and
+// yanking the page away mid-dispatch costs more than one extra tap.
+
+const TURF_ROW_DOUBLE_MS = 600
+let lastTurfTap: { id: string; at: number } | null = null
+
+function tapTurfRow(id: string) {
+  const now = performance.now()
+  const again = lastTurfTap !== null && lastTurfTap.id === id && now - lastTurfTap.at < TURF_ROW_DOUBLE_MS
+  lastTurfTap = { id, at: now }
+  onPickTurf(id)
+  if (again) scrollMapIntoView()
+}
+
 function editTurf(t: TurfWithMeta) {
   clearDraft()
   undoStack.value = []
@@ -2945,24 +2951,27 @@ function onFullscreenChange() {
 }
 
 // --- Jump to top / bottom ---
-// The cutting screen stacks up tall (map + draft table + turf card), so a
-// pair of fixed left-edge buttons saves a long thumb-scroll. They only exist
-// once the page is meaningfully longer than the viewport, and never in
-// fullscreen (the map owns the screen then).
+// A pair of fixed left-edge buttons for the one case that earns them: a
+// draft with a LOT of streets in it, where the table alone runs several
+// screens and the map is a long thumb-scroll away. Anything shorter than
+// that scrolls fine on its own and the buttons are just two chips sitting
+// over the page (2026-07-25, user call: "take out the top and bottom scroll
+// buttons — or have it only show up when there are more than twelve streets
+// being shown"). Never in fullscreen; the map owns the screen then.
 
-/** Page must be this much taller than the viewport before the pair appears. */
-const JUMP_MIN_OVERFLOW = 1.4
+/** Streets in the draft table before the jump pair appears. */
+const JUMP_MIN_STREETS = 12
 
-const pageTall = ref(false)
 const scrollY = ref(0)
 
 function measureScroll() {
   const el = document.scrollingElement ?? document.documentElement
-  pageTall.value = el.scrollHeight > window.innerHeight * JUMP_MIN_OVERFLOW
   scrollY.value = el.scrollTop
 }
 
-const showJump = computed(() => pageTall.value && !isFullscreen.value)
+const showJump = computed(
+  () => !isFullscreen.value && streetGroups.value.length > JUMP_MIN_STREETS,
+)
 const atPageTop = computed(() => scrollY.value < 40)
 const atPageBottom = computed(() => {
   const el = document.scrollingElement ?? document.documentElement
@@ -3568,7 +3577,7 @@ onUnmounted(() => {
           />
           <div v-if="selectedTurf" class="turf-row">
             <div class="turf-row-top">
-              <button class="turf-row-main" @click="focusTurf(selectedTurf.id)">
+              <button class="turf-row-main" @click="tapTurfRow(selectedTurf.id)">
                 <span class="turf-swatch" :style="{ background: selectedTurf.color }" aria-hidden="true"></span>
                 <span class="turf-row-text">
                   <span class="turf-name">
@@ -3624,8 +3633,13 @@ onUnmounted(() => {
       <div v-if="isManager && dispatchTurfs.length" class="card" data-help="turf-dispatch">
         <h3>Today's turf</h3>
         <div class="dispatch-list">
-          <div v-for="t in dispatchTurfs" :key="t.id" class="dispatch-row">
-            <button class="dispatch-main" @click="onPickTurf(t.id)">
+          <div
+            v-for="t in dispatchTurfs"
+            :key="t.id"
+            class="dispatch-row"
+            :class="{ picked: selectedTurfId === t.id }"
+          >
+            <button class="dispatch-main" @click="tapTurfRow(t.id)">
               <span class="turf-swatch" :style="{ background: turfDisplayColor(t) }" aria-hidden="true"></span>
               <span class="dispatch-text">
                 <span class="dispatch-name">{{ t.name }}</span>
@@ -3932,6 +3946,14 @@ onUnmounted(() => {
   align-items: center;
   gap: 0.5rem;
   flex-wrap: wrap;
+  padding: 0 0.4rem;
+  margin: 0 -0.4rem;
+  border-radius: 8px;
+}
+
+/* The picked row — the one the map is framed on. */
+.dispatch-row.picked {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .dispatch-main {
