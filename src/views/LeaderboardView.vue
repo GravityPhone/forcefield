@@ -182,13 +182,13 @@ const squadsEmptyNote = computed(() =>
 )
 const squadsFootnote = computed(() =>
   selectedDate.value
-    ? `Counts each member's knocks on ${formatDay(selectedDate.value)}.`
-    : "Counts each member's knocks since midnight. Squads reset daily.",
+    ? `Members' knocks on ${formatDay(selectedDate.value)}.`
+    : "Members' knocks since midnight.",
 )
 const canvassersEmptyNote = computed(() =>
   selectedDate.value
     ? `No knocks logged on ${formatDay(selectedDate.value)}.`
-    : 'No knocks logged yet — standings will fill in as doors get knocked.',
+    : 'No knocks logged yet.',
 )
 
 function metricOf(row: { doors_knocked: number; signatures: number }, metric: LeaderboardMetric) {

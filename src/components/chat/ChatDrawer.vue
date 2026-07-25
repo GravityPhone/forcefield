@@ -632,11 +632,6 @@ async function addPeople() {
 
     <!-- New chat / join squad sheet -->
     <BottomSheet v-model:open="composing" title="Start a chat" aria-label="Start a chat">
-      <p class="muted hint">
-        Pick one or more people on your campaign. Give it a name to form today's squad —
-        an open crew anyone can join, with its own chat; leave the name off for a private
-        message.
-      </p>
       <UserPicker v-model="picked" />
       <div class="field">
         <label for="chat-name">Squad name (optional)</label>

@@ -1958,7 +1958,7 @@ watch(
     <!-- ============ No squad today ============ -->
     <div v-if="!squads.loading && !mySquad" class="stack">
       <p class="muted intro">
-        You're not in a squad yet today — start one, or join a crew that's already out.
+        No squad yet today.
       </p>
       <button class="btn btn-primary big-btn" data-help="squad-start" @click="openComposer">+ Start today's squad</button>
       <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>
@@ -2348,8 +2348,7 @@ watch(
           </ul>
         </template>
         <p v-else-if="!dashboardLoading" class="muted no-turf">
-          No turf assigned to your squad yet today — your campaign manager sends turf out to
-          each day's crews. The map still follows everyone's knocks meanwhile.
+          No turf assigned to your squad yet today.
         </p>
 
         <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>

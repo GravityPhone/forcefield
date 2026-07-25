@@ -140,9 +140,7 @@ const PARTLY_SIGNED_OPTIONS = [
       </div>
       <p v-else class="muted history-none">No visits logged at this door yet.</p>
     </div>
-    <p v-else class="muted walkup-hint">
-      Load an address (search above, or via Scout) to log an outcome.
-    </p>
+    <p v-else class="muted walkup-hint">No address loaded.</p>
 
     <label class="notes-label" for="talk-notes">Notes</label>
     <textarea

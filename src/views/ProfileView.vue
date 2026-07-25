@@ -216,10 +216,6 @@ async function save() {
           autocomplete="nickname"
           :placeholder="auth.profile.username"
         />
-        <p class="muted field-note">
-          What teammates see everywhere — chat, squad page, leaderboard. Leave it
-          blank to go by your username ({{ auth.profile.username }}).
-        </p>
       </div>
 
       <div class="field">
@@ -264,10 +260,6 @@ async function save() {
           autocomplete="tel"
           placeholder="e.g. (937) 555-0123"
         />
-        <p class="muted field-note">
-          Teammates will see this number and can call you with one tap.
-          Leave it blank and no one can call you.
-        </p>
       </div>
 
       <p v-if="error" class="error">{{ error }}</p>
@@ -431,12 +423,6 @@ async function save() {
 .picker-chevron {
   font-size: 1.3rem;
   flex-shrink: 0;
-}
-
-.field-note {
-  margin: 0.35rem 0 0;
-  font-size: 0.85rem;
-  line-height: 1.4;
 }
 
 .error {

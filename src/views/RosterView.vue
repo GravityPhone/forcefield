@@ -120,7 +120,7 @@ function openMember(id: string) {
       </div>
 
       <p v-if="!needsPicker && !auth.profile?.team_id" class="muted empty">
-        You’re not on a team yet — once a campaign manager places you, your teammates show up here.
+        You’re not on a team yet.
       </p>
       <p v-else-if="loading" class="muted empty">Loading…</p>
       <p v-else-if="!members.length" class="muted empty">No one on this team yet.</p>

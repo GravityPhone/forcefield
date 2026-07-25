@@ -46,7 +46,6 @@ import {
 
       <div class="card">
         <h3>Talking points</h3>
-        <p class="muted section-sub">Short versions, for the walk between doors.</p>
         <div class="points">
           <article v-for="p in TALKING_POINTS" :key="p.title" class="point">
             <h4>{{ p.title }}</h4>

@@ -71,7 +71,7 @@ function memberNames(squad: SquadListItem): string {
       <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>
       <p v-if="squads.loading && !squads.squads.length" class="muted">Loading today's squads…</p>
       <p v-else-if="!squads.squads.length" class="muted">
-        No squads yet today. Start one and invite whoever you're knocking with.
+        No squads yet today.
       </p>
 
       <div

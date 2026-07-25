@@ -2763,9 +2763,8 @@ onUnmounted(() => {
       <div class="card">
         <h3>Turf</h3>
         <p class="muted empty-note">
-          Dividing up turf is a campaign manager's or squad leader's job — or, when your squad has
-          no leader today, anyone on the squad can split it up. You're all set: head to
-          <router-link to="/canvass">Canvass</router-link> to knock your turf.
+          Cutting turf is a manager's or squad leader's job.
+          <router-link to="/canvass">Canvass</router-link>
         </p>
       </div>
     </div>
@@ -2791,8 +2790,6 @@ onUnmounted(() => {
           <strong>{{ staleTurfs.filter((t) => !t.parent_turf_id).length }}
             turf{{ staleTurfs.filter((t) => !t.parent_turf_id).length === 1 ? '' : 's' }}</strong>
           from {{ staleDaysLabel }} still hold{{ staleTurfs.length === 1 ? 's' : '' }} doors.
-          Copy {{ staleTurfs.length === 1 ? 'it' : 'them' }} to today, or clear the ground and
-          cut fresh.
         </p>
         <div class="stale-actions">
           <button class="btn btn-primary btn-sm" :disabled="staleBusy" @click="copyStaleTurfs">
@@ -3089,10 +3086,7 @@ onUnmounted(() => {
           + {{ isSubcutter ? 'Create new sub-turf' : 'Create new turf' }}
         </button>
       </div>
-      <p v-else-if="!draftOpen" class="muted empty-note">
-        No turf is assigned to you (or a squad you're on) yet — your campaign manager cuts and
-        assigns turf. Once you have some, you can split it into sub-turfs here.
-      </p>
+      <p v-else-if="!draftOpen" class="muted empty-note">No turf assigned to you yet.</p>
 
       <!-- Draft tray: the turf being cut. -->
       <div
@@ -3107,11 +3101,7 @@ onUnmounted(() => {
             <span class="draft-swatch" aria-hidden="true"></span>
             Sub-turfs
           </h3>
-          <p class="muted empty-note">
-            No turf is assigned to you (or a squad you're on) yet — your campaign manager cuts
-            and assigns turf. Once you have some, you can split it into sub-turfs here and hand
-            those to your canvassers.
-          </p>
+          <p class="muted empty-note">No turf assigned to you yet.</p>
         </template>
         <template v-else>
         <h3 class="draft-title">
@@ -3221,20 +3211,13 @@ onUnmounted(() => {
                 <option value="odd">Odd side</option>
               </select>
             </div>
-            <p class="muted seg-trim-hint">
-              Tap this street's doors on the map to drop or restore each house. Tap the row again
-              when you're done.
-            </p>
             <p v-if="expandedSeg.takenCount" class="muted seg-trim-hint">
               {{ expandedSeg.takenCount }} door{{ expandedSeg.takenCount === 1 ? '' : 's' }} in
               this range belong to another turf — skipped.
             </p>
           </div>
         </template>
-        <p v-else class="muted empty-note">
-          Nothing here yet — type a street name above, tap the match, then Add. Narrow the
-          house numbers first to take just part of a street, or circle a patch with Lasso.
-        </p>
+        <p v-else class="muted empty-note">No streets yet.</p>
 
         <div class="draft-form">
           <input
@@ -3276,11 +3259,7 @@ onUnmounted(() => {
       <div class="card">
         <h3>{{ isSubcutter ? 'Your turf' : 'Turfs' }}</h3>
         <p v-if="!listTurfs.length" class="muted empty-note">
-          {{
-            isSubcutter
-              ? 'Nothing here yet — turf your campaign manager assigns to you shows up here.'
-              : 'No turf cut yet. Squads without turf just pick their own streets.'
-          }}
+          {{ isSubcutter ? 'No turf assigned to you yet.' : 'No turf cut yet.' }}
         </p>
         <template v-else>
           <AppSelect

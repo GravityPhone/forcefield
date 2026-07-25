@@ -13,19 +13,17 @@ import AppShell from '@/components/AppShell.vue'
            additionally manage admin accounts (the Roles screen adapts). -->
       <div class="card">
         <h3>Roles</h3>
-        <p class="muted">Elevate roles, assign teams, place people in today's squads.</p>
         <router-link class="btn btn-primary btn-sm" to="/admin/roles">Manage</router-link>
       </div>
 
       <div class="card">
         <h3>Campaigns &amp; Teams</h3>
-        <p class="muted">Create campaigns and assign teams to them.</p>
         <router-link class="btn btn-primary btn-sm" to="/admin/campaigns">Manage</router-link>
       </div>
 
       <div class="card">
         <h3>Voter Data Import</h3>
-        <p class="muted">Import a county voter-roll CSV, filtered by city. Coming soon.</p>
+        <span class="badge">Coming soon</span>
       </div>
     </div>
   </AppShell>

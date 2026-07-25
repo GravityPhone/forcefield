@@ -69,10 +69,6 @@ async function saveKey() {
     <div class="stack">
       <div class="card" data-help="settings-key">
         <h3>AI Assistant — Anthropic API Key</h3>
-        <p class="muted">
-          A shared demo key already works out of the box — optionally save your own here to use
-          it instead.
-        </p>
         <form v-if="!loading" @submit.prevent="saveKey">
           <div class="field">
             <label for="anthropic-key">API key</label>
@@ -95,17 +91,11 @@ async function saveKey() {
       <div class="card" data-help="settings-sources">
         <h3>Data Sources</h3>
         <div class="source-row">
-          <div>
-            <strong>CSV Import (county voter roll)</strong>
-            <p class="muted small">Import addresses from a downloaded voter-roll file, filtered by city.</p>
-          </div>
+          <div><strong>CSV Import (county voter roll)</strong></div>
           <span class="badge">Coming soon</span>
         </div>
         <div class="source-row">
-          <div>
-            <strong>Connect to Minivan</strong>
-            <p class="muted small">Sync directly with VAN/Minivan. Requires API access we don't have yet.</p>
-          </div>
+          <div><strong>Connect to Minivan</strong></div>
           <button class="btn btn-ghost" disabled>Coming soon</button>
         </div>
       </div>

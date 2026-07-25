@@ -83,10 +83,6 @@ async function save(hex: string | null) {
 
 <template>
   <BottomSheet v-model:open="open" title="Pick my color">
-    <p class="muted intro">
-      Tints your Squad card and map marker, your roster row, and your name in chat.
-    </p>
-
     <section>
       <h3 class="section-heading">Team palette</h3>
       <div class="swatches" :class="{ busy: saving }">

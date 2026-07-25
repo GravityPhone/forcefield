@@ -4,7 +4,7 @@ import AppShell from '@/components/AppShell.vue'
 import { useThemeStore } from '@/stores/theme'
 import { FONT_STACKS, TEXT_SCALES } from '@/lib/themes'
 import type { ThemeGroup } from '@/lib/themes'
-import { PATTERNS, getPattern } from '@/lib/patterns'
+import { PATTERNS } from '@/lib/patterns'
 import type { PatternDef } from '@/lib/patterns'
 import type { DisplayPrefs, FontId, ThemeId } from '@/types'
 
@@ -20,15 +20,13 @@ async function pick(id: ThemeId) {
 
 // --- Scheme groups ---
 
-const THEME_GROUPS: { id: ThemeGroup; label: string; blurb: string }[] = [
-  { id: 'day', label: 'Daylight', blurb: 'Bright, for knocking in full sun.' },
-  {
-    id: 'hiviz',
-    label: 'High visibility',
-    blurb: 'Maximum contrast — beats glare, direct sunlight, and tired eyes.',
-  },
-  { id: 'night', label: 'Dark & night', blurb: 'Easy on the eyes after sundown.' },
-  { id: 'retro', label: 'Retro', blurb: 'Five decades of style, lovingly restored.' },
+// Labels only — the swatch under each name is the description (2026-07-25,
+// user call: "the high visibility doesn't need to be explained").
+const THEME_GROUPS: { id: ThemeGroup; label: string }[] = [
+  { id: 'day', label: 'Daylight' },
+  { id: 'hiviz', label: 'High visibility' },
+  { id: 'night', label: 'Dark & night' },
+  { id: 'retro', label: 'Retro' },
 ]
 
 const groupedThemes = computed(() =>
@@ -55,8 +53,6 @@ const CORNER_CHOICES: { id: DisplayPrefs['corners']; label: string }[] = [
   { id: 'sharp', label: 'Sharp' },
   { id: 'round', label: 'Extra round' },
 ]
-
-const activePattern = computed(() => getPattern(theme.prefs.pattern))
 
 /** Pattern tiles are drawn for full-screen use — halve them so a preview
  * card shows a meaningful slice of the motif. */
@@ -87,10 +83,7 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
   <AppShell title="Appearance">
     <!-- ============ Color scheme ============ -->
     <section v-for="group in groupedThemes" :key="group.id" class="scheme-group" data-help="appearance-schemes">
-      <h3 class="group-heading">
-        {{ group.label }}
-        <span class="group-blurb muted">{{ group.blurb }}</span>
-      </h3>
+      <h3 class="group-heading">{{ group.label }}</h3>
       <div class="grid">
         <button
           v-for="t in group.themes"
@@ -142,7 +135,6 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
         </span>
       </button>
     </div>
-    <p class="muted pattern-blurb">{{ activePattern.blurb }}</p>
     <div v-if="theme.prefs.pattern !== 'none'" class="pref-block">
       <span class="pref-title">Pattern strength</span>
       <div class="seg">
@@ -180,7 +172,6 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
           <span class="seg-sub">{{ s.label }}</span>
         </button>
       </div>
-      <span class="pref-hint muted">Grows what you read. Tabs, map buttons and typing fields stay put.</span>
     </div>
 
     <!-- A dropdown, not a row of chips (2026-07-24, user call): four faces
@@ -213,13 +204,7 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
       :aria-checked="theme.prefs.sunlight"
       @click="setPrefs({ sunlight: !theme.prefs.sunlight })"
     >
-      <span class="switch-copy">
-        <span class="switch-title">Sunlight boost</span>
-        <span class="switch-desc muted">
-          On by default. Pushes text, faint labels and outlines to full contrast — made for
-          direct sun, works with any scheme.
-        </span>
-      </span>
+      <span class="switch-title">Sunlight boost</span>
       <span class="switch" aria-hidden="true"></span>
     </button>
 
@@ -229,10 +214,7 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
       :aria-checked="theme.prefs.bold"
       @click="setPrefs({ bold: !theme.prefs.bold })"
     >
-      <span class="switch-copy">
-        <span class="switch-title">Bold text</span>
-        <span class="switch-desc muted">Thickens every letter a touch, everywhere.</span>
-      </span>
+      <span class="switch-title">Bold text</span>
       <span class="switch" aria-hidden="true"></span>
     </button>
 
@@ -260,10 +242,7 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
       :aria-checked="theme.prefs.compact"
       @click="setPrefs({ compact: !theme.prefs.compact })"
     >
-      <span class="switch-copy">
-        <span class="switch-title">Compact spacing</span>
-        <span class="switch-desc muted">Tightens padding so more fits on screen.</span>
-      </span>
+      <span class="switch-title">Compact spacing</span>
       <span class="switch" aria-hidden="true"></span>
     </button>
 
@@ -273,20 +252,14 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
       :aria-checked="theme.prefs.reduceMotion"
       @click="setPrefs({ reduceMotion: !theme.prefs.reduceMotion })"
     >
-      <span class="switch-copy">
-        <span class="switch-title">Reduce motion</span>
-        <span class="switch-desc muted">Skips animations and transitions.</span>
-      </span>
+      <span class="switch-title">Reduce motion</span>
       <span class="switch" aria-hidden="true"></span>
     </button>
 
     <!-- ============ Emoji & color moved ============ -->
     <router-link class="moved-note" to="/profile">
       <span class="moved-emoji" aria-hidden="true">🙂🎨</span>
-      <span class="moved-copy">
-        <span class="moved-title">Looking for your emoji &amp; color?</span>
-        <span class="moved-sub muted">They moved to the About me page — tap to go pick.</span>
-      </span>
+      <span class="moved-title">My emoji &amp; color</span>
       <span class="muted moved-chevron" aria-hidden="true">›</span>
     </router-link>
   </AppShell>
@@ -306,11 +279,6 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
   align-items: baseline;
   gap: 0.5rem;
   flex-wrap: wrap;
-}
-
-.group-blurb {
-  font-size: 0.82rem;
-  font-weight: 500;
 }
 
 .grid {
@@ -467,21 +435,10 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
   font-size: 0.85rem;
 }
 
-.pattern-blurb {
-  margin: 0.6rem 0 0;
-  font-size: 0.88rem;
-}
-
 /* --- Segmented controls --- */
 
 .pref-block {
   margin-top: 1rem;
-}
-
-.pref-hint {
-  display: block;
-  margin-top: 0.4rem;
-  font-size: 0.82rem;
 }
 
 .pref-title {
@@ -591,21 +548,10 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
 }
 
-.switch-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  min-width: 0;
-}
-
 .switch-title {
+  min-width: 0;
   font-weight: 700;
   font-size: 1rem;
-}
-
-.switch-desc {
-  font-size: 0.85rem;
-  line-height: 1.35;
 }
 
 .switch {
@@ -667,20 +613,10 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
   flex-shrink: 0;
 }
 
-.moved-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-  min-width: 0;
-  flex: 1;
-}
-
 .moved-title {
+  flex: 1;
+  min-width: 0;
   font-weight: 700;
-}
-
-.moved-sub {
-  font-size: 0.85rem;
 }
 
 .moved-chevron {
