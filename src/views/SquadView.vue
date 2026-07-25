@@ -11,8 +11,10 @@ import { fetchAllRows, supabase } from '@/lib/supabase'
 import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
+  readMapPref,
   readPinMode,
   readTurfShadeMode,
+  writeMapPref,
   writePinMode,
   writeTurfShadeMode,
 } from '@/lib/mapLayers'
@@ -558,7 +560,12 @@ interface OrgDoor {
   street: string
   lat: number
   lng: number
-  turf_id: string
+  /** Null for a door nobody has cut yet — those load too (2026-07-25), so
+   * "All turf" shows the campaign's ground as it really is: claimed doors
+   * ringed in their turf's color, unclaimed ones on plain status pins. It
+   * used to fetch only turf-held doors, which left every uncut street blank
+   * and read as "All turf isn't showing me that turf". */
+  turf_id: string | null
 }
 /** Every turf door in the campaign, ours included — only downloaded once
  * "All turf" is switched on. */
@@ -581,7 +588,6 @@ async function ensureOrgDoors(): Promise<void> {
         supabase
           .from('addresses')
           .select('id, street, lat, lng, turf_id')
-          .not('turf_id', 'is', null)
           .not('lat', 'is', null)
           .order('id')
           .range(from, to),
@@ -612,11 +618,47 @@ async function ensureOrgDoors(): Promise<void> {
   await orgDoorsLoading
 }
 
+/** "Our doors": who on the crew owns which door — the sub-turf assignee's
+ * color as the ring, their avatar in the middle. Its own on/off switch
+ * (2026-07-25, user call), so it composes with the turf row rather than
+ * competing with it: filter to the crew's ground AND see how it's split.
+ * Assign mode turns it on for free — dividing turf is exactly when "who has
+ * what" is the question. */
+const ownerLayer = ref(readMapPref('squad-owner-layer', false))
+
+function toggleOwnerLayer() {
+  ownerLayer.value = !ownerLayer.value
+  writeMapPref('squad-owner-layer', ownerLayer.value)
+}
+
+/** Owner of a door = whoever the turf holding it is assigned to (a sub-turf
+ * from "Assign doors", or a top-level turf handed to one canvasser). */
+function ownerOf(turfId: string | null): ChatProfile | null {
+  if (!turfId) return null
+  const assignee = turfById.value.get(turfId)?.assignee_id
+  return assignee ? (memberById.value.get(assignee) ?? null) : null
+}
+
 async function setTurfShade(mode: 'mine' | 'all') {
   turfShade.value = turfShade.value === mode ? 'off' : mode
   writeTurfShadeMode('squad-turf-shading', turfShade.value)
   if (turfShade.value === 'all') await ensureOrgDoors()
   applyDoorPins()
+  // Switching the filter ON takes you to the ground it's filtering to —
+  // otherwise "only our turf" can leave you staring at an empty county
+  // corner. Only when none of it is on screen already: flicking the layer to
+  // check something shouldn't re-frame the map under you (Scout's rule).
+  if (turfShade.value === 'mine' && !ourTurfInView()) focusDoorSet([...turfDoors.value.values()])
+}
+
+/** Is any of the crew's own turf on screen right now? */
+function ourTurfInView(): boolean {
+  const bounds = map?.getBounds()
+  if (!bounds) return false
+  for (const d of turfDoors.value.values()) {
+    if (d.lat != null && d.lng != null && bounds.contains({ lat: d.lat, lng: d.lng })) return true
+  }
+  return false
 }
 
 /** Turf color by id across the WHOLE campaign, not just the crew's turfs —
@@ -628,30 +670,35 @@ const anyTurfColorById = computed(() => new Map(allTurfList.value.map((t) => [t.
  * lands; until then the door shows the member's initial on their own color. */
 const { badgeFor } = createBadgeFactory(() => doorLayer?.requestRepaint())
 
-/** Paint state for one turf door — the Squad reading of the shared
- * three-band model (halo / membership ring / status fill):
+/** Paint state for one door — the Squad reading of the shared three-band
+ * model (halo / membership ring / status fill). The fill NEVER stops meaning
+ * "what happened here"; the layers only ever change the ring and the badge,
+ * so no switch can cost you the progress reading (2026-07-25, user call).
  *
  * fill  = the door's knock STATUS, the exact colors Scout and the cutter use
- *         (doorStatusOutcome: green only when everyone signed, yellow partly
- *         signed, red closed-no, blue untouched).
- * ring  = the owning turf's own color — ONLY while the turf layer is on.
- *         This is what replaced the shaded areas: a door can only ever be in
- *         one turf, so rings can't overlap the way the polygons did.
- * badge = the squadmate who knocked this door TODAY — their animal avatar
- *         rides in the middle of the pin, so the map tells the story of who
- *         covered what as the day unfolds.
+ *         (doorStatusOutcome: green only when everyone signed, green+yellow
+ *         band partly signed, red closed-no, blue untouched).
+ * ring  = whose it is. "Our doors" wins it when the door belongs to somebody
+ *         on the crew (their own accent, the same color as their card and
+ *         their name in chat); otherwise "All turf" rings it in its turf's
+ *         color. A door can only be in one turf, so rings can't overlap the
+ *         way the old shaded polygons did.
+ * badge = the face in the middle: whoever knocked this door TODAY, and — with
+ *         "Our doors" on — its owner when nobody has been yet. Today's
+ *         knocker wins that slot (user call): what just happened outranks
+ *         what was planned, and the ring still says whose it is.
  *
- * ASSIGN MODE overrides most of that: doors in the pile take the member's
- * color, the walk anchor breathes (tap another door and the whole walk
- * between comes with it), doors the viewer can't hand out fade back, and the
- * avatars sit out — door-picking needs the selection legible, not decorated. */
+ * The turf row is a FILTER, not a coloring: "Our turf" paints ONLY the crew's
+ * doors (null = invisible AND untappable in the canvas layer), "All turf"
+ * adds the whole campaign's ground. */
 function paintForDoor(id: string): DoorPaintState | null {
   const door = turfDoors.value.get(id)
-  // Another crew's door, painted only while "All turf" is on. It gets its
-  // turf's ring and its status, but none of the crew's own decoration — no
-  // today-avatar, and it can never join an assignment.
+  // Anyone else's ground — painted only while "All turf" is on. It gets its
+  // turf's ring and its real status, but none of the crew's own decoration,
+  // and it can never join an assignment.
   const foreign = door ? null : orgDoorsById.value.get(id)
   if (!door && !foreign) return null
+  if (!door && turfShade.value !== 'all') return null
   const turfId = door ? door.turf_id : foreign!.turf_id
   const status = statusByDoor.value.get(id) ?? orgStatusByDoor.value.get(id)
   const outcome = doorStatusOutcome(status?.outcome, status?.signed_count, status?.person_count)
@@ -661,42 +708,58 @@ function paintForDoor(id: string): DoorPaintState | null {
   const partly = doorPartlySigned(status?.outcome, status?.signed_count, status?.person_count)
   const fill = partly ? OUTCOME_HEX.signed : outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
   const innerRing = partly ? OUTCOME_HEX.maybe : null
-  // Rings are the turf layer. Off = plain status pins, nothing else to read.
+  // "All turf" is the only mode that rings by TURF — the crew's own ground
+  // doesn't need coloring to be found once the map is filtered to it.
   const turfColor =
-    turfShade.value === 'off' ? null : (anyTurfColorById.value.get(turfId) ?? null)
+    turfShade.value === 'all' ? (anyTurfColorById.value.get(turfId ?? '') ?? null) : null
 
   const assignee = assigningMember.value
   if (assignee) {
     // Assign mode shows ONE thing: the turf you're dividing. Everything else
-    // — another crew's ground, turf you may not cut — paints nothing at all
-    // (null = invisible AND untappable), so the map is the pile you're
-    // picking from and nothing else. Avatars sit out too: door-picking needs
-    // the selection legible, not decorated.
+    // — another crew's ground, turf you may not cut — paints nothing at all,
+    // so the map is the pile you're picking from and nothing else. Doors
+    // already spoken for wear their owner (ring + face) whether or not the
+    // layer is switched on: handing out doors is the moment you most need to
+    // see what's taken.
     if (!door || poolParentOf(door) === null) return null
     const picked = assignSelected.value.has(id)
+    if (picked) {
+      return {
+        fill: memberColor(assignee),
+        ring: '#ffffff',
+        emphasis: true,
+        pulse: id === assignAnchorId.value,
+      }
+    }
+    const owner = ownerOf(door.turf_id)
     return {
-      fill: picked ? memberColor(assignee) : fill,
-      innerRing: picked ? null : innerRing,
-      ring: picked ? '#ffffff' : turfColor,
-      emphasis: picked,
-      pulse: picked && id === assignAnchorId.value,
+      fill,
+      innerRing,
+      ring: owner ? memberColor(owner) : null,
+      badge: owner ? badgeFor(owner) : null,
+      emphasis: false,
     }
   }
 
-  if (!door) return { fill, innerRing, ring: turfColor, emphasis: false }
-
+  const owner = ownerLayer.value && door ? ownerOf(door.turf_id) : null
   const knocker = todayKnockerByDoor.value.get(id)
-  const member = knocker ? memberById.value.get(knocker.canvasserId) : undefined
-  const badge: DoorBadge | null = member ? badgeFor(member) : null
+  const knockerMember = door && knocker ? memberById.value.get(knocker.canvasserId) : undefined
+  const badge: DoorBadge | null = knockerMember
+    ? badgeFor(knockerMember)
+    : owner
+      ? badgeFor(owner)
+      : null
   return {
     fill,
     // Coexists with the badge: the avatar owns the pin's middle, so the
     // partly-signed yellow strokes the rim instead of filling a band.
     innerRing,
-    ring: turfColor,
+    ring: owner ? memberColor(owner) : turfColor,
     // Today's covered doors are the map's live story — they draw bigger and
-    // above their plain neighbors.
-    emphasis: !!badge,
+    // above their plain neighbors. Ownership deliberately does NOT emphasize:
+    // with the layer on, most doors have an owner, and emphasizing all of
+    // them just makes every pin big.
+    emphasis: !!knockerMember,
     badge,
   }
 }
@@ -1085,6 +1148,8 @@ watch(
     todayKnockerByDoor,
     anyTurfColorById,
     turfShade,
+    ownerLayer,
+    turfById,
     orgDoorsById,
     orgStatusByDoor,
     assigningMemberId,
@@ -2150,34 +2215,38 @@ watch(
             >
               ☝ Streets
             </button>
-            <template v-if="lassoActive || streetTapActive">
-              <button
-                type="button"
-                class="layer-btn"
-                :class="{ active: sweepMode === 'add' }"
-                :aria-pressed="sweepMode === 'add'"
-                title="Add the sweep to this member's doors"
-                @click="sweepMode = 'add'"
-              >
-                Add
-              </button>
-              <button
-                type="button"
-                class="layer-btn lasso-erase"
-                :class="{ active: sweepMode === 'erase' }"
-                :aria-pressed="sweepMode === 'erase'"
-                title="Take the sweep back out of this member's doors"
-                @click="sweepMode = 'erase'"
-              >
-                Erase
-              </button>
-            </template>
+          </div>
+          <!-- Add/Erase gets its OWN row under the tools rather than growing
+               that one leftward — four buttons wide, the group reached
+               across the map and sat on top of the layer buttons on the
+               left (2026-07-25). -->
+          <div v-if="assigningMemberId && (lassoActive || streetTapActive)" class="sweep-mode-toggle">
+            <button
+              type="button"
+              class="layer-btn"
+              :class="{ active: sweepMode === 'add' }"
+              :aria-pressed="sweepMode === 'add'"
+              title="Add the sweep to this member's doors"
+              @click="sweepMode = 'add'"
+            >
+              Add
+            </button>
+            <button
+              type="button"
+              class="layer-btn lasso-erase"
+              :class="{ active: sweepMode === 'erase' }"
+              :aria-pressed="sweepMode === 'erase'"
+              title="Take the sweep back out of this member's doors"
+              @click="sweepMode = 'erase'"
+            >
+              Erase
+            </button>
           </div>
           <!-- The same slot when nobody's pile is open: the way IN to
                assigning, on the map itself rather than only behind tapping a
                person. -->
           <button
-            v-else-if="canAssign"
+            v-if="canAssign && !assigningMemberId"
             type="button"
             class="layer-btn map-assign-btn"
             :title="claimSelfOnly ? 'Pick the doors you\'re taking' : 'Pick doors for someone on the crew'"
@@ -2185,17 +2254,18 @@ watch(
           >
             ✎ {{ claimSelfOnly ? 'Claim doors' : 'Assign doors' }}
           </button>
-          <!-- Turf layer, tri-state: ring the crew's doors in their turf
-               colors, ring EVERY turf's doors (the whole campaign's cut), or
-               (tap the active button again) plain status pins. No area
-               shading — see the paintForDoor comment. -->
+          <!-- Turf layer — a FILTER, not a coloring: show only the crew's
+               ground (and fly to it), show the whole campaign's cut with
+               every turf in its own color, or (tap the active button again)
+               every door we know on plain status pins. Who owns what is the
+               separate "Our doors" switch below. -->
           <div class="layer-toggle" role="group" aria-label="Turf layer">
             <button
               type="button"
               class="layer-btn"
               :class="{ active: turfShade === 'mine' }"
               :aria-pressed="turfShade === 'mine'"
-              title="Ring your squad's doors in their turf colors"
+              title="Show only our squad's doors, and go there"
               @click="setTurfShade('mine')"
             >
               Our turf
@@ -2212,6 +2282,25 @@ watch(
               {{ orgLoading ? 'Loading…' : 'All turf' }}
             </button>
           </div>
+          <!-- Who has what: each door ringed in its owner's own color, their
+               face in the middle where nobody has knocked yet today. Its own
+               switch so it composes with the filter above — and assign mode
+               shows it regardless. -->
+          <button
+            type="button"
+            class="layer-btn owner-layer-btn"
+            :class="{ active: ownerLayer || !!assigningMemberId }"
+            :aria-pressed="ownerLayer || !!assigningMemberId"
+            :disabled="!!assigningMemberId"
+            :title="
+              assigningMemberId
+                ? 'On while you\'re picking doors'
+                : 'Color each door by who it\'s assigned to'
+            "
+            @click="toggleOwnerLayer"
+          >
+            Our doors
+          </button>
         </div>
       </div>
 
@@ -2783,6 +2872,32 @@ watch(
   font-size: calc(0.78rem * var(--ui-scale, 1));
   font-weight: 700;
   cursor: pointer;
+  /* Shrink, then ellipsize — never grow into the column opposite. */
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Nothing in the map chrome may collide: each column gets half the map
+   minus its gutter. This is what the 4-wide sweep row broke — anchored
+   right, it reached back across and sat on the layer buttons. */
+.pin-mode-toggle,
+.layer-toggle,
+.owner-layer-btn,
+.lasso-toggle,
+.sweep-mode-toggle,
+.map-assign-btn {
+  max-width: calc(50% - 0.9rem);
+}
+
+/* Phone width is the tight case: two ~150px groups plus gutters is the
+   whole screen. Tighter padding and a hair smaller type buys ~45px. */
+@media (max-width: 520px) {
+  .layer-btn {
+    padding: 0 0.4rem;
+    font-size: calc(0.72rem * var(--ui-scale, 1));
+  }
 }
 
 .layer-btn + .layer-btn {
@@ -2833,11 +2948,43 @@ watch(
   color: #fff;
 }
 
-/* Left column, third row — under the pin-style and layer toggles, exactly
-   where the cutter keeps its Undo. */
-.map-undo-btn {
+/* Right column, third row — Add/Erase sits UNDER the tools rather than
+   beside them. Four buttons on one right-anchored row grew back across the
+   map and covered the layer buttons on the left. */
+.sweep-mode-toggle {
   position: absolute;
   top: calc(0.6rem + 2 * (36px + 0.5rem));
+  right: 0.6rem;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+}
+
+/* Left column, third row — the ownership switch, under the turf filter it
+   composes with. */
+.owner-layer-btn {
+  position: absolute;
+  top: calc(0.6rem + 2 * (36px + 0.5rem));
+  left: 0.6rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+}
+
+/* Left column, FOURTH row — Undo lands under the ownership switch (the
+   cutter's third-row slot, one down, since this map has one more layer
+   button). Last in the column on purpose: appearing never shifts another
+   control. */
+.map-undo-btn {
+  position: absolute;
+  top: calc(0.6rem + 3 * (36px + 0.5rem));
   left: 0.6rem;
   width: 36px;
   height: 36px;
