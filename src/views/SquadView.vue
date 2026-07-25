@@ -213,6 +213,62 @@ const progressPct = computed(() =>
   doorsTotal.value ? Math.round((doorsKnocked.value / doorsTotal.value) * 100) : 0,
 )
 
+/** "Our doors": the crew's whole assignment counted out by what happened at
+ * each one, in the same colors the map paints (2026-07-25, user call). The
+ * progress bar says how much is done; this says how it went. Derived from
+ * the door statuses already loaded — no fetch, and it moves with live
+ * knocks like everything else on the page.
+ *
+ * Buckets follow doorStatusOutcome exactly, so a row can never disagree with
+ * the pins: partly-signed is its own line (green with a yellow band on the
+ * map, and the one state a single color can't say), and the three reds keep
+ * their own labels — to a canvasser they all mean "don't come back", but
+ * "hostile" and "skip" are different things to plan around. */
+const rundownOpen = ref(false)
+
+interface RundownRow {
+  key: string
+  label: string
+  color: string
+  band: string | null
+  count: number
+}
+
+const doorRundown = computed<RundownRow[]>(() => {
+  const counts = new Map<string, number>()
+  const bump = (key: string) => counts.set(key, (counts.get(key) ?? 0) + 1)
+  for (const id of turfDoors.value.keys()) {
+    const s = statusByDoor.value.get(id)
+    if (!s) {
+      bump('todo')
+      continue
+    }
+    if (doorPartlySigned(s.outcome, s.signed_count, s.person_count)) {
+      bump('partly')
+      continue
+    }
+    const eff = doorStatusOutcome(s.outcome, s.signed_count, s.person_count)
+    bump(eff ?? 'todo')
+  }
+  const rows: RundownRow[] = [
+    { key: 'signed', label: 'Everyone signed', color: OUTCOME_HEX.signed, band: null, count: 0 },
+    { key: 'partly', label: 'Partly signed', color: OUTCOME_HEX.signed, band: OUTCOME_HEX.maybe, count: 0 },
+    { key: 'maybe', label: OUTCOME_LABELS.maybe, color: OUTCOME_HEX.maybe, band: null, count: 0 },
+    { key: 'not_home', label: OUTCOME_LABELS.not_home, color: OUTCOME_HEX.not_home, band: null, count: 0 },
+    { key: 'didnt_sign', label: OUTCOME_LABELS.didnt_sign, color: OUTCOME_HEX.didnt_sign, band: null, count: 0 },
+    { key: 'skip', label: OUTCOME_LABELS.skip, color: OUTCOME_HEX.skip, band: null, count: 0 },
+    { key: 'hostile', label: OUTCOME_LABELS.hostile, color: OUTCOME_HEX.hostile, band: null, count: 0 },
+    { key: 'todo', label: 'Not knocked yet', color: PIN_DEFAULT_HEX, band: null, count: 0 },
+  ]
+  return rows
+    .map((r) => ({ ...r, count: counts.get(r.key) ?? 0 }))
+    .filter((r) => r.count > 0)
+})
+
+function rundownPct(count: number): number {
+  return doorsTotal.value ? Math.round((count / doorsTotal.value) * 100) : 0
+}
+
 /** Guards against an older async load landing after a newer one. */
 let loadSeq = 0
 
@@ -1880,6 +1936,34 @@ watch(
               <span class="turf-dot" :style="{ background: t.color }"></span>{{ t.name }}
             </button>
           </div>
+
+          <!-- Our doors: the same colors the map paints, counted out. The bar
+               above says how far along the crew is; this says how it's
+               going. Closed by default — it's a check-in, not the point of
+               the page. -->
+          <button
+            type="button"
+            class="rundown-toggle"
+            :aria-expanded="rundownOpen"
+            @click="rundownOpen = !rundownOpen"
+          >
+            <span class="rundown-caret" :class="{ open: rundownOpen }" aria-hidden="true">›</span>
+            Our doors
+          </button>
+          <ul v-if="rundownOpen" class="rundown">
+            <li v-for="r in doorRundown" :key="r.key" class="rundown-row">
+              <span
+                class="rundown-dot"
+                :style="{ background: r.color, boxShadow: r.band ? `inset 0 0 0 3px ${r.band}` : undefined }"
+                aria-hidden="true"
+              ></span>
+              <span class="rundown-label">{{ r.label }}</span>
+              <span class="rundown-track" aria-hidden="true">
+                <span class="rundown-fill" :style="{ width: rundownPct(r.count) + '%', background: r.color }"></span>
+              </span>
+              <span class="rundown-count">{{ r.count }}</span>
+            </li>
+          </ul>
         </template>
         <p v-else-if="!dashboardLoading" class="muted no-turf">
           No turf assigned to your squad yet today — your campaign manager sends turf out to
@@ -2458,6 +2542,80 @@ watch(
   gap: 0.4rem;
 }
 
+.rundown-toggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.rundown-caret {
+  display: inline-block;
+  transition: transform 0.15s ease;
+}
+
+.rundown-caret.open {
+  transform: rotate(90deg);
+}
+
+.rundown {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.rundown-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.rundown-dot {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.rundown-label {
+  flex-shrink: 0;
+  min-width: 8.5rem;
+}
+
+.rundown-track {
+  flex: 1;
+  min-width: 2rem;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.rundown-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+
+.rundown-count {
+  flex-shrink: 0;
+  min-width: 2.5rem;
+  text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
 .turf-chip {
   display: inline-flex;
   align-items: center;
@@ -2660,6 +2818,14 @@ watch(
   overflow: hidden;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
   z-index: 6;
+}
+
+/* The label is this button's only child, so it has to be centered in the
+   36px box — left to `stretch` it sat at the top with a blank strip under
+   it (the group next door has real children and doesn't have the problem). */
+.map-assign-btn {
+  align-items: center;
+  justify-content: center;
 }
 
 .lasso-erase.active {
