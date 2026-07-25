@@ -222,6 +222,16 @@ export const useTalkStore = defineStore('talk', {
       this.myTurfLoaded = true
     },
 
+    /** Force a re-read of which turf is mine. Claiming doors on the Squad
+     * page changes the answer, and /canvass sits inside <keep-alive>, so the
+     * one-time load above would otherwise hold yesterday's split until a full
+     * page reload (2026-07-25). Called when /canvass is re-activated. */
+    async reloadMyTurf() {
+      this.myTurfLoaded = false
+      await this.ensureMyTurf()
+      void this.refreshUpcoming()
+    },
+
     /** The walk options in force right now, including the "My doors" filter
      * when it's on AND there's actually turf to filter to (switching it on
      * with nothing assigned would empty every walk). */

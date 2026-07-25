@@ -3,12 +3,21 @@ export default { name: 'CanvasserHomeView' }
 </script>
 
 <script setup lang="ts">
+import { onActivated } from 'vue'
 import AppShell from '@/components/AppShell.vue'
 import TalkTab from '@/components/canvass/TalkTab.vue'
 import HuntTab from '@/components/canvass/HuntTab.vue'
 import { useTalkStore } from '@/stores/talk'
 
 const talk = useTalkStore()
+
+// This view is kept alive (App.vue), so coming back from the Squad page
+// doesn't remount anything — including the one-time "which turf is mine"
+// load behind the My doors walk filter. Doors claimed while we were away
+// have to land here, or Talk keeps walking the old assignment.
+onActivated(() => {
+  void talk.reloadMyTurf()
+})
 </script>
 
 <template>

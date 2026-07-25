@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { Geolocation } from '@capacitor/geolocation'
@@ -21,6 +21,7 @@ import { createBadgeFactory } from '@/lib/doorBadges'
 import type { BadgePerson } from '@/lib/doorBadges'
 import { attachMapScrollGuard } from '@/lib/mapScroll'
 import type { MapScrollGuard } from '@/lib/mapScroll'
+import { onAppResume } from '@/lib/appResume'
 import { geocodeAndCache, normalizeStreetName, streetAtPoint } from '@/lib/geocode'
 import { avatarUrl } from '@/lib/avatars'
 import { fetchAllRows, supabase } from '@/lib/supabase'
@@ -64,15 +65,32 @@ interface PersonHit extends Person {
 const talk = useTalkStore()
 const auth = useAuthStore()
 
+/** One street, with every door on it in walk order — the unit the search
+ * actually returns (2026-07-25, user call). A search for "walnut" lists the
+ * Walnut Streets there are, not 200 loose houses across all of them; picking
+ * one opens its houses underneath. Built once from the address table, so
+ * street search costs no round trip and has no debounce. */
+interface StreetEntry {
+  key: string
+  /** Voter-file spelling, e.g. "WALNUT ST". */
+  name: string
+  city: string
+  doors: AddressWithRoster[]
+}
+
 const mapWrapEl = ref<HTMLElement | null>(null)
 const mapEl = ref<HTMLElement | null>(null)
 const isFullscreen = ref(false)
 const listQuery = ref('')
-const searchResults = ref<{ persons: PersonHit[]; addresses: AddressWithRoster[] }>({
-  persons: [],
-  addresses: [],
-})
-const searching = ref(false)
+/** Every street in the county, indexed by `${name}|${city}`. */
+const streetsByKey = new Map<string, StreetEntry>()
+const streetList = ref<StreetEntry[]>([])
+/** The street whose houses are showing instead of the match list. */
+const openStreetKey = ref<string | null>(null)
+/** People matches — the one half of the search that still needs the server
+ * (43k persons is too many to hold in memory the way streets are). */
+const personHits = ref<PersonHit[]>([])
+const searchingPeople = ref(false)
 const locating = ref(false)
 const pinsLoading = ref(false)
 // Whether pins draw as colored dots or as labeled house-number chips. Persisted
@@ -182,27 +200,24 @@ watch(
       initStarted = true
       void initialize() // syncFromTalk runs at its tail, once the map exists
     } else {
-      void refreshStatuses()
+      void refreshEverything()
       if (!syncFromQuery()) void syncFromTalk()
     }
   },
   { immediate: true },
 )
 
-/** Ties page scroll position to intent: typing a search means you want the
- * results below, so jump there. Going the other way — back up to a map that's
- * half off screen — is the scroll guard's job now (src/lib/mapScroll.ts): the
- * first touch on a partly-visible map brings it into view instead of panning
- * it. Tapping a pin doesn't scroll at all; the located-address bubble sits
- * right above the map, already in view. */
-function scrollHuntToBottom() {
-  const el = document.scrollingElement ?? document.documentElement
-  el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-}
+// Focusing the search box raises the sheet (see raiseSheet below) — typing
+// means you want the list, not the map. Going the other way is the scroll
+// guard's job (src/lib/mapScroll.ts): the first touch on a partly-visible map
+// brings it into view instead of panning it.
 
 /** Only geocoded addresses get pins — a growing-over-time set (Talk mode,
  * Hunt's "locate", and turf cutting all geocode on demand). Now ~10k doors
- * and climbing, so every query here pages past PostgREST's 1000-row cap. */
+ * and climbing, so every query here pages past PostgREST's 1000-row cap.
+ * The doors WITHOUT coordinates come later and separately, in
+ * loadRemainingAddresses — they can't be painted, so they must not sit in
+ * front of the ones that can. */
 async function fetchMapData() {
   const [addresses, statusRows, summaryRows, todayRes] = await Promise.all([
     fetchAllRows<AddressWithRoster>((from, to) =>
@@ -494,6 +509,7 @@ watch(
     myTurfIds,
     myOwnTurfIds,
     allTurfColorById,
+    turfByAddress,
     locatedAddressId,
     turfShade,
   ],
@@ -512,10 +528,72 @@ function canvasDoorOf(a: AddressWithRoster) {
 function registerDoor(a: AddressWithRoster) {
   if (a.turf_id) turfByAddress.value.set(a.id, a.turf_id)
   else turfByAddress.value.delete(a.id)
-  if (a.lat == null || a.lng == null) return
+  // Ungeocoded doors are still real doors: they belong in the row cache and
+  // in their street's house list, they just have no pin to paint yet.
   addressById.set(a.id, a)
+  if (a.lat == null || a.lng == null) return
   doorInfoByAddress.set(a.id, { lat: a.lat, lng: a.lng, street: a.street })
   doorLayer?.upsertDoor(canvasDoorOf(a))
+}
+
+// --- Street index -----------------------------------------------------
+// Streets are derived, not stored: the address table is the only source, so
+// the index is rebuilt whenever the address set is (re)loaded. ~1.5k entries
+// over ~22k doors, which is small enough to scan linearly on every keystroke
+// — hence no debounce on the street half of the search.
+
+/** "WALNUT ST" → "Walnut St", for anything a person reads. */
+function titleCase(s: string): string {
+  return s.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase())
+}
+
+function streetKey(name: string, city: string | null | undefined): string {
+  return `${name}|${city ?? ''}`
+}
+
+function indexStreets(rows: AddressWithRoster[]) {
+  streetsByKey.clear()
+  for (const a of rows) {
+    const name = streetNameOf(a.street)
+    if (!name) continue
+    const key = streetKey(name, a.city)
+    let entry = streetsByKey.get(key)
+    if (!entry) streetsByKey.set(key, (entry = { key, name, city: a.city ?? '', doors: [] }))
+    entry.doors.push(a)
+  }
+  for (const entry of streetsByKey.values()) {
+    entry.doors.sort((x, y) => houseNumber(x.street) - houseNumber(y.street))
+  }
+  streetList.value = [...streetsByKey.values()].sort(
+    (a, b) => a.name.localeCompare(b.name) || a.city.localeCompare(b.city),
+  )
+}
+
+/** The street a given door sits on. */
+function streetEntryFor(a: Pick<Address, 'street' | 'city'>): StreetEntry | null {
+  return streetsByKey.get(streetKey(streetNameOf(a.street), a.city)) ?? null
+}
+
+/** A street by name alone (reverse geocoding gives no city). With the same
+ * name in several towns, the one nearest the point wins; with no point, the
+ * one with the most doors. */
+function streetEntryByName(name: string, near?: { lat: number; lng: number }): StreetEntry | null {
+  const matches = streetList.value.filter((e) => e.name === name)
+  if (matches.length <= 1) return matches[0] ?? null
+  if (!near) return matches.reduce((best, e) => (e.doors.length > best.doors.length ? e : best))
+  let best: StreetEntry | null = null
+  let bestDist = Infinity
+  for (const entry of matches) {
+    for (const d of entry.doors) {
+      if (d.lat == null || d.lng == null) continue
+      const dist = flatDistance({ lat: d.lat, lng: d.lng }, near)
+      if (dist < bestDist) {
+        bestDist = dist
+        best = entry
+      }
+    }
+  }
+  return best ?? matches[0]
 }
 
 function addDoor(a: AddressWithRoster) {
@@ -542,19 +620,27 @@ function onMapClick(e: google.maps.MapMouseEvent) {
   const zoomedIn = (map?.getZoom() ?? 0) >= PINS_MIN_ZOOM
   const id = zoomedIn && e.latLng ? doorLayer?.doorAt(e.latLng) : null
   const address = id ? addressById.get(id) : null
+  // locateAddress fills the box and opens the street's house list itself.
   if (address) {
-    searchStreet(streetNameOf(address.street))
     void locateAddress(address)
     return
   }
   if (e.latLng) void searchStreetAtPoint(e.latLng)
 }
 
-/** Fill the search box with a street name as though it were typed, so the
- * list below the map becomes that street's houses. */
-function searchStreet(name: string) {
+/** Show a street by name, as though it had been typed and tapped. */
+function searchStreet(name: string, near?: { lat: number; lng: number }) {
   if (!name) return
-  onListInput(name.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()))
+  const entry = streetEntryByName(name, near)
+  if (entry) {
+    pickStreet(entry)
+    return
+  }
+  // A road with no houses in the voter file under that name — leave the name
+  // in the box so the people search still has a shot at it.
+  listQuery.value = titleCase(name)
+  openStreetKey.value = null
+  runPersonSearch()
 }
 
 /** Reverse-geocode a tapped point to a street. Google spells streets its own
@@ -566,10 +652,11 @@ let streetTapBusy = false
 async function searchStreetAtPoint(latLng: google.maps.LatLng) {
   if (streetTapBusy) return
   streetTapBusy = true
+  const near = { lat: latLng.lat(), lng: latLng.lng() }
   try {
-    const hit = await streetAtPoint(latLng.lat(), latLng.lng())
+    const hit = await streetAtPoint(near.lat, near.lng)
     const name = hit?.names.map(normalizeStreetName).find((n) => n.length > 2)
-    if (name) searchStreet(name)
+    if (name) searchStreet(name, near)
   } finally {
     streetTapBusy = false
   }
@@ -674,11 +761,12 @@ async function loadMapData() {
   const bounds = new google.maps.LatLngBounds()
   let haveMyTurf = false
   for (const a of mapAddresses) {
-    if (a.lat == null || a.lng == null) continue
     registerDoor(a)
-    bounds.extend({ lat: a.lat, lng: a.lng })
     if (a.turf_id && myTurfIds.value.has(a.turf_id)) haveMyTurf = true
+    if (a.lat == null || a.lng == null) continue
+    bounds.extend({ lat: a.lat, lng: a.lng })
   }
+  indexStreets(mapAddresses)
   doorLayer?.requestRepaint()
   // Opening frame, best anchor first: your (and your today-squad's) turf —
   // the biggest connected patch of it, same best-fit the "My turf" button
@@ -696,10 +784,37 @@ async function loadMapData() {
     } else if (!bounds.isEmpty()) map.fitBounds(bounds, 48)
   }
   pinsLoading.value = false
+  // Streets whose houses nobody has geocoded yet have no pins, but they're
+  // exactly the streets someone looks up by name — so they join the index
+  // behind the map, once the doors that CAN be drawn are drawn.
+  void loadRemainingAddresses()
   // Entering Scout with a door already loaded in Talk: land on that door
   // (locate wins over the turf frame above — you're mid-walk, not arriving).
   // A ?street= deep link outranks both — it's what the person just tapped.
   if (!syncFromQuery()) void syncFromTalk()
+}
+
+/** The ungeocoded remainder of the address table, fetched after the map is
+ * already painted. They never become pins here (geocoding stays on-demand),
+ * but they make the street index complete: search a street with no dots on
+ * it, tap it, and its houses list — which is also what triggers geocoding
+ * them, so the map fills in from the search. */
+async function loadRemainingAddresses() {
+  try {
+    const rows = await fetchAllRows<AddressWithRoster>((from, to) =>
+      supabase
+        .from('addresses')
+        .select('*, persons(count)')
+        .is('lat', null)
+        .order('id')
+        .range(from, to),
+    )
+    if (!rows.length) return
+    for (const a of rows) registerDoor(a)
+    indexStreets([...addressById.values()])
+  } catch {
+    // Street search stays limited to streets that already have pins.
+  }
 }
 
 /** Re-pull statuses/summaries and recolor existing pins. Called whenever
@@ -722,6 +837,51 @@ async function refreshStatuses() {
     return
   }
   doorLayer?.requestRepaint()
+}
+
+/** Which turf owns which door — the half of the picture fetchTurfs() can't
+ * see (2026-07-25). Turf rows say who a turf belongs to; `addresses.turf_id`
+ * says which doors are in it, and that column is what "My doors" filters on.
+ * Claiming a share on the Squad page rewrites it, so without this the Scout
+ * map keeps yesterday's split until a hard reload.
+ *
+ * Only the id/turf_id pair, so it's two columns rather than the whole address
+ * row, and throttled — a tab flip every thirty seconds shouldn't re-read the
+ * county. */
+const MEMBERSHIP_MIN_INTERVAL_MS = 30_000
+let lastMembershipRefresh = 0
+let membershipInFlight = false
+
+async function refreshTurfMembership(force = false) {
+  const now = Date.now()
+  if (membershipInFlight) return
+  if (!force && now - lastMembershipRefresh < MEMBERSHIP_MIN_INTERVAL_MS) return
+  membershipInFlight = true
+  try {
+    const rows = await fetchAllRows<{ id: string; turf_id: string | null }>((from, to) =>
+      supabase.from('addresses').select('id, turf_id').order('id').range(from, to),
+    )
+    // Replace the Map rather than patching it — a new reference is what the
+    // repaint watcher below is looking for, and a door that LEFT every turf
+    // has to actually lose its entry.
+    const next = new Map<string, string>()
+    for (const r of rows) {
+      if (r.turf_id) next.set(r.id, r.turf_id)
+      const cached = addressById.get(r.id)
+      if (cached) cached.turf_id = r.turf_id
+    }
+    turfByAddress.value = next
+    lastMembershipRefresh = Date.now()
+  } catch {
+    // Keep the membership we have; the next resume tries again.
+  } finally {
+    membershipInFlight = false
+  }
+}
+
+/** Everything a long-lived Scout can go stale on, in one call. */
+async function refreshEverything(force = false) {
+  await Promise.all([refreshStatuses(), refreshTurfMembership(force)])
 }
 
 // --- Framing your turf ---
@@ -816,6 +976,16 @@ function focusMyTurf(ids: Set<string> = myTurfIds.value) {
 
 let knockFeed: RealtimeChannel | null = null
 
+/** A channel whose socket died while the phone slept stays "subscribed" and
+ * silently delivers nothing. Tear it down and open a fresh one on resume. */
+function resubscribeToKnockFeed() {
+  if (knockFeed) {
+    void supabase.removeChannel(knockFeed)
+    knockFeed = null
+  }
+  subscribeToKnockFeed()
+}
+
 function subscribeToKnockFeed() {
   knockFeed = supabase
     .channel('hunt-knock-feed')
@@ -861,45 +1031,143 @@ function subscribeToKnockFeed() {
     .subscribe()
 }
 
-// --- Search (people + addresses, like Talk's search) ---
+// --- Search: streets, then people (2026-07-25, user call) ---------------
+//
+// One box, two kinds of match, in a fixed order. Streets come first because
+// that's what a canvasser is nearly always after, and because a name like
+// "Walnut" is a street far more often than it is a surname — the several
+// Walnut Streets list, and John Walnut is right underneath them. Streets
+// resolve instantly out of the in-memory index; only people cost a round
+// trip, so the street list never waits on the network.
+//
+// Picking either one ends in the same place: that street's houses listed in
+// walk order, with the door you picked highlighted.
+
+const MAX_STREET_HITS = 25
+
+const trimmedQuery = computed(() => listQuery.value.trim())
+const queryReady = computed(() => trimmedQuery.value.length >= 2)
+
+/** Streets matching the box, name-start matches first. */
+const streetHits = computed<StreetEntry[]>(() => {
+  if (!queryReady.value) return []
+  const q = trimmedQuery.value.toLowerCase()
+  const starts: StreetEntry[] = []
+  const contains: StreetEntry[] = []
+  for (const entry of streetList.value) {
+    const name = entry.name.toLowerCase()
+    if (name.startsWith(q)) starts.push(entry)
+    else if (name.includes(q) || `${name} ${entry.city.toLowerCase()}`.includes(q)) {
+      contains.push(entry)
+    }
+  }
+  return [...starts, ...contains].slice(0, MAX_STREET_HITS)
+})
+
+/** The street currently expanded into its house list, if any. */
+const openStreet = computed<StreetEntry | null>(() =>
+  openStreetKey.value ? (streetsByKey.get(openStreetKey.value) ?? null) : null,
+)
 
 function onListInput(value: string) {
   listQuery.value = value
+  // Typing is a new question — drop back out of a street's house list so the
+  // matches are what's on screen.
+  openStreetKey.value = null
+  runPersonSearch()
+}
+
+function runPersonSearch() {
   clearTimeout(searchTimer)
-  const q = value.trim()
+  const q = trimmedQuery.value
   if (q.length < 2) {
-    searchResults.value = { persons: [], addresses: [] }
-    searching.value = false
+    personHits.value = []
+    searchingPeople.value = false
     return
   }
-  searching.value = true
+  searchingPeople.value = true
   searchTimer = setTimeout(async () => {
-    const pattern = `%${q}%`
-    const [personsRes, addressesRes] = await Promise.all([
-      supabase
-        .from('persons')
-        .select('*, addresses(id, street, unit, city, persons(count))')
-        .ilike('name', pattern)
-        .limit(20),
-      // 100 addresses so a whole street fits in one search (scrolling a
-      // street top to bottom is the point of the Talk→Scout handoff below).
-      supabase.from('addresses').select('*, persons(count)').ilike('street', pattern).limit(100),
-    ])
-    if (listQuery.value.trim() !== q) return
-    // Street order, then house-number order — a street search reads as a
-    // walkable list instead of DB insertion order.
-    const rows = (addressesRes.data ?? []) as AddressWithRoster[]
-    rows.sort(
-      (a, b) =>
-        streetNameOf(a.street).localeCompare(streetNameOf(b.street)) ||
-        houseNumber(a.street) - houseNumber(b.street),
-    )
-    searchResults.value = {
-      persons: (personsRes.data ?? []) as PersonHit[],
-      addresses: rows,
-    }
-    searching.value = false
+    const { data } = await supabase
+      .from('persons')
+      .select('*, addresses(id, street, unit, city, persons(count))')
+      .ilike('name', `%${q}%`)
+      .limit(25)
+    if (trimmedQuery.value !== q) return
+    personHits.value = (data ?? []) as PersonHit[]
+    searchingPeople.value = false
   }, 250)
+}
+
+/** Open a street's house list. `frame` pans/zooms the map to it — suppressed
+ * when the caller is already flying somewhere more specific (a located door). */
+function showStreet(entry: StreetEntry, opts: { frame?: boolean } = {}) {
+  openStreetKey.value = entry.key
+  if (opts.frame !== false) frameStreet(entry)
+  void backfillStreetPins(entry)
+}
+
+/** Tapping a street row: list its houses AND put its name in the box, so the
+ * box always says what the list is showing. */
+function pickStreet(entry: StreetEntry) {
+  listQuery.value = titleCase(entry.name)
+  runPersonSearch()
+  showStreet(entry)
+}
+
+function backToMatches() {
+  openStreetKey.value = null
+}
+
+/** Tapping a person: go to their door. The full address row from the index
+ * beats the person query's embedded stub — it carries coordinates and turf. */
+function openPerson(p: PersonHit) {
+  const full = (p.household_id ? addressById.get(p.household_id) : null) ?? p.addresses
+  if (full) void locateAddress(full as AddressWithRoster)
+}
+
+function frameStreet(entry: StreetEntry) {
+  if (!map) return
+  const bounds = new google.maps.LatLngBounds()
+  for (const d of entry.doors) {
+    if (d.lat != null && d.lng != null) bounds.extend({ lat: d.lat, lng: d.lng })
+  }
+  if (bounds.isEmpty()) return
+  map.fitBounds(bounds, 64)
+}
+
+/** Geocode the street's unmapped doors so the list and the map agree about
+ * what's there. Bounded and one street at a time — geocoding costs money and
+ * only ever happens on an explicit tap, never on load. */
+const backfilling = new Set<string>()
+async function backfillStreetPins(entry: StreetEntry, pivot?: AddressWithRoster) {
+  if (backfilling.has(entry.key)) return
+  const missing = entry.doors.filter((d) => d.lat == null || d.lng == null)
+  if (!missing.length) return
+  const mapped = entry.doors.length - missing.length
+  if (mapped >= NEARBY_CAP) return
+  // Spend the budget nearest whatever the canvasser just tapped — on a long
+  // street the far end can wait for its own tap.
+  if (pivot) {
+    const at = houseNumber(pivot.street)
+    missing.sort(
+      (a, b) => Math.abs(houseNumber(a.street) - at) - Math.abs(houseNumber(b.street) - at),
+    )
+  }
+  backfilling.add(entry.key)
+  try {
+    let budget = NEARBY_CAP - mapped
+    for (const a of missing) {
+      if (budget <= 0) break
+      const loc = await geocodeAndCache(a)
+      if (!loc) continue
+      Object.assign(a, loc)
+      registerDoor(a)
+      budget -= 1
+    }
+    doorLayer?.requestRepaint()
+  } finally {
+    backfilling.delete(entry.key)
+  }
 }
 
 function summaryFor(addressId: string | null | undefined): HouseholdKnockSummary | null {
@@ -951,7 +1219,7 @@ function flatDistance(a: { lat: number; lng: number }, b: { lat: number; lng: nu
   return (a.lat - b.lat) ** 2 + (a.lng - b.lng) ** 2
 }
 
-async function locateAddress(address: AddressWithRoster) {
+async function locateAddress(address: AddressWithRoster, opts: { openStreet?: boolean } = {}) {
   if (locating.value) return
   locating.value = true
   try {
@@ -970,37 +1238,17 @@ async function locateAddress(address: AddressWithRoster) {
       map.setZoom(Math.max(map.getZoom() ?? 14, 17))
     }
 
-    const targetName = streetNameOf(address.street)
-    const { data } = await supabase
-      .from('addresses')
-      .select('*, persons(count)')
-      .ilike('street', `%${targetName}`)
-    const rows = ((data ?? []) as AddressWithRoster[]).filter(
-      (a) => streetNameOf(a.street) === targetName,
-    )
-    const geocoded = rows.filter((a) => a.lat != null && a.lng != null)
-    const missing = rows.filter((a) => a.lat == null || a.lng == null)
-
-    if (address.lat != null && address.lng != null) {
-      const origin = { lat: address.lat, lng: address.lng }
-      geocoded.sort(
-        (a, b) => flatDistance({ lat: a.lat!, lng: a.lng! }, origin) - flatDistance({ lat: b.lat!, lng: b.lng! }, origin),
-      )
-    }
-    missing.sort((a, b) => Math.abs(houseNumber(a.street) - houseNumber(address.street)) -
-      Math.abs(houseNumber(b.street) - houseNumber(address.street)))
-
-    for (const a of missing) {
-      if (geocoded.length >= NEARBY_CAP) break
-      const loc = await geocodeAndCache(a)
-      if (loc) {
-        Object.assign(a, loc)
-        geocoded.push(a)
-      }
-    }
-
-    for (const a of geocoded.slice(0, NEARBY_CAP)) registerDoor(a)
-    doorLayer?.requestRepaint()
+    // Locating a door always pulls its whole street up underneath the map,
+    // in walk order, with this house highlighted — the street index already
+    // holds every house on it, so there's no query here anymore. The map is
+    // already flying to the door itself, so the street doesn't re-frame it.
+    if (opts.openStreet === false) return
+    const entry = streetEntryFor(address)
+    if (!entry) return
+    listQuery.value = titleCase(entry.name)
+    runPersonSearch()
+    openStreetKey.value = entry.key
+    void backfillStreetPins(entry, address)
   } finally {
     locating.value = false
   }
@@ -1021,7 +1269,7 @@ function syncFromQuery(): boolean {
   const raw = route.query.street
   if (typeof raw !== 'string' || !raw.trim()) return false
   const street = raw.trim().slice(0, 80)
-  onListInput(street.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()))
+  searchStreet(normalizeStreetName(street))
   // Claim the Talk-sync slot so syncFromTalk() doesn't overwrite this search.
   syncedFromTalkId = talk.selectedAddress?.id ?? null
   void router.replace({ path: '/canvass', query: {} })
@@ -1033,9 +1281,8 @@ async function syncFromTalk() {
   const current = talk.selectedAddress
   if (!current || current.id === syncedFromTalkId) return
   syncedFromTalkId = current.id
-  const street = streetNameOf(current.street)
-  // Title-case for the visible input — matching is case-insensitive anyway.
-  onListInput(street.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUpperCase()))
+  // locateAddress fills the search box with the street and opens its house
+  // list — the handoff is one call now.
   await locateAddress(addressById.get(current.id) ?? { ...current })
 }
 
@@ -1087,67 +1334,97 @@ async function locateMe() {
   }
 }
 
-// --- Custom results-list scrollbar: the rows are buttons, so a touch-drag
-// starting on one scrolls unreliably (or just triggers the row). A dedicated
-// thumb gives a spot that's always just "grab and scroll", and staying custom
-// (rather than the native scrollbar) means it looks and behaves the same
-// whether this runs in a browser tab or an installed/PWA shell. ---
+// --- The results sheet (2026-07-25, user call: "I don't like the little bar
+// for the list of houses… you just swipe up and down like normal").
+//
+// The custom scrollbar track and thumb are GONE. The list scrolls natively —
+// a finger anywhere on it drags it, the way every list in every app works —
+// and `overscroll-behavior: contain` stops that drag from chaining into the
+// page once the list hits its end, so the sheet and the page never fight.
+//
+// The grab handle stays, but it does the other job: it moves the SHEET.
+// Drag it up and the page scrolls so the sheet fills the screen; drag it
+// down and the map comes back. Releasing snaps to whichever end is nearer,
+// and a tap (no drag) toggles between them. That's the one gesture the rows
+// underneath can't offer, because they're buttons. ---
 
 const resultsListEl = ref<HTMLElement | null>(null)
-const thumbHeight = ref(0)
-const thumbTop = ref(0)
-const showThumb = ref(false)
-let resizeObserver: ResizeObserver | null = null
+const sheetEl = ref<HTMLElement | null>(null)
 
-const MIN_THUMB = 32
-
-function recomputeThumb() {
-  const el = resultsListEl.value
-  if (!el) return
-  const { scrollHeight, clientHeight, scrollTop } = el
-  if (scrollHeight <= clientHeight + 1) {
-    showThumb.value = false
-    return
-  }
-  showThumb.value = true
-  const height = Math.max(MIN_THUMB, (clientHeight / scrollHeight) * clientHeight)
-  const maxTop = clientHeight - height
-  const scrollableMax = scrollHeight - clientHeight
-  const top = scrollableMax > 0 ? (scrollTop / scrollableMax) * maxTop : 0
-  thumbHeight.value = height
-  thumbTop.value = top
+function pageScroller(): Element {
+  return document.scrollingElement ?? document.documentElement
 }
 
-function onResultsScroll() {
-  recomputeThumb()
+/** Page offset that puts the sheet's top edge at the top of the screen. */
+function raisedOffset(): number {
+  const el = pageScroller()
+  const sheet = sheetEl.value
+  if (!sheet) return el.scrollTop
+  const top = sheet.getBoundingClientRect().top
+  return Math.max(0, Math.min(el.scrollHeight - el.clientHeight, el.scrollTop + top - 6))
 }
 
-function onThumbPointerDown(event: PointerEvent) {
-  const el = resultsListEl.value
-  if (!el) return
+const RAISED_SLACK_PX = 24
+
+/** "As far up as it goes" — either the sheet's top edge reached the top of
+ * the screen, or the page simply ran out of scroll (a short list can't be
+ * pulled higher than the document allows, and the toggle has to know that or
+ * it would keep trying to raise an already-raised sheet). */
+function sheetIsRaised(): boolean {
+  const el = pageScroller()
+  if (el.scrollTop >= el.scrollHeight - el.clientHeight - 8) return true
+  const sheet = sheetEl.value
+  return !!sheet && sheet.getBoundingClientRect().top <= RAISED_SLACK_PX
+}
+
+function raiseSheet() {
+  pageScroller().scrollTo({ top: raisedOffset(), behavior: 'smooth' })
+}
+
+function lowerSheet() {
+  pageScroller().scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function toggleSheet() {
+  if (sheetIsRaised()) lowerSheet()
+  else raiseSheet()
+}
+
+/** Drag the handle, and the page follows the finger 1:1 — the sheet feels
+ * like the thing being moved rather than a scrollbar being operated. */
+function onGripPointerDown(event: PointerEvent) {
+  const grip = event.currentTarget as HTMLElement
   event.preventDefault()
-  const track = event.currentTarget as HTMLElement
-  track.setPointerCapture(event.pointerId)
-  const trackHeight = el.clientHeight
-  const scrollableMax = el.scrollHeight - el.clientHeight
+  grip.setPointerCapture(event.pointerId)
+  const el = pageScroller()
   const startY = event.clientY
-  const startScrollTop = el.scrollTop
+  const startTop = el.scrollTop
+  let dragged = false
 
   function onMove(e: PointerEvent) {
-    const deltaY = e.clientY - startY
-    const maxTop = trackHeight - thumbHeight.value
-    const scrollDelta = maxTop > 0 ? (deltaY / maxTop) * scrollableMax : 0
-    el!.scrollTop = Math.min(scrollableMax, Math.max(0, startScrollTop + scrollDelta))
+    const dy = startY - e.clientY
+    if (Math.abs(dy) > 4) dragged = true
+    el.scrollTop = Math.max(0, Math.min(el.scrollHeight - el.clientHeight, startTop + dy))
   }
   function onUp() {
-    track.removeEventListener('pointermove', onMove)
-    track.removeEventListener('pointerup', onUp)
+    grip.removeEventListener('pointermove', onMove)
+    grip.removeEventListener('pointerup', onUp)
+    grip.removeEventListener('pointercancel', onUp)
+    if (!dragged) {
+      toggleSheet()
+      return
+    }
+    // Snap to whichever end the drag ended up nearer.
+    if (sheetIsRaised()) return
+    const sheet = sheetEl.value
+    if (!sheet) return
+    if (sheet.getBoundingClientRect().top < window.innerHeight * 0.55) raiseSheet()
+    else lowerSheet()
   }
-  track.addEventListener('pointermove', onMove)
-  track.addEventListener('pointerup', onUp)
+  grip.addEventListener('pointermove', onMove)
+  grip.addEventListener('pointerup', onUp)
+  grip.addEventListener('pointercancel', onUp)
 }
-
-watch(searchResults, () => void nextTick(recomputeThumb))
 
 /** Bring the located house's row to the middle of the list (2026-07-25, user
  * call): tapping a pin already fills the search with its street and highlights
@@ -1168,37 +1445,9 @@ function scrollActiveIntoView() {
   })
 }
 
-// Both halves of "tap a pin, find the house": the results arriving (the search
-// the tap kicked off) and the located door changing (the tap itself, when the
-// street's rows are already listed).
-watch([searchResults, locatedAddressId], () => void nextTick(scrollActiveIntoView))
-
-/** The grab bar above the list: drag it to scroll, at the same 1:1 mapping as
- * the thumb beside the rows (a full drag covers the full list). The rows are
- * buttons, so dragging on THEM is unreliable — this is a strip that's only
- * ever a scroll handle. */
-function onGripPointerDown(event: PointerEvent) {
-  const el = resultsListEl.value
-  if (!el) return
-  event.preventDefault()
-  const grip = event.currentTarget as HTMLElement
-  grip.setPointerCapture(event.pointerId)
-  const startY = event.clientY
-  const startScrollTop = el.scrollTop
-  const scrollableMax = el.scrollHeight - el.clientHeight
-  const travel = Math.max(1, el.clientHeight - thumbHeight.value)
-
-  function onMove(e: PointerEvent) {
-    const scrollDelta = ((e.clientY - startY) / travel) * scrollableMax
-    el!.scrollTop = Math.min(scrollableMax, Math.max(0, startScrollTop + scrollDelta))
-  }
-  function onUp() {
-    grip.removeEventListener('pointermove', onMove)
-    grip.removeEventListener('pointerup', onUp)
-  }
-  grip.addEventListener('pointermove', onMove)
-  grip.addEventListener('pointerup', onUp)
-}
+// Both halves of "tap a pin, find the house": the street's houses arriving,
+// and the located door changing while they're already listed.
+watch([openStreetKey, locatedAddressId], () => void nextTick(scrollActiveIntoView))
 
 // --- Map fullscreen toggle. Safari (incl. iOS) only ever exposes the
 // webkit-prefixed API, so both directions need a fallback. Google Maps
@@ -1245,6 +1494,7 @@ function onFullscreenChange() {
 // map that's half off screen brings it back into view instead of panning a
 // map you can only half see. Same guard on all three maps.
 let scrollGuard: MapScrollGuard | null = null
+let stopResumeWatch: (() => void) | null = null
 
 onMounted(() => {
   // A [[Street]] link from the AI chat lands on /canvass, which opens on
@@ -1253,12 +1503,13 @@ onMounted(() => {
   if (typeof route.query.street === 'string' && route.query.street.trim()) {
     talk.activeTab = 'hunt'
   }
-  if (resultsListEl.value) {
-    resizeObserver = new ResizeObserver(recomputeThumb)
-    resizeObserver.observe(resultsListEl.value)
-  }
-  recomputeThumb()
   subscribeToKnockFeed()
+  stopResumeWatch = onAppResume(() => {
+    // The websocket does not survive a sleeping phone, so anything logged
+    // while the screen was off never arrived. Re-subscribe, then re-read.
+    resubscribeToKnockFeed()
+    void refreshEverything(true)
+  })
   if (mapWrapEl.value) {
     scrollGuard = attachMapScrollGuard(mapWrapEl.value, {
       isFullscreen: () => isFullscreen.value,
@@ -1268,8 +1519,21 @@ onMounted(() => {
   document.addEventListener('webkitfullscreenchange', onFullscreenChange)
 })
 
+// /canvass is inside <keep-alive> (App.vue), so leaving for the Squad page
+// and coming back does NOT remount this component — no onMounted, no fresh
+// fetch, and the map keeps showing the turf split as it was before doors got
+// claimed. That was the whole "we need to refresh the map on the Canvass
+// page" report (2026-07-25). onActivated is the hook that actually fires.
+onActivated(() => {
+  // Nothing to refresh if the map was never opened — a canvasser who only
+  // ever uses Talk shouldn't pay for two county-sized reads on every return.
+  if (!initStarted) return
+  void refreshEverything(true)
+})
+
 onUnmounted(() => {
-  resizeObserver?.disconnect()
+  stopResumeWatch?.()
+  stopResumeWatch = null
   scrollGuard?.dispose()
   scrollGuard = null
   if (knockFeed) {
@@ -1470,101 +1734,130 @@ onUnmounted(() => {
     </p>
     <p v-if="locating" class="muted map-error">Locating nearby doors…</p>
 
-    <input
-      :value="listQuery"
-      class="street-search"
-      data-help="scout-search"
-      type="search"
-      placeholder="Search a name or street…"
-      aria-label="Search people or addresses"
-      @focus="scrollHuntToBottom"
-      @input="onListInput(($event.target as HTMLInputElement).value)"
-    />
-
-    <div class="results-list-wrap">
-    <!-- Something to grab: a centered handle whose only job is scrolling the
-         list, since every row under it is a button. -->
-    <div
-      v-if="showThumb"
-      class="list-grip"
-      role="separator"
-      aria-label="Drag to scroll the list"
-      @pointerdown="onGripPointerDown"
-    >
-      <span class="list-grip-bar" aria-hidden="true"></span>
-    </div>
-    <div ref="resultsListEl" class="results-list" @scroll="onResultsScroll">
-      <p v-if="listQuery.trim().length < 2" class="muted empty">
-        Type at least 2 characters of a name or street.
-      </p>
-      <p v-else-if="searching" class="muted empty">Searching…</p>
-      <template v-else>
-        <div v-if="!searchResults.persons.length && !searchResults.addresses.length" class="muted empty">
-          No matches.
-        </div>
-
-        <button
-          v-for="p in searchResults.persons"
-          :key="'p-' + p.id"
-          class="result-row"
-          :class="{ 'result-active': p.household_id === locatedAddressId }"
-          @click="p.addresses && locateAddress(p.addresses as AddressWithRoster)"
-        >
-          <span class="result-left">
-            <span class="result-name">{{ p.name }}</span>
-            <span class="muted result-sub">
-              {{ p.addresses ? `${p.addresses.street}${p.addresses.unit ? ' ' + p.addresses.unit : ''}` : 'No address on file' }}
-            </span>
-            <span v-if="wasKnockedToday(p.household_id)" class="today-badge">Knocked today</span>
-          </span>
-          <OutcomeIndicatorGrid
-            :summary="summaryFor(p.household_id)"
-            :household-size="householdSize(p.addresses)"
-          />
-          <button
-            v-if="p.household_id"
-            class="btn btn-sm knock-btn"
-            :style="{ background: knockColorFor(p.household_id), color: '#fff' }"
-            @click.stop="knock(p.household_id!, p.id)"
-          >
-            Knock
-          </button>
-        </button>
-
-        <button
-          v-for="a in searchResults.addresses"
-          :key="'a-' + a.id"
-          class="result-row"
-          :class="{ 'result-active': a.id === locatedAddressId }"
-          @click="locateAddress(a)"
-        >
-          <span class="result-left">
-            <span class="result-name">{{ a.street }}{{ a.unit ? ' ' + a.unit : '' }}</span>
-            <span v-if="wasKnockedToday(a.id)" class="today-badge">Knocked today</span>
-          </span>
-          <OutcomeIndicatorGrid :summary="summaryFor(a.id)" :household-size="householdSize(a)" />
-          <button
-            class="btn btn-sm knock-btn"
-            :style="{ background: knockColorFor(a.id), color: '#fff' }"
-            @click.stop="knock(a.id)"
-          >
-            Knock
-          </button>
-        </button>
-      </template>
-    </div>
-
-    <div
-      v-if="showThumb"
-      class="scrollbar-track"
-      @pointerdown="onThumbPointerDown"
-    >
+    <!-- Results sheet: a handle that moves the whole panel, the search box,
+         and a plain natively-scrolling list. Streets first, then people;
+         picking either one opens that street's houses in walk order. -->
+    <section ref="sheetEl" class="results-sheet">
       <div
-        class="scrollbar-thumb"
-        :style="{ height: thumbHeight + 'px', transform: `translateY(${thumbTop}px)` }"
-      ></div>
-    </div>
-    </div>
+        class="list-grip"
+        role="separator"
+        aria-label="Drag to move the list up or down"
+        title="Drag to move the list"
+        @pointerdown="onGripPointerDown"
+      >
+        <span class="list-grip-bar" aria-hidden="true"></span>
+      </div>
+
+      <input
+        :value="listQuery"
+        class="street-search"
+        data-help="scout-search"
+        type="search"
+        placeholder="Search a street or a name…"
+        aria-label="Search streets or people"
+        @focus="raiseSheet"
+        @input="onListInput(($event.target as HTMLInputElement).value)"
+      />
+
+      <div v-if="openStreet" class="street-head">
+        <button type="button" class="street-back" aria-label="Back to matches" @click="backToMatches">
+          ‹
+        </button>
+        <span class="street-head-main">
+          <span class="street-head-name">{{ titleCase(openStreet.name) }}</span>
+          <span class="muted street-head-sub">
+            {{ openStreet.city ? titleCase(openStreet.city) + ' · ' : ''
+            }}{{ openStreet.doors.length }} house{{ openStreet.doors.length === 1 ? '' : 's' }}
+          </span>
+        </span>
+      </div>
+
+      <div ref="resultsListEl" class="results-list">
+        <!-- A street, opened: every house on it, low number to high. -->
+        <template v-if="openStreet">
+          <button
+            v-for="a in openStreet.doors"
+            :key="'h-' + a.id"
+            class="result-row"
+            :class="{ 'result-active': a.id === locatedAddressId }"
+            @click="locateAddress(a, { openStreet: false })"
+          >
+            <span class="result-left">
+              <span class="result-name">{{ a.street }}{{ a.unit ? ' ' + a.unit : '' }}</span>
+              <span v-if="wasKnockedToday(a.id)" class="today-badge">Knocked today</span>
+            </span>
+            <OutcomeIndicatorGrid :summary="summaryFor(a.id)" :household-size="householdSize(a)" />
+            <button
+              class="btn btn-sm knock-btn"
+              :style="{ background: knockColorFor(a.id), color: '#fff' }"
+              @click.stop="knock(a.id)"
+            >
+              Knock
+            </button>
+          </button>
+        </template>
+
+        <template v-else>
+          <p v-if="!queryReady" class="muted empty">Type at least 2 characters.</p>
+          <template v-else>
+            <p v-if="!streetHits.length && !personHits.length && !searchingPeople" class="muted empty">
+              No matches.
+            </p>
+
+            <template v-if="streetHits.length">
+              <p class="list-label">Streets</p>
+              <button
+                v-for="s in streetHits"
+                :key="'s-' + s.key"
+                class="result-row street-row"
+                @click="pickStreet(s)"
+              >
+                <span class="result-left">
+                  <span class="result-name">{{ titleCase(s.name) }}</span>
+                  <span class="muted result-sub">
+                    {{ s.city ? titleCase(s.city) + ' · ' : ''
+                    }}{{ s.doors.length }} house{{ s.doors.length === 1 ? '' : 's' }}
+                  </span>
+                </span>
+                <span class="row-chevron" aria-hidden="true">›</span>
+              </button>
+            </template>
+
+            <p v-if="searchingPeople" class="muted empty">Searching people…</p>
+            <template v-else-if="personHits.length">
+              <p class="list-label">People</p>
+              <button
+                v-for="p in personHits"
+                :key="'p-' + p.id"
+                class="result-row"
+                :class="{ 'result-active': p.household_id === locatedAddressId }"
+                @click="openPerson(p)"
+              >
+                <span class="result-left">
+                  <span class="result-name">{{ p.name }}</span>
+                  <span class="muted result-sub">
+                    {{ p.addresses ? `${p.addresses.street}${p.addresses.unit ? ' ' + p.addresses.unit : ''}` : 'No address on file' }}
+                  </span>
+                  <span v-if="wasKnockedToday(p.household_id)" class="today-badge">Knocked today</span>
+                </span>
+                <OutcomeIndicatorGrid
+                  :summary="summaryFor(p.household_id)"
+                  :household-size="householdSize(p.addresses)"
+                />
+                <button
+                  v-if="p.household_id"
+                  class="btn btn-sm knock-btn"
+                  :style="{ background: knockColorFor(p.household_id), color: '#fff' }"
+                  @click.stop="knock(p.household_id!, p.id)"
+                >
+                  Knock
+                </button>
+              </button>
+            </template>
+          </template>
+        </template>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -1821,20 +2114,34 @@ onUnmounted(() => {
   color: var(--located-accent);
 }
 
-.results-list-wrap {
-  position: relative;
+/* --- Results sheet ---------------------------------------------------
+ * A panel, not a scroll region with chrome bolted to it. Rounded top edge
+ * and a lifted shadow so it reads as sitting over the map; the handle at the
+ * top moves it, and the list inside just scrolls. */
+.results-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: -0.25rem;
+  padding: 0 0.55rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: min(calc(var(--radius) * 1.6), 18px);
+  background: var(--surface);
+  box-shadow: 0 -2px 18px rgba(0, 0, 0, 0.1);
 }
 
-/* Sheet-handle shape, because that's what it does. Full width so it's easy to
- * land on with a thumb; the visible bar sits in the middle. */
+/* Sheet-handle shape, because that's what it does: drag it and the sheet
+ * comes up over the map (or back down). Full width so it's easy to land on
+ * with a thumb; the visible bar sits in the middle. */
 .list-grip {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 22px;
-  margin-bottom: 0.15rem;
+  height: 26px;
+  margin: 0 -0.55rem;
   cursor: grab;
   touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .list-grip:active {
@@ -1845,56 +2152,100 @@ onUnmounted(() => {
   width: 44px;
   height: 5px;
   border-radius: 999px;
-  background: var(--scrollbar-color, var(--accent));
-  opacity: 0.55;
+  background: var(--text-muted);
+  opacity: 0.4;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+
+.list-grip:hover .list-grip-bar {
+  opacity: 0.7;
 }
 
 .list-grip:active .list-grip-bar {
   opacity: 1;
+  transform: scaleX(1.15);
 }
 
+/* The open street's header row: back out of it, and what you're looking at. */
+.street-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 0.15rem 0.1rem;
+}
+
+.street-back {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.street-back:hover {
+  border-color: var(--accent);
+}
+
+.street-head-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.street-head-name {
+  font-weight: 800;
+  font-size: 1.02rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.street-head-sub {
+  font-size: 0.8rem;
+}
+
+/* Section labels between the streets and the people. */
+.list-label {
+  margin: 0.15rem 0 0.05rem;
+  padding: 0 0.15rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.list-label:not(:first-child) {
+  margin-top: 0.5rem;
+}
+
+/* Plain, native, swipeable (2026-07-25, user call). `contain` keeps a flick
+ * at the end of the list from scrolling the page out from under the sheet. */
 .results-list {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  max-height: 40svh;
+  max-height: 66svh;
   overflow-y: auto;
-  /* Scrolling here is via touch/wheel plus the custom thumb beside it —
-   * the native scrollbar is hidden so behavior/look is consistent across
-   * browser tab vs installed PWA shell. */
-  scrollbar-width: none;
-  padding-right: max(0.6rem, calc(var(--scrollbar-width, 8px) + 0.6rem));
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
-.results-list::-webkit-scrollbar {
-  display: none;
-}
-
-/* Wide invisible touch target with a visible thumb centered in it — easy to
- * grab with a thumb (finger), sized/colored/shaped per the active appearance
- * scheme (see lib/themes.ts) instead of one fixed look for every scheme. */
-.scrollbar-track {
-  position: absolute;
-  top: 0;
-  right: -0.1rem;
-  bottom: 0;
-  width: max(2.25rem, calc(var(--scrollbar-width, 8px) + 1.25rem));
-  touch-action: none;
-}
-
-.scrollbar-thumb {
-  position: absolute;
-  right: 0.4rem;
-  width: var(--scrollbar-width, 8px);
-  border-radius: var(--scrollbar-radius, 999px);
-  background: var(--scrollbar-color, var(--accent));
-  box-shadow: var(--scrollbar-shadow, none);
-  transition: filter 0.1s ease;
-}
-
-.scrollbar-track:hover .scrollbar-thumb,
-.scrollbar-track:active .scrollbar-thumb {
-  filter: brightness(1.15);
+.row-chevron {
+  flex-shrink: 0;
+  font-size: 1.3rem;
+  line-height: 1;
+  color: var(--text-muted);
 }
 
 .result-row {
