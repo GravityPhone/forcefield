@@ -10,13 +10,12 @@ import { fetchAllRows, supabase } from '@/lib/supabase'
 import { loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
-  TurfAreasLayer,
   readPinMode,
   readTurfShadeMode,
   writePinMode,
   writeTurfShadeMode,
 } from '@/lib/mapLayers'
-import type { DoorPoint, PinMode, TurfShadeMode } from '@/lib/mapLayers'
+import type { PinMode, TurfShadeMode } from '@/lib/mapLayers'
 import { DoorCanvasLayer, PINS_MIN_ZOOM } from '@/lib/doorCanvas'
 import type { CanvasDoor, DoorBadge, DoorPaintState } from '@/lib/doorCanvas'
 import { rangeCovers, walkRanges } from '@/lib/doorPath'
@@ -319,7 +318,6 @@ async function loadDashboard() {
 const mapEl = ref<HTMLElement | null>(null)
 const mapCardEl = ref<HTMLElement | null>(null)
 let map: google.maps.Map | null = null
-let areasLayer: TurfAreasLayer | null = null
 const markersByMember = new Map<string, google.maps.marker.AdvancedMarkerElement>()
 /** Every turf door paints on ONE canvas — the shared renderer Scout and the
  * turf cutter use (src/lib/doorCanvas.ts). The old per-door AdvancedMarkers
@@ -337,7 +335,8 @@ function setPinMode(mode: PinMode) {
   doorLayer?.requestRepaint()
 }
 
-const turfColorById = computed(() => new Map(squadTurfs.value.map((t) => [t.id, t.color])))
+// Turf colors for painting come from anyTurfColorById (built off allTurfList,
+// so "All turf" can ring other crews' doors in their own colors too).
 const turfById = computed(() => new Map(squadTurfs.value.map((t) => [t.id, t])))
 
 let mapInitBusy = false
@@ -360,7 +359,6 @@ async function initMap() {
     mapInitBusy = false
     return
   }
-  areasLayer?.dispose()
   doorLayer?.dispose()
   doorLayer = null
   for (const marker of markersByMember.values()) marker.map = null
@@ -377,7 +375,6 @@ async function initMap() {
     fullscreenControl: false,
     gestureHandling: 'greedy',
   })
-  areasLayer = new TurfAreasLayer(map)
   doorLayer = new DoorCanvasLayer(map, {
     pinMode: () => pinMode.value,
     paintFor: paintForDoor,
@@ -392,10 +389,13 @@ async function initMap() {
 /** Push current turf + member data onto the map (idempotent — safe to call
  * whenever either the map or the data finishes loading first). */
 function applyMapData(refit = false) {
-  if (!map || !areasLayer) return
+  if (!map) return
 
-  void rebuildAreas()
-
+  // Stored pref was "All turf": pull the campaign-wide set once, then repaint
+  // with it. Guarded, so repeated applyMapData calls don't refetch.
+  if (turfShade.value === 'all' && !orgDoorsLoaded) {
+    void ensureOrgDoors().then(() => applyDoorPins())
+  }
   applyDoorPins()
 
   // One avatar marker per member, sitting on their last geocoded knock.
@@ -412,15 +412,26 @@ function applyMapData(refit = false) {
   if (refit) fitToSquad()
 }
 
-// --- Turf shading: "Our turf" (the crew's assignment, shaded strong) or
-// "All turf" (the whole campaign's cut, ours emphasized); tapping the active
-// button turns shading off. Same control as the Scout map but its OWN pref
-// key defaulting to the crew's turf — a plain squad-page load must never
-// pay for the org-wide door download, which is only fetched the first time
-// All turf switches on. ---
+// --- Turf layer: which doors are on the map, and whether they wear their
+// turf's color.
+//
+// Area SHADING is gone (2026-07-24, user call). The shaded polygons could
+// visibly overlap wherever two turfs met — turfAreaFor() marks every ~44m
+// grid cell within 14m of a door and bridges cells along each street run, so
+// turfs facing each other across a street both claim the cells in between,
+// and two translucent fills stacked (the "yellow over blue" patch). Doors
+// themselves can't overlap: addresses.turf_id is ONE column.
+//
+// So the map now does what the turf cutter's OVERVIEW does — every door
+// keeps its knock-status fill and wears its owning turf's color as the outer
+// ring. "Our turf" rings the crew's doors; "All turf" additionally paints
+// every other turf's doors, each in its own turf's color; tapping the active
+// button turns the rings off and leaves plain status pins. Its OWN pref key
+// (defaulting to the crew's turf) because a plain squad-page load must never
+// pay for the org-wide download, which "All turf" fetches on first use. ---
 
 const turfShade = ref<TurfShadeMode>(readTurfShadeMode('squad-turf-shading', 'mine'))
-/** Every turf row, unfiltered — "All turf" shades from these. */
+/** Every turf row, unfiltered — "All turf" paints from these. */
 const allTurfList = ref<TurfLite[]>([])
 
 interface OrgDoor {
@@ -430,92 +441,68 @@ interface OrgDoor {
   lng: number
   turf_id: string
 }
-let orgDoorsByTurf: Map<string, DoorPoint[]> | null = null
+/** Every turf door in the campaign, ours included — only downloaded once
+ * "All turf" is switched on. */
+const orgDoorsById = ref<Map<string, OrgDoor>>(new Map())
+/** Statuses for those doors, kept SEPARATE from statusByDoor: the crew's own
+ * statuses are refetched (and replaced wholesale) on every roster reload and
+ * kept live by the knock feed, so merging this one-shot snapshot into them
+ * would either get clobbered or clobber. paintForDoor falls back to it. */
+const orgStatusByDoor = ref<Map<string, HouseholdLatestKnock>>(new Map())
+let orgDoorsLoaded = false
 let orgDoorsLoading: Promise<void> | null = null
+const orgLoading = ref(false)
 
 async function ensureOrgDoors(): Promise<void> {
-  if (orgDoorsByTurf) return
+  if (orgDoorsLoaded) return
   if (!orgDoorsLoading) {
-    orgDoorsLoading = fetchAllRows<OrgDoor>((from, to) =>
-      supabase
-        .from('addresses')
-        .select('id, street, lat, lng, turf_id')
-        .not('turf_id', 'is', null)
-        .not('lat', 'is', null)
-        .order('id')
-        .range(from, to),
-    )
-      .then((rows) => {
-        const byTurf = new Map<string, DoorPoint[]>()
-        for (const r of rows) {
-          const door = { lat: r.lat, lng: r.lng, street: r.street }
-          const list = byTurf.get(r.turf_id)
-          if (list) list.push(door)
-          else byTurf.set(r.turf_id, [door])
-        }
-        orgDoorsByTurf = byTurf
+    orgLoading.value = true
+    orgDoorsLoading = Promise.all([
+      fetchAllRows<OrgDoor>((from, to) =>
+        supabase
+          .from('addresses')
+          .select('id, street, lat, lng, turf_id')
+          .not('turf_id', 'is', null)
+          .not('lat', 'is', null)
+          .order('id')
+          .range(from, to),
+      ),
+      // Statuses for those doors too — a door painted with no status would
+      // read as "nobody's been here", which is a lie about someone else's
+      // ground. Same one-shot deal the turf cutter makes.
+      fetchAllRows<HouseholdLatestKnock>((from, to) =>
+        supabase.from('household_latest_knock').select('*').order('household_id').range(from, to),
+      ),
+    ])
+      .then(([rows, statuses]) => {
+        const byId = new Map<string, OrgDoor>()
+        for (const r of rows) byId.set(r.id, r)
+        orgDoorsById.value = byId
+        orgStatusByDoor.value = new Map(statuses.map((s) => [s.household_id, s]))
+        orgDoorsLoaded = true
       })
       .catch(() => {
-        // Flaky signal — All turf falls back to the crew's shading below;
-        // the next toggle retries the download.
-        orgDoorsByTurf = null
+        // Flaky signal — the next toggle retries.
+        orgDoorsLoaded = false
       })
       .finally(() => {
         orgDoorsLoading = null
+        orgLoading.value = false
       })
   }
   await orgDoorsLoading
 }
 
-function setTurfShade(mode: 'mine' | 'all') {
+async function setTurfShade(mode: 'mine' | 'all') {
   turfShade.value = turfShade.value === mode ? 'off' : mode
   writeTurfShadeMode('squad-turf-shading', turfShade.value)
-  void rebuildAreas()
+  if (turfShade.value === 'all') await ensureOrgDoors()
+  applyDoorPins()
 }
 
-/** Shade turf areas per the current mode: the squad's turfs from doors
- * already on the page, or every turf from the org-wide set (ours kept
- * emphasized so the crew's ground still stands out among the rest). */
-async function rebuildAreas() {
-  if (!areasLayer) return
-  areasLayer.setVisible(turfShade.value !== 'off')
-  if (turfShade.value === 'off') return
-
-  if (turfShade.value === 'all') {
-    await ensureOrgDoors()
-    // The mode may have flipped while the org doors downloaded.
-    if (turfShade.value !== 'all' || !areasLayer) return
-    if (orgDoorsByTurf) {
-      const byTurf = orgDoorsByTurf
-      void areasLayer.setTurfs(
-        allTurfList.value
-          .filter((t) => byTurf.has(t.id))
-          .map((t) => ({
-            id: t.id,
-            color: t.color,
-            doors: byTurf.get(t.id)!,
-            emphasis: turfIdSet.value.has(t.id),
-          })),
-      )
-      return
-    }
-    // Download failed — fall through to the crew's shading.
-  }
-
-  const doorsByTurf = new Map<string, DoorPoint[]>()
-  for (const d of turfDoors.value.values()) {
-    if (d.lat == null || d.lng == null) continue
-    const door = { lat: d.lat, lng: d.lng, street: d.street }
-    const list = doorsByTurf.get(d.turf_id)
-    if (list) list.push(door)
-    else doorsByTurf.set(d.turf_id, [door])
-  }
-  void areasLayer.setTurfs(
-    squadTurfs.value
-      .filter((t) => doorsByTurf.has(t.id))
-      .map((t) => ({ id: t.id, color: t.color, doors: doorsByTurf.get(t.id)!, emphasis: true })),
-  )
-}
+/** Turf color by id across the WHOLE campaign, not just the crew's turfs —
+ * "All turf" rings other crews' doors in their own colors. */
+const anyTurfColorById = computed(() => new Map(allTurfList.value.map((t) => [t.id, t.color])))
 
 /** Avatar bitmaps for the today-knocker badge, by slug. Images decode async
  * — the canvas repaints when one lands; until then the door shows the
@@ -540,8 +527,9 @@ function badgeImage(slug: string | null | undefined): HTMLImageElement | null {
  * fill  = the door's knock STATUS, the exact colors Scout and the cutter use
  *         (doorStatusOutcome: green only when everyone signed, yellow partly
  *         signed, red closed-no, blue untouched).
- * ring  = the owning turf's own color, so doors from the crew's turf and a
- *         squadmate's directly-assigned turf stay tellable apart.
+ * ring  = the owning turf's own color — ONLY while the turf layer is on.
+ *         This is what replaced the shaded areas: a door can only ever be in
+ *         one turf, so rings can't overlap the way the polygons did.
  * badge = the squadmate who knocked this door TODAY — their animal avatar
  *         rides in the middle of the pin, so the map tells the story of who
  *         covered what as the day unfolds.
@@ -552,14 +540,22 @@ function badgeImage(slug: string | null | undefined): HTMLImageElement | null {
  * avatars sit out — door-picking needs the selection legible, not decorated. */
 function paintForDoor(id: string): DoorPaintState | null {
   const door = turfDoors.value.get(id)
-  if (!door) return null
-  const status = statusByDoor.value.get(id)
+  // Another crew's door, painted only while "All turf" is on. It gets its
+  // turf's ring and its status, but none of the crew's own decoration — no
+  // today-avatar, and it can never join an assignment.
+  const foreign = door ? null : orgDoorsById.value.get(id)
+  if (!door && !foreign) return null
+  const turfId = door ? door.turf_id : foreign!.turf_id
+  const status = statusByDoor.value.get(id) ?? orgStatusByDoor.value.get(id)
   const outcome = doorStatusOutcome(status?.outcome, status?.signed_count, status?.person_count)
   const fill = outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
-  const turfColor = turfColorById.value.get(door.turf_id) ?? null
+  // Rings are the turf layer. Off = plain status pins, nothing else to read.
+  const turfColor =
+    turfShade.value === 'off' ? null : (anyTurfColorById.value.get(turfId) ?? null)
 
   const assignee = assigningMember.value
   if (assignee) {
+    if (!door) return { fill, ring: turfColor, emphasis: false, alpha: 0.35 }
     const picked = assignSelected.value.has(id)
     return {
       fill: picked ? memberColor(assignee) : fill,
@@ -569,6 +565,8 @@ function paintForDoor(id: string): DoorPaintState | null {
       alpha: !picked && poolParentOf(door) === null ? 0.35 : 1,
     }
   }
+
+  if (!door) return { fill, ring: turfColor, emphasis: false }
 
   const knocker = todayKnockerByDoor.value.get(id)
   const member = knocker ? memberById.value.get(knocker.canvasserId) : undefined
@@ -590,15 +588,26 @@ function paintForDoor(id: string): DoorPaintState | null {
   }
 }
 
-/** Push the current turf doors onto the canvas layer. Idempotent — safe to
- * call whenever either the map or the door data finishes loading first. */
+/** Push doors onto the canvas layer: always the crew's own turf, plus — in
+ * "All turf" — every other turf's doors in the campaign. There's no pin cap
+ * to worry about, so "show me the whole cut" is just more doors in the same
+ * one repaint. Idempotent: safe whenever the map or the data lands first. */
 function applyDoorPins() {
   if (!doorLayer) return
   const points: CanvasDoor[] = []
+  const canvasDoor = (id: string, street: string, lat: number, lng: number) => {
+    const n = houseNumber(street)
+    points.push({ id, lat, lng, house: n > 0 ? String(n) : '' })
+  }
   for (const door of turfDoors.value.values()) {
     if (door.lat == null || door.lng == null) continue
-    const n = houseNumber(door.street)
-    points.push({ id: door.id, lat: door.lat, lng: door.lng, house: n > 0 ? String(n) : '' })
+    canvasDoor(door.id, door.street, door.lat, door.lng)
+  }
+  if (turfShade.value === 'all') {
+    for (const d of orgDoorsById.value.values()) {
+      if (turfDoors.value.has(d.id)) continue
+      canvasDoor(d.id, d.street, d.lat, d.lng)
+    }
   }
   doorLayer.setDoors(points)
 }
@@ -824,7 +833,10 @@ watch(
     turfDoors,
     statusByDoor,
     todayKnockerByDoor,
-    turfColorById,
+    anyTurfColorById,
+    turfShade,
+    orgDoorsById,
+    orgStatusByDoor,
     assigningMemberId,
     assignSelected,
     assignAnchorId,
@@ -1180,7 +1192,6 @@ watch(mapEl, (el) => {
 onUnmounted(() => {
   squads.unsubscribeFromRosters()
   if (knockFeed) void supabase.removeChannel(knockFeed)
-  areasLayer?.dispose()
   doorLayer?.dispose()
   doorLayer = null
   for (const marker of markersByMember.values()) marker.map = null
@@ -1351,15 +1362,17 @@ watch(
               </template>
             </svg>
           </button>
-          <!-- Turf shading, same tri-state as the Scout map: the crew's turf,
-               everyone's, or (tap the active button again) none. -->
-          <div class="layer-toggle" role="group" aria-label="Turf shading">
+          <!-- Turf layer, tri-state: ring the crew's doors in their turf
+               colors, ring EVERY turf's doors (the whole campaign's cut), or
+               (tap the active button again) plain status pins. No area
+               shading — see the paintForDoor comment. -->
+          <div class="layer-toggle" role="group" aria-label="Turf layer">
             <button
               type="button"
               class="layer-btn"
               :class="{ active: turfShade === 'mine' }"
               :aria-pressed="turfShade === 'mine'"
-              title="Shade only your squad's turf"
+              title="Ring your squad's doors in their turf colors"
               @click="setTurfShade('mine')"
             >
               Our turf
@@ -1369,10 +1382,11 @@ watch(
               class="layer-btn"
               :class="{ active: turfShade === 'all' }"
               :aria-pressed="turfShade === 'all'"
-              title="Shade every turf in the campaign"
+              :disabled="orgLoading"
+              title="Show every turf in the campaign, each in its own color"
               @click="setTurfShade('all')"
             >
-              All turf
+              {{ orgLoading ? 'Loading…' : 'All turf' }}
             </button>
           </div>
         </div>
