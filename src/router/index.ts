@@ -95,6 +95,11 @@ const router = createRouter({
     // from canvasser basics to campaign-manager tools, open to every role.
     { path: '/tutorial', name: 'tutorial', component: () => import('@/views/TutorialView.vue'), meta: { roles: [] } },
 
+    // "The Campaign" (More, last item, every role) — why the signatures are
+    // being gathered and what to say at the door. Pure briefing copy from
+    // src/lib/campaignContent.ts plus the live progress card.
+    { path: '/campaign', name: 'campaign', component: () => import('@/views/CampaignView.vue'), meta: { roles: [] } },
+
     // Turf cutting/assignment — a campaign-manager job. Squad leaders get
     // the same page as a scoped sub-cutter (sub-turfs inside turf assigned to
     // them). A plain canvasser can reach it too, but only cuts when their

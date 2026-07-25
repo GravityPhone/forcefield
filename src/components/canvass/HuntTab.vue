@@ -102,10 +102,13 @@ const showCity = ref(readMapPref('map-show-city', false))
 function setTurfShade(mode: 'mine' | 'all') {
   turfShade.value = turfShade.value === mode ? 'off' : mode
   writeTurfShadeMode('map-turf-shading', turfShade.value)
-  // Switching ON "My turf" also takes you there — this button replaced the
-  // old "Zoom to my turf" chip. Turning it off doesn't move the map; you're
-  // looking at something.
-  if (turfShade.value === 'mine') focusMyTurf()
+  // Switching ON "My turf" takes you there — this button replaced the old
+  // "Zoom to my turf" chip — but ONLY when none of your turf is on screen
+  // already. Flicking the layer on and off to check something used to yank
+  // the map out to fit your whole assignment every time, which reads as the
+  // map zooming out on you for no reason. Turning it off never moves the
+  // map; you're looking at something.
+  if (turfShade.value === 'mine' && !myTurfInView()) focusMyTurf()
 }
 
 function toggleCity() {
@@ -132,7 +135,6 @@ interface TurfLite {
 }
 const allTurfs = ref<TurfLite[]>([])
 const myTurfIds = ref<Set<string>>(new Set())
-const myTurfs = computed(() => allTurfs.value.filter((t) => myTurfIds.value.has(t.id)))
 /** Everyone in a squad I'm in today — their live knocks plink harder than
  * the rest of the org's, so watching the map reads as "us working". */
 const squadmateIds = ref<Set<string>>(new Set())
@@ -258,10 +260,16 @@ async function fetchTurfs() {
   }
 }
 
-const myTurfColorById = computed(() => new Map(myTurfs.value.map((t) => [t.id, t.color])))
-/** Every turf's color, not just yours — "All turf" rings other crews' doors
- * in their own colors. No extra fetch: fetchTurfs already pulls every row. */
+/** Every turf's color — "All turf" paints every crew's doors in their own
+ * colors. No extra fetch: fetchTurfs already pulls every row. */
 const allTurfColorById = computed(() => new Map(allTurfs.value.map((t) => [t.id, t.color])))
+
+/** Is this door on turf that's mine today? "My turf" filters the map down to
+ * exactly these. */
+function isMyDoor(addressId: string): boolean {
+  const turfId = turfByAddress.value.get(addressId)
+  return !!turfId && myTurfIds.value.has(turfId)
+}
 
 async function fetchKnockedToday(): Promise<Set<string>> {
   const rows = await fetchAllRows<{ household_id: string }>((from, to) =>
@@ -286,35 +294,37 @@ function applyStatusAndSummary(
   if (todayData) knockedToday.value = todayData
 }
 
-/** Paint state for one door on the shared canvas layer. Scout has TWO
- * readings and the turf layer button is the switch between them:
+/** Paint state for one door on the shared canvas layer. The turf layer is a
+ * three-way switch over what the map is even showing (2026-07-24, user call):
  *
- * TURF LAYER OFF — the progress reading. fill = the door's effective knock
- *   status (doorStatusOutcome, blue when nobody's been yet), plus the
- *   partly-signed green-with-a-yellow-band so "one of the three signed"
- *   doesn't look like a door where nobody has signed at all.
+ * OFF — every house in the county, painted by knock status (doorStatusOutcome,
+ *   blue when nobody's been yet), plus the partly-signed green-with-a-
+ *   yellow-band so "one of the three signed" doesn't look like a door where
+ *   nobody has signed at all.
  *
- * TURF LAYER ON — the ground reading. Every door in a turf the layer covers
- *   goes SOLID in that turf's color, inside and ring, so a turf reads as one
- *   block of color and you can see where it ends at a glance. Status colors
- *   step aside for as long as the layer is on and come straight back when
- *   it's off — that's the whole point of it being a toggle. Doors the layer
- *   doesn't cover (someone else's turf in "My turf" mode, unassigned ground
- *   in either) keep their status colors, which is what makes your own turf
- *   pop out of the map.
+ * MY TURF — a FILTER, not a coloring: doors outside your assignment aren't
+ *   painted at all (paintFor null = invisible AND untappable), so what's left
+ *   on screen is exactly your ground. The doors that stay keep their STATUS
+ *   colors — flooding your own turf with one flat color would throw away the
+ *   progress reading precisely where you need it most. The located door is
+ *   the one exception to the filter: a search hit or the Talk handoff must
+ *   never vanish because it sits on somebody else's turf.
  *
- * Both readings keep the two navigation bands, because they answer "where am
+ * ALL TURF — the ground reading: every door goes solid in its own turf's
+ *   color, inside and ring, so the cut lines between crews are visible at a
+ *   glance. Unassigned doors keep status colors, which is what makes the
+ *   claimed ground pop. Status colors come straight back when the layer goes
+ *   off — that's the whole point of it being a toggle.
+ *
+ * Every reading keeps the two navigation bands, because they answer "where am
  * I" rather than "how is it going":
  *   halo = somebody in the org already knocked here TODAY (don't
  *          double-knock) — the one band that survives at tiny-dot zooms.
  *   ring = near-black on the LOCATED door: whatever you just tapped has to
- *          be unmistakable against a screen of many.
- *
- * Never returns null: unlike the turf cutter (which paints only the street
- * being worked), Scout shows every geocoded door, so every door is also
- * tappable. */
-function paintForDoor(id: string): DoorPaintState {
+ *          be unmistakable against a screen of many. */
+function paintForDoor(id: string): DoorPaintState | null {
   const isLocated = id === locatedAddressId.value
+  if (turfShade.value === 'mine' && !isLocated && !isMyDoor(id)) return null
   const halo = knockedToday.value.has(id) ? TODAY_HALO : null
   const turfColor = turfColorFor(id)
   if (turfColor) {
@@ -341,15 +351,14 @@ function paintForDoor(id: string): DoorPaintState {
 }
 
 /** The turf color this door should wear, or null to leave it on status
- * colors: your own turf's color in "My turf", every turf's own color in
- * "All turf", nothing when the layer is off. Scout already loads every
- * address (with its turf_id) and every turf row, so "All turf" needs no
+ * colors. Only "All turf" recolors doors — "My turf" hides other people's
+ * ground instead of tinting your own (see paintForDoor). Scout already loads
+ * every address (with its turf_id) and every turf row, so "All turf" needs no
  * extra fetch — it's the same repaint, different colors. */
 function turfColorFor(addressId: string): string | null {
-  if (turfShade.value === 'off') return null
+  if (turfShade.value !== 'all') return null
   const turfId = turfByAddress.value.get(addressId)
   if (!turfId) return null
-  if (turfShade.value === 'mine') return myTurfColorById.value.get(turfId) ?? null
   return allTurfColorById.value.get(turfId) ?? null
 }
 
@@ -369,7 +378,7 @@ const TODAY_HALO = '#111111'
 // only in-place mutations are in the realtime feed below, which repaints
 // explicitly.
 watch(
-  [statusByHousehold, knockedToday, myTurfColorById, allTurfColorById, locatedAddressId, turfShade],
+  [statusByHousehold, knockedToday, myTurfIds, allTurfColorById, locatedAddressId, turfShade],
   () => doorLayer?.requestRepaint(),
 )
 
@@ -612,6 +621,20 @@ function myTurfClusters(): { lat: number; lng: number }[][] {
     clusters.push(doors)
   }
   return clusters.sort((a, b) => b.length - a.length)
+}
+
+/** Is any door of mine inside the current viewport? If so the canvasser is
+ * already looking at their ground and the map must stay exactly where it is
+ * — see setTurfShade. */
+function myTurfInView(): boolean {
+  const bounds = map?.getBounds()
+  if (!bounds) return false
+  for (const [addressId, door] of doorInfoByAddress) {
+    if (isMyDoor(addressId) && bounds.contains(new google.maps.LatLng(door.lat, door.lng))) {
+      return true
+    }
+  }
+  return false
 }
 
 /** Frame your turf: all of it when it's one patch of ground, otherwise the
@@ -1071,16 +1094,17 @@ onUnmounted(() => {
           123
         </button>
       </div>
-      <!-- Map layers: the turf layer (ring your doors / every turf's doors
-           in its own color — tap the active one for plain status pins) and
-           city/village limits. Below the pin-style toggle, same chrome. -->
+      <!-- Map layers: the turf layer (show only your doors / color every
+           turf's doors in its own color — tap the active one for every house
+           on plain status pins) and city/village limits. Below the pin-style
+           toggle, same chrome. -->
       <div class="layer-toggle" role="group" aria-label="Map layers">
         <button
           type="button"
           class="layer-btn"
           :class="{ active: turfShade === 'mine' }"
           :aria-pressed="turfShade === 'mine'"
-          title="Ring your turf's doors in its color"
+          title="Show only your turf's doors"
           @click="setTurfShade('mine')"
         >
           My turf
@@ -1090,7 +1114,7 @@ onUnmounted(() => {
           class="layer-btn"
           :class="{ active: turfShade === 'all' }"
           :aria-pressed="turfShade === 'all'"
-          title="Ring every turf's doors in its own color"
+          title="Color every turf's doors in its own color"
           @click="setTurfShade('all')"
         >
           All turf

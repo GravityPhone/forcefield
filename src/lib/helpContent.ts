@@ -57,11 +57,14 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Seeing the turf',
         body:
-          'The My turf / All turf buttons on the map flip it from progress colors to turf ' +
-          'colors: every door in a turf goes solid in that turf’s color, so you can see ' +
-          'exactly where the ground is divided. Tap the lit button to go back to status ' +
-          'colors. Turning on My turf also flies you to your assignment — to the biggest ' +
-          'part of it, if your turf comes in pieces spread across the county.',
+          'My turf hides every house that isn’t yours, so what’s left on the map is exactly ' +
+          'your assignment — still in its progress colors, so you can see how the day is ' +
+          'going. All turf shows every house and paints each one in its turf’s color, so ' +
+          'you can see where the ground is divided between crews. Tap the lit button to go ' +
+          'back to every house on plain status colors. Turning on My turf also flies you to ' +
+          'your assignment — the biggest part of it, if your turf comes in pieces spread ' +
+          'across the county — unless some of your ground is already on screen, in which ' +
+          'case the map stays put.',
       },
       {
         heading: 'Spotty signal',

@@ -90,9 +90,20 @@ const moreItems = computed<NavItem[]>(() => {
   // The guided tour — every role gets it (it's a demo; the deck covers all
   // roles and says so).
   const tutorial: NavItem = { to: '/tutorial', label: 'Tutorial', icon: 'book' }
+  // Why we're knocking, and what to say — the same briefing for every role,
+  // deliberately LAST in every list: it's read once and referred back to, not
+  // navigated to daily.
+  const campaign: NavItem = { to: '/campaign', label: 'The Campaign', icon: 'flag' }
   if (auth.profile.role === 'admin') {
     // Admins have no team — their Roster opens with a team picker.
-    return [{ to: '/admin/analytics', label: 'Analytics', icon: 'chart' }, roster, tutorial, aboutMe, appearance]
+    return [
+      { to: '/admin/analytics', label: 'Analytics', icon: 'chart' },
+      roster,
+      tutorial,
+      aboutMe,
+      appearance,
+      campaign,
+    ]
   }
   if (auth.profile.role === 'campaign_manager') {
     return [
@@ -107,10 +118,11 @@ const moreItems = computed<NavItem[]>(() => {
       aboutMe,
       appearance,
       { to: '/admin/settings', label: 'Settings', icon: 'sliders' },
+      campaign,
     ]
   }
   // Squad leaders split turf right on the Squad page now — no Turf link.
-  return [myKnocks, roster, tutorial, aboutMe, appearance]
+  return [myKnocks, roster, tutorial, aboutMe, appearance, campaign]
 })
 
 const moreOpen = ref(false)
@@ -196,6 +208,7 @@ const ICONS = {
   chart: '<path d="M4 4v16h16"/><path d="M8 16v-5M12 16V7M16 16v-8"/>',
   sliders: '<path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>',
   book: '<path d="M12 6.5C10.8 4.9 8.9 4 6.5 4H4v14h2.5c2.4 0 4.3.9 5.5 2.5 1.2-1.6 3.1-2.5 5.5-2.5H20V4h-2.5c-2.4 0-4.3.9-5.5 2.5z"/><path d="M12 6.5v14"/>',
+  flag: '<path d="M6 21V4"/><path d="M6 5h11l-2.2 3.5L17 12H6z"/>',
   more: '<circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>',
   logout: '<path d="M14 4h-8a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h8M10 12h11M18 8.5L21.5 12 18 15.5"/>',
 } as const
@@ -308,6 +321,7 @@ onUnmounted(() => {
         <router-link to="/profile">About me</router-link>
         <router-link to="/appearance">Appearance</router-link>
         <router-link to="/tutorial">Tutorial</router-link>
+        <router-link to="/campaign">The Campaign</router-link>
       </nav>
       <span v-if="canScrollNavLeft" class="nav-scroll-hint nav-scroll-hint-left" aria-hidden="true">‹</span>
       <span v-if="canScrollNavRight" class="nav-scroll-hint nav-scroll-hint-right" aria-hidden="true">›</span>
