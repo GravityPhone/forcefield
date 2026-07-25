@@ -137,7 +137,21 @@ const orderedMembers = computed<ChatProfile[]>(() => {
 })
 
 const doorsTotal = computed(() => turfDoors.value.size)
-const doorsKnocked = computed(() => knockedDoors.value.size)
+/** How far along the crew is — TODAY by default (2026-07-25, user call). A
+ * squad lasts one day and its turf is meant to be walked in one, so the
+ * number that answers "how are we doing" has to reset at midnight the way the
+ * crew does; an all-time count only ever climbs and would read as progress
+ * nobody made this morning. `todayKnockerByDoor` is already the day's
+ * distinct turf doors (any knocker, kept live by the realtime feed), so
+ * today's number costs nothing extra. "All time" stays one tap away — it
+ * answers the different question of whether any door has never been reached.
+ * (The rundown below is always the door's CURRENT state, which is cumulative
+ * by nature — that's what its colors mean everywhere else in the app.) */
+const progressScope = ref<'today' | 'all'>('today')
+const doorsKnockedToday = computed(() => todayKnockerByDoor.value.size)
+const doorsKnocked = computed(() =>
+  progressScope.value === 'today' ? doorsKnockedToday.value : knockedDoors.value.size,
+)
 
 // Splitting the squad's turf among members is a leader's / manager's job —
 // with two ways it can fall to the canvassers instead, both mirrored in the
@@ -1983,62 +1997,8 @@ watch(
         </div>
       </div>
 
-      <!-- Turf progress -->
-      <div class="card progress-card">
-        <template v-if="squadTurfs.length">
-          <div class="progress-row">
-            <strong>Our turf</strong>
-            <span class="progress-count">
-              <strong>{{ doorsKnocked }}</strong> of {{ doorsTotal }} doors knocked
-              <span class="muted">({{ progressPct }}%)</span>
-            </span>
-          </div>
-          <div class="progress-track" role="progressbar" :aria-valuenow="doorsKnocked" :aria-valuemin="0" :aria-valuemax="doorsTotal">
-            <div class="progress-fill" :style="{ width: progressPct + '%' }"></div>
-          </div>
-          <div class="turf-chips">
-            <button v-for="t in squadTurfs" :key="t.id" class="turf-chip" @click="focusTurf(t.id)">
-              <span class="turf-dot" :style="{ background: t.color }"></span>{{ t.name }}
-            </button>
-          </div>
-
-          <!-- Our doors: the same colors the map paints, counted out. The bar
-               above says how far along the crew is; this says how it's
-               going. Closed by default — it's a check-in, not the point of
-               the page. -->
-          <button
-            type="button"
-            class="rundown-toggle"
-            :aria-expanded="rundownOpen"
-            @click="rundownOpen = !rundownOpen"
-          >
-            <span class="rundown-caret" :class="{ open: rundownOpen }" aria-hidden="true">›</span>
-            Our doors
-          </button>
-          <ul v-if="rundownOpen" class="rundown">
-            <li v-for="r in doorRundown" :key="r.key" class="rundown-row">
-              <span
-                class="rundown-dot"
-                :style="{ background: r.color, boxShadow: r.band ? `inset 0 0 0 3px ${r.band}` : undefined }"
-                aria-hidden="true"
-              ></span>
-              <span class="rundown-label">{{ r.label }}</span>
-              <span class="rundown-track" aria-hidden="true">
-                <span class="rundown-fill" :style="{ width: rundownPct(r.count) + '%', background: r.color }"></span>
-              </span>
-              <span class="rundown-count">{{ r.count }}</span>
-            </li>
-          </ul>
-        </template>
-        <p v-else-if="!dashboardLoading" class="muted no-turf">
-          No turf assigned to your squad yet today — your campaign manager sends turf out to
-          each day's crews. The map still follows everyone's knocks meanwhile.
-        </p>
-
-        <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>
-      </div>
-
-      <!-- Map -->
+      <!-- Map first (2026-07-25, user call): the ground the crew is standing
+           on is what the page is for. The numbers read under it. -->
       <div ref="mapCardEl" class="card map-card">
         <div
           v-if="assigningMember"
@@ -2046,11 +2006,12 @@ watch(
           :style="{ '--assign-color': memberColor(assigningMember) }"
         >
           <span class="assign-dot" aria-hidden="true"></span>
-          <!-- One line, and only the two things that change: who, and how
-               many (2026-07-25, user call — this was a paragraph of
+          <!-- One line, and only the things that change: who, how many, and
+               what the last sweep did (2026-07-25 — this was a paragraph of
                instructions, which is a lot of screen to read past every
-               time). The live hint for whichever tool is armed rides on the
-               map bar, where the tool is. -->
+               time). This is the ONLY Save on screen; the black bar that
+               used to sit on the map is fullscreen-only now, where this one
+               isn't visible. -->
           <p class="assign-text">
             <template v-if="assigningMemberId === auth.profile?.id && claimSelfOnly">
               Claiming for <strong>you</strong>
@@ -2059,6 +2020,13 @@ watch(
               Assigning to <strong>{{ memberName(assigningMember) }}</strong>
             </template>
             · <strong class="assign-count">{{ assignSelected.size }}</strong> doors
+            <span v-if="sweepFlash" class="assign-flash">· {{ sweepFlash }}</span>
+            <span v-else-if="lassoActive" class="assign-flash">
+              · {{ sweepMode === 'erase' ? 'Loop doors to take them back out' : 'Loop doors to add them' }}
+            </span>
+            <span v-else-if="streetTapActive" class="assign-flash">
+              · {{ sweepMode === 'erase' ? 'Tap a door to drop its street' : 'Tap a door to take its street' }}
+            </span>
           </p>
           <div class="assign-actions">
             <button class="btn btn-sm btn-primary" :disabled="assignSaving" @click="saveAssignment">
@@ -2092,15 +2060,15 @@ watch(
           >
             <canvas ref="lassoCanvasEl" class="lasso-canvas"></canvas>
           </div>
-          <!-- The whole assign flow lives ON the map, not only in the bar
-               above it: sweeping is exactly what people do in fullscreen,
-               where the page chrome — the count, and Save — isn't on screen
-               at all. Sits above the lasso surface so it stays reachable
-               while a tool is armed. The sweep tools ride in it too
-               (2026-07-25): they used to sit in the top-right corner under
-               the fullscreen button, where they went unfound. -->
+          <!-- FULLSCREEN ONLY (2026-07-25, user call — "two places to save
+               it, and that's clunky"). The page's assign bar sits right
+               above the map and is the one Save everywhere else; in
+               fullscreen it isn't on screen at all, and sweeping is exactly
+               what people do in fullscreen. So the two never show at once.
+               Above the lasso surface, so it stays reachable while a tool is
+               armed. -->
           <div
-            v-if="assigningMember"
+            v-if="assigningMember && isFullscreen"
             class="assign-mapbar"
             :style="{
               '--assign-color': memberColor(assigningMember),
@@ -2302,6 +2270,86 @@ watch(
             Our doors
           </button>
         </div>
+      </div>
+
+      <!-- Turf progress, under the map -->
+      <div class="card progress-card">
+        <template v-if="squadTurfs.length">
+          <div class="progress-row">
+            <strong>Our turf</strong>
+            <span class="progress-count">
+              <strong>{{ doorsKnocked }}</strong> of {{ doorsTotal }} doors
+              <template v-if="progressScope === 'today'">knocked today</template>
+              <template v-else>ever knocked</template>
+              <span class="muted">({{ progressPct }}%)</span>
+            </span>
+          </div>
+          <div class="progress-track" role="progressbar" :aria-valuenow="doorsKnocked" :aria-valuemin="0" :aria-valuemax="doorsTotal">
+            <div class="progress-fill" :style="{ width: progressPct + '%' }"></div>
+          </div>
+          <!-- The turf is a day's work, so the bar is today's work. "All
+               time" answers the other question — has any door never been
+               reached at all. -->
+          <div class="scope-toggle" role="group" aria-label="Count doors">
+            <button
+              type="button"
+              class="scope-btn"
+              :class="{ active: progressScope === 'today' }"
+              :aria-pressed="progressScope === 'today'"
+              @click="progressScope = 'today'"
+            >
+              Today
+            </button>
+            <button
+              type="button"
+              class="scope-btn"
+              :class="{ active: progressScope === 'all' }"
+              :aria-pressed="progressScope === 'all'"
+              @click="progressScope = 'all'"
+            >
+              All time
+            </button>
+          </div>
+          <div class="turf-chips">
+            <button v-for="t in squadTurfs" :key="t.id" class="turf-chip" @click="focusTurf(t.id)">
+              <span class="turf-dot" :style="{ background: t.color }"></span>{{ t.name }}
+            </button>
+          </div>
+
+          <!-- Our doors: the same colors the map paints, counted out. The bar
+               above says how far along the crew is; this says how it's
+               going. Closed by default — it's a check-in, not the point of
+               the page. -->
+          <button
+            type="button"
+            class="rundown-toggle"
+            :aria-expanded="rundownOpen"
+            @click="rundownOpen = !rundownOpen"
+          >
+            <span class="rundown-caret" :class="{ open: rundownOpen }" aria-hidden="true">›</span>
+            Our doors
+          </button>
+          <ul v-if="rundownOpen" class="rundown">
+            <li v-for="r in doorRundown" :key="r.key" class="rundown-row">
+              <span
+                class="rundown-dot"
+                :style="{ background: r.color, boxShadow: r.band ? `inset 0 0 0 3px ${r.band}` : undefined }"
+                aria-hidden="true"
+              ></span>
+              <span class="rundown-label">{{ r.label }}</span>
+              <span class="rundown-track" aria-hidden="true">
+                <span class="rundown-fill" :style="{ width: rundownPct(r.count) + '%', background: r.color }"></span>
+              </span>
+              <span class="rundown-count">{{ r.count }}</span>
+            </li>
+          </ul>
+        </template>
+        <p v-else-if="!dashboardLoading" class="muted no-turf">
+          No turf assigned to your squad yet today — your campaign manager sends turf out to
+          each day's crews. The map still follows everyone's knocks meanwhile.
+        </p>
+
+        <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>
       </div>
 
       <!-- Member cards: ONE tap target each (2026-07-24, user call). Tapping
@@ -2629,6 +2677,35 @@ watch(
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+.scope-toggle {
+  align-self: flex-start;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.scope-btn {
+  padding: 0.2rem 0.6rem;
+  border: none;
+  background: var(--surface);
+  color: var(--muted, inherit);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.scope-btn.active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.assign-flash {
+  font-weight: 600;
+  opacity: 0.85;
 }
 
 .rundown-toggle {
