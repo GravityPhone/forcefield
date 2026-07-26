@@ -130,6 +130,35 @@ async function saveGoal(c: Campaign) {
   delete goalDrafts.value[c.id]
 }
 
+// Filing-deadline editor, same shape as the goal above. The two together are
+// what the pace math needs (lib/pace.ts); either one alone shows no pace.
+const deadlineDrafts = ref<Record<string, string>>({})
+const deadlineSaving = ref<string | null>(null)
+
+function deadlineDraftFor(c: Campaign): string {
+  return deadlineDrafts.value[c.id] ?? (c.deadline ?? '')
+}
+
+async function saveDeadline(c: Campaign) {
+  // A date input hands back '' or YYYY-MM-DD, so there's nothing to parse.
+  // Past dates are allowed on purpose — a finished campaign should be able to
+  // say so rather than be blocked from recording what happened.
+  const deadline = deadlineDraftFor(c).trim() || null
+  deadlineSaving.value = c.id
+  error.value = ''
+  const { error: err } = await supabase
+    .from('campaigns')
+    .update({ deadline })
+    .eq('id', c.id)
+  deadlineSaving.value = null
+  if (err) {
+    error.value = 'Could not save the deadline — try again.'
+    return
+  }
+  c.deadline = deadline
+  delete deadlineDrafts.value[c.id]
+}
+
 function campaignName(id: string | null): string {
   return campaigns.value.find((c) => c.id === id)?.name ?? '(no campaign)'
 }
@@ -204,6 +233,23 @@ const campaignOptions = computed(() => [
                   @click="saveGoal(c)"
                 >
                   {{ goalSaving === c.id ? 'Saving…' : 'Save' }}
+                </button>
+              </div>
+              <div class="goal-row">
+                <label :for="`deadline-${c.id}`" class="goal-label">Filing deadline</label>
+                <input
+                  :id="`deadline-${c.id}`"
+                  class="goal-input"
+                  type="date"
+                  :value="deadlineDraftFor(c)"
+                  @input="deadlineDrafts[c.id] = ($event.target as HTMLInputElement).value"
+                />
+                <button
+                  class="btn btn-sm"
+                  :disabled="deadlineSaving === c.id || deadlineDraftFor(c) === (c.deadline ?? '')"
+                  @click="saveDeadline(c)"
+                >
+                  {{ deadlineSaving === c.id ? 'Saving…' : 'Save' }}
                 </button>
               </div>
             </div>

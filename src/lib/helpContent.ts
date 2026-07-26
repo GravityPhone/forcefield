@@ -190,6 +190,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     title: 'Team feed',
     sections: [
       {
+        heading: 'Pace',
+        target: 'campaign-pace',
+        body: 'Days left to the filing deadline, and signatures a day needed from here.\nAhead or behind measures the last 7 days against that rate.',
+      },
+      {
         target: 'feed-list',
         body: 'Today’s activity across the whole operation, newest first. Resets each morning.\nTap a name for that person’s profile.',
       },
@@ -212,6 +217,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
   '/leaderboard': {
     title: 'Leaderboard',
     sections: [
+      {
+        heading: 'Pace',
+        target: 'campaign-pace',
+        body: 'Days left to the filing deadline, and signatures a day needed from here.\n"Now" is the last 7 days averaged — what Ahead and Behind compare against.\nGoal and deadline are set on Campaigns & Teams.',
+      },
       {
         target: 'board-canvassers',
         body: 'Standings since midnight. Canvassers and squads rank separately.\nYour own row is highlighted. The chip beside each heading gives your place and jumps to it.',

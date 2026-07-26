@@ -2,11 +2,13 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import AppShell from '@/components/AppShell.vue'
+import CampaignPace from '@/components/CampaignPace.vue'
 import { fadeUp } from '@/lib/motion'
 import { avatarUrl } from '@/lib/avatars'
 import { startOfLocalDayISO } from '@/lib/day'
 import { memberColor } from '@/lib/memberColors'
 import { OUTCOME_HEX, OUTCOME_SHORT } from '@/lib/outcomes'
+import { loadCampaignPace, type LoadedPace } from '@/lib/pace'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { DEFAULT_FEED_SETTINGS } from '@/types'
@@ -85,6 +87,10 @@ const settings = ref<ActivityFeedSettings>({ ...DEFAULT_FEED_SETTINGS })
 const items = ref<FeedItem[]>([])
 const loading = ref(true)
 const loadError = ref(false)
+/** Campaign pace above the day's rows. Loaded once per visit, deliberately
+ *  not refreshed on live knocks: one more signature never visibly moves a
+ *  per-day rate, and the feed is already the busiest realtime screen here. */
+const pace = ref<LoadedPace | null>(null)
 
 // --- Feed options (campaign managers, right here on the feed — the knobs
 // moved off the dashboard 2026-07-21). Checkbox edits bind straight into
@@ -392,6 +398,9 @@ async function onLiveKnock(raw: { id: string; occurred_at: string }) {
 
 onMounted(() => {
   void load()
+  // Its own trip, unawaited — the day's rows are what the page is for and
+  // shouldn't wait on the campaign's arithmetic.
+  void loadCampaignPace().then((p) => (pace.value = p))
   channel = supabase
     .channel('activity-feed')
     .on(
@@ -445,6 +454,18 @@ function whoIdOf(item: FeedItem): string | null {
           Today so far: <strong>{{ doorsToday }}</strong> door{{ doorsToday === 1 ? '' : 's' }} ·
           <strong>{{ sigsToday }}</strong> signature{{ sigsToday === 1 ? '' : 's' }}
         </span>
+      </div>
+
+      <!-- …and whether the day is adding up to the deadline. Renders only
+           once the campaign has both a goal and a filing date. -->
+      <div v-if="pace" class="card pace-card">
+        <CampaignPace
+          compact
+          :signatures="pace.signatures"
+          :goal="pace.goal"
+          :deadline="pace.deadline"
+          :signatures7d="pace.signatures7d"
+        />
       </div>
 
       <!-- Manager knobs live on the feed itself, not the dashboard. -->
@@ -604,6 +625,12 @@ function whoIdOf(item: FeedItem): string | null {
 
 .totals-text {
   font-size: 0.95rem;
+}
+
+/* Sits right under the day's two numbers, tighter than a full card — it's a
+   line of context, not a section. */
+.pace-card {
+  padding: 0.6rem 0.9rem;
 }
 
 .live-dot {

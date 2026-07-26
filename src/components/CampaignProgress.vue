@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
+import CampaignPace from '@/components/CampaignPace.vue'
 import { supabase } from '@/lib/supabase'
+import { fetchDeadline } from '@/lib/pace'
 import type { Campaign } from '@/types'
 
 /** Whole-campaign totals. Everyone sees their own campaign; org admins get
@@ -23,6 +25,10 @@ const stats = ref<CampaignStats | null>(null)
 const campaigns = ref<Campaign[]>([])
 const selectedId = ref<string>('')
 const loading = ref(true)
+/** Read off the campaigns row rather than get_campaign_stats — see
+ *  lib/pace.ts. Null until it lands, which just holds the pace line back a
+ *  beat; the goal bar doesn't wait on it. */
+const deadline = ref<string | null>(null)
 
 const signRate = computed(() => {
   if (!stats.value || !stats.value.doors) return null
@@ -40,11 +46,25 @@ const campaignOptions = computed(() =>
   campaigns.value.map((c) => ({ value: c.id, label: c.name })),
 )
 
+/** Bumped per load so a slow deadline lookup can't land on a campaign the
+ *  admin has already switched away from. */
+let loadSeq = 0
+
 async function loadStats(cid: string | null) {
+  const seq = ++loadSeq
   loading.value = true
+  deadline.value = null
   const { data } = await supabase.rpc('get_campaign_stats', { cid })
+  if (seq !== loadSeq) return
   loading.value = false
   const row = (data as CampaignStats[] | null)?.[0]
+  // Which campaign the RPC actually resolved to — not `cid`, which is null
+  // for everyone but an admin switching.
+  if (row) {
+    void fetchDeadline(row.campaign_id).then((d) => {
+      if (seq === loadSeq) deadline.value = d
+    })
+  }
   stats.value = row
     ? {
         ...row,
@@ -117,6 +137,14 @@ onMounted(async () => {
         >
           <div class="goal-fill" :style="{ width: `${goalPct}%` }" />
         </div>
+        <!-- What the bar can't say: whether that rate makes the date. -->
+        <CampaignPace
+          class="goal-pace"
+          :signatures="stats.signatures"
+          :goal="stats.signature_goal"
+          :deadline="deadline"
+          :signatures7d="stats.signatures_7d"
+        />
       </div>
       <div class="tiles">
         <div class="tile">
@@ -199,6 +227,10 @@ onMounted(async () => {
   border-radius: 999px;
   background: var(--accent);
   transition: width 0.4s ease;
+}
+
+.goal-pace {
+  margin-top: 0.5rem;
 }
 
 .tiles {

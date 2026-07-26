@@ -128,6 +128,9 @@ export interface Campaign {
   is_active: boolean
   /** Target signature count (petition qualification threshold); null = no goal. */
   signature_goal: number | null
+  /** Filing deadline as YYYY-MM-DD — the last day signatures can be turned
+   * in. With the goal it becomes a rate (lib/pace.ts); null = no pace shown. */
+  deadline: string | null
   created_by: string | null
   created_at: string
 }
