@@ -5,6 +5,7 @@ import AppShell from '@/components/AppShell.vue'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { useTalkStore } from '@/stores/talk'
+import KnockEditSheet, { type EditableKnock } from '@/components/knocks/KnockEditSheet.vue'
 import { OUTCOMES, OUTCOME_HEX, OUTCOME_LABELS } from '@/lib/outcomes'
 import type { KnockOutcome } from '@/types'
 
@@ -17,6 +18,7 @@ interface VisitRow {
   id: string
   outcome: KnockOutcome
   occurred_at: string
+  person_id: string | null
   /** The door (address id) — null on legacy rows; those rows just don't tap. */
   household_id: string | null
   person: { name: string } | null
@@ -41,7 +43,7 @@ onMounted(async () => {
   if (!me) return
   const { data } = await supabase
     .from('knock_logs')
-    .select('id, outcome, occurred_at, household_id, person:persons(name), addresses(street, unit, city)')
+    .select('id, outcome, occurred_at, household_id, person_id, person:persons(name), addresses(street, unit, city)')
     .eq('canvasser_id', me)
     .order('occurred_at', { ascending: false })
     .limit(FETCH_LIMIT)
@@ -130,6 +132,44 @@ async function openDoor(v: VisitRow) {
   await talk.loadAddress(v.household_id)
   await router.push({ name: 'canvass' })
 }
+
+// --- Fixing a knock you already logged ---
+//
+// Undo at the door only reaches the knock still under your thumb. These are
+// your own rows (the whole page is), and RLS agrees, so a wrong outcome or a
+// wrong name an hour later is repairable instead of permanent.
+
+const editing = ref<EditableKnock | null>(null)
+const editOpen = ref(false)
+
+function startEdit(v: VisitRow) {
+  editing.value = {
+    id: v.id,
+    outcome: v.outcome,
+    occurred_at: v.occurred_at,
+    household_id: v.household_id,
+    person_id: v.person_id,
+    doorLabel: doorLine(v),
+  }
+  editOpen.value = true
+}
+
+function onSaved(next: {
+  id: string
+  outcome: KnockOutcome
+  person_id: string | null
+  personName: string | null
+}) {
+  const row = visits.value.find((v) => v.id === next.id)
+  if (!row) return
+  row.outcome = next.outcome
+  row.person_id = next.person_id
+  row.person = next.personName ? { name: next.personName } : null
+}
+
+function onDeleted(id: string) {
+  visits.value = visits.value.filter((v) => v.id !== id)
+}
 </script>
 
 <template>
@@ -183,10 +223,12 @@ async function openDoor(v: VisitRow) {
             </span>
           </h3>
           <div class="card visit-list" data-help="knocks-list">
+            <!-- Row and Fix are siblings, not nested: the row is itself a
+                 <button> when the door is tappable, and a button inside a
+                 button is invalid markup that browsers silently unnest. -->
+            <div v-for="v in g.rows" :key="v.id" class="visit-line">
             <component
               :is="v.household_id ? 'button' : 'div'"
-              v-for="v in g.rows"
-              :key="v.id"
               class="visit-row"
               :class="{ tappable: !!v.household_id }"
               @click="openDoor(v)"
@@ -204,6 +246,15 @@ async function openDoor(v: VisitRow) {
               </span>
               <span v-if="v.household_id" class="chevron" aria-hidden="true">›</span>
             </component>
+            <button
+              class="fix-btn"
+              type="button"
+              :aria-label="`Fix this knock at ${doorLine(v)}`"
+              @click="startEdit(v)"
+            >
+              Fix
+            </button>
+            </div>
           </div>
         </section>
 
@@ -212,6 +263,13 @@ async function openDoor(v: VisitRow) {
         </p>
       </template>
     </div>
+
+    <KnockEditSheet
+      v-model:open="editOpen"
+      :knock="editing"
+      @saved="onSaved"
+      @deleted="onDeleted"
+    />
   </AppShell>
 </template>
 
@@ -334,8 +392,39 @@ async function openDoor(v: VisitRow) {
   background: var(--surface-2);
 }
 
-.visit-row + .visit-row {
+/* The row and its Fix button share a line; the divider moved out to the
+   wrapper with them. */
+.visit-line {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.visit-line + .visit-line {
   border-top: 1px solid var(--border);
+}
+
+.visit-line .visit-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.fix-btn {
+  flex-shrink: 0;
+  align-self: stretch;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0 0.55rem;
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+}
+
+.fix-btn:hover {
+  background: var(--surface-2);
 }
 
 .visit-dot {

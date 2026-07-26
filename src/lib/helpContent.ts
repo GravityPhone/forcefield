@@ -262,7 +262,10 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       { target: 'knocks-search', body: 'Your own knocks, newest first. Search by street or name.' },
       { target: 'knocks-filters', body: 'Chips filter to one outcome and carry its count.' },
-      { target: 'knocks-list', body: 'Tap a visit to reopen that door in Talk.' },
+      {
+        target: 'knocks-list',
+        body: 'Tap a visit to reopen that door in Talk.\nFix: change the outcome or who it was about, or delete the knock. Twice to delete.\nYour own knocks only.',
+      },
     ],
   },
 
