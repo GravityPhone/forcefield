@@ -33,6 +33,21 @@ import {
   doorStatusOutcome,
 } from '@/lib/outcomes'
 import { avatarUrl } from '@/lib/avatars'
+import {
+  fetchSquadPings,
+  isExpired,
+  isStale,
+  lastSeenLabel,
+  LOCATION_TIERS,
+  setTier,
+  sharing,
+  shareError,
+  startSharing,
+  stopSharing,
+  tier,
+  type LocationTier,
+  type MemberPing,
+} from '@/lib/presence'
 import { inkOn, memberColor } from '@/lib/memberColors'
 import { telHref } from '@/lib/phone'
 import { houseNumber, streetNameOf } from '@/lib/streetWalk'
@@ -113,6 +128,17 @@ const knockedDoors = ref<Set<string>>(new Set())
 const knockedByMember = ref<Map<string, Set<string>>>(new Map())
 /** member id -> their latest knocked doors, newest first, deduped, max 5. */
 const recentByMember = ref<Map<string, RecentDoor[]>>(new Map())
+
+// --- Live location: where squadmates are RIGHT NOW, when they're sharing ---
+//
+// Foreground-only on the web (see lib/presence.ts) — a dot is "where they were
+// when the app was last open", so it dims when stale and disappears when
+// expired rather than quietly going on claiming a position.
+const pingsByMember = ref<Map<string, MemberPing>>(new Map())
+/** Repaints the pins on a clock so staleness ages on its own — the markers
+ *  are updated imperatively, so there's nothing reactive to tick here. */
+let presenceTimer: ReturnType<typeof setInterval> | undefined
+let presenceFeed: RealtimeChannel | null = null
 /** door id -> latest-knock status row (outcome + signed/person counts) —
  * the door pins wear the same doorStatusOutcome colors as the Scout map. */
 const statusByDoor = ref<Map<string, HouseholdLatestKnock>>(new Map())
@@ -580,6 +606,11 @@ function applyMapData(refit = false) {
   }
   for (const m of members) updateMemberMarker(m)
 
+  // …and their live positions on top, for whoever is sharing. Unawaited: the
+  // crew's doors and last-knock pins are the page, this only moves some dots.
+  void loadPresence()
+  subscribePresence()
+
   if (refit) fitToSquad()
 }
 
@@ -889,9 +920,71 @@ async function openDoor(addressId: string) {
   await router.push({ name: 'canvass' })
 }
 
-function latestGeo(memberId: string): RecentDoor | null {
+const shareBusy = ref(false)
+
+/** Turning it on asks the browser for the permission and sends one ping
+ *  straight away — a switch that flips on and then shows nothing for a minute
+ *  reads as broken. Turning it off DELETES the row, so no dot outlives the
+ *  decision. */
+async function toggleSharing() {
+  if (shareBusy.value) return
+  shareBusy.value = true
+  if (sharing.value) await stopSharing()
+  else await startSharing()
+  shareBusy.value = false
+  void loadPresence()
+}
+
+/** Everyone on the crew whose position we may see (RLS agrees separately). */
+function squadUserIds(): string[] {
+  return (mySquad.value?.members ?? []).map((m) => m.id)
+}
+
+async function loadPresence() {
+  const ids = squadUserIds()
+  if (!ids.length) return
+  pingsByMember.value = await fetchSquadPings(ids)
+  for (const m of mySquad.value?.members ?? []) updateMemberMarker(m)
+}
+
+/** Live dots. Subscribed for the whole table and filtered to the crew here —
+ *  RLS already means nothing else is deliverable. */
+function subscribePresence() {
+  if (presenceFeed) return
+  // Ages the "4 min ago" labels and the stale fade without waiting for a ping
+  // to arrive — staleness is a function of the clock, not of traffic.
+  presenceTimer = setInterval(() => {
+    for (const m of mySquad.value?.members ?? []) updateMemberMarker(m)
+  }, 30_000)
+  presenceFeed = supabase
+    .channel('squad-presence')
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'member_locations' },
+      (payload) => {
+        const row = (payload.new ?? payload.old) as MemberPing | undefined
+        if (!row?.user_id || !squadUserIds().includes(row.user_id)) return
+        const next = new Map(pingsByMember.value)
+        // A DELETE is somebody switching sharing off — the dot goes with it.
+        if (payload.eventType === 'DELETE') next.delete(row.user_id)
+        else next.set(row.user_id, payload.new as MemberPing)
+        pingsByMember.value = next
+        const member = (mySquad.value?.members ?? []).find((m) => m.id === row.user_id)
+        if (member) updateMemberMarker(member)
+      },
+    )
+    .subscribe()
+}
+
+/** Where to draw somebody. A LIVE ping wins over their last knocked door —
+ *  it's the more recent fact — but only while it's still fresh enough to mean
+ *  anything (presence.ts expires them). Past that we fall back to the door,
+ *  which at least never claims to be current. */
+function latestGeo(memberId: string): { lat: number; lng: number } | null {
+  const ping = pingsByMember.value.get(memberId)
+  if (ping && !isExpired(ping)) return { lat: ping.lat, lng: ping.lng }
   for (const r of recentByMember.value.get(memberId) ?? []) {
-    if (r.lat != null && r.lng != null) return r
+    if (r.lat != null && r.lng != null) return { lat: r.lat, lng: r.lng }
   }
   return null
 }
@@ -908,7 +1001,7 @@ function updateMemberMarker(member: ChatProfile, plink = false) {
     return
   }
   if (existing) {
-    existing.position = { lat: spot.lat!, lng: spot.lng! }
+    existing.position = { lat: spot.lat, lng: spot.lng }
   } else {
     const el = document.createElement('div')
     el.className = 'member-marker'
@@ -926,7 +1019,7 @@ function updateMemberMarker(member: ChatProfile, plink = false) {
     }
     const marker = new google.maps.marker.AdvancedMarkerElement({
       map,
-      position: { lat: spot.lat!, lng: spot.lng! },
+      position: { lat: spot.lat, lng: spot.lng },
       title: member.display_name || member.username,
       content: el,
       gmpClickable: true,
@@ -946,7 +1039,18 @@ function updateMemberMarker(member: ChatProfile, plink = false) {
   const marker = markersByMember.get(member.id)!
   const el = marker.content as HTMLElement
   el.classList.toggle('selected', selectedMemberId.value === member.id)
-  marker.zIndex = selectedMemberId.value === member.id ? 1000 : 500
+  // Live vs. last-knocked, said on the pin itself: a ring while a fresh ping
+  // is driving the position, faded once it's gone stale, and the title carries
+  // the age. Without this a dot from twenty minutes ago looks exactly like one
+  // from ten seconds ago, which is the whole failure mode of foreground-only
+  // sharing.
+  const ping = pingsByMember.value.get(member.id)
+  const live = !!ping && !isExpired(ping)
+  const name = member.display_name || member.username
+  el.classList.toggle('live', live)
+  el.classList.toggle('stale', live && isStale(ping!))
+  marker.title = live ? `${name} · ${lastSeenLabel(ping!)}` : name
+  marker.zIndex = selectedMemberId.value === member.id ? 1000 : live ? 700 : 500
   if (plink) {
     el.animate(
       [{ transform: 'scale(1)' }, { transform: 'scale(1.6)' }, { transform: 'scale(1)' }],
@@ -981,7 +1085,7 @@ function selectMember(memberId: string, scroll = true) {
   for (const m of mySquad.value?.members ?? []) updateMemberMarker(m)
   const spot = latestGeo(memberId)
   if (map && spot) {
-    map.panTo({ lat: spot.lat!, lng: spot.lng! })
+    map.panTo({ lat: spot.lat, lng: spot.lng })
     map.setZoom(17)
   }
   if (scroll) mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -1959,6 +2063,10 @@ onUnmounted(() => {
   scrollGuard?.dispose()
   scrollGuard = null
   if (knockFeed) void supabase.removeChannel(knockFeed)
+  if (presenceFeed) void supabase.removeChannel(presenceFeed)
+  presenceFeed = null
+  clearInterval(presenceTimer)
+  presenceTimer = undefined
   doorLayer?.dispose()
   doorLayer = null
   for (const marker of markersByMember.values()) marker.map = null
@@ -2441,6 +2549,37 @@ watch(
         </button>
       </div>
 
+      <!-- Sharing where you are, with this crew only. Off unless you switch
+           it on, and it stops the moment the app isn't in front — the label
+           says the tier, the map says the age. -->
+      <div class="share-card" data-help="squad-share">
+        <button
+          type="button"
+          class="share-btn"
+          :class="{ on: sharing }"
+          :aria-pressed="sharing"
+          :disabled="shareBusy"
+          @click="toggleSharing"
+        >
+          <span class="share-box" aria-hidden="true">{{ sharing ? '✓' : '' }}</span>
+          <span>Share my location with the squad</span>
+        </button>
+        <div v-if="sharing" class="tier-row" role="group" aria-label="Update rate">
+          <button
+            v-for="(spec, key) in LOCATION_TIERS"
+            :key="key"
+            type="button"
+            class="tier"
+            :class="{ on: tier === key }"
+            @click="setTier(key as LocationTier)"
+          >
+            {{ spec.label }}
+          </button>
+        </div>
+        <p v-if="shareError" class="error share-err">{{ shareError }}</p>
+        <p v-else-if="sharing" class="muted share-note">Only while this app is open.</p>
+      </div>
+
       <!-- The day switch, last thing on the page (2026-07-24, user call):
            one button, one label, no explaining. Squad leaders, campaign
            managers, admins and whoever started the crew can flip it; it dies
@@ -2855,6 +2994,83 @@ watch(
 .no-turf {
   margin: 0;
   font-size: 0.9rem;
+}
+
+/* --- Location sharing: the switch, its tiers, and an honest note. --- */
+
+.share-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.share-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.share-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.share-btn.on {
+  color: var(--accent);
+}
+
+.share-btn.on .share-box {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.tier-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tier {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.tier.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: var(--accent);
+}
+
+.share-note,
+.share-err {
+  margin: 0;
+  font-size: 0.78rem;
 }
 
 /* --- "Squad members claim their own doors": one button, bottom of the page.
@@ -3669,6 +3885,25 @@ watch(
 
 .member-marker.selected {
   transform: scale(1.25);
+}
+
+/* Live position vs. last knocked door. The halo says a fresh ping is driving
+   this pin; the fade says the phone has been away a while. Both matter,
+   because on the web sharing only runs while the app is in front — a pin that
+   looked identical either way would be the feature quietly lying. */
+.member-marker.live {
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.9),
+    0 0 0 6px rgba(47, 191, 113, 0.85),
+    0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.member-marker.live.stale {
+  opacity: 0.55;
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.8),
+    0 0 0 6px rgba(138, 144, 165, 0.8),
+    0 2px 8px rgba(0, 0, 0, 0.3);
 }
 /* The assign-mode walk-anchor pulse used to be a CSS keyframe on marker
    content; it's drawn on the door canvas now (DoorPaintState.pulse). */

@@ -159,6 +159,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'Pick a person, then pick doors:\n• tap pins one at a time\n• ◯ Lasso: drag a loop\n• ☝ Streets: tap a door for its whole street\nAdd and Erase set direction. Undo reverts one sweep. Save.',
       },
       {
+        heading: 'Sharing where you are',
+        target: 'squad-share',
+        body: 'Off until you switch it on. Your squad only — nobody else, ever.\nRuns while this app is open and in front. Not in a pocket, not with the screen off.\nGreen ring: a fresh position. Faded: over 5 minutes old. Gone after 20 — the pin falls back to your last knocked door.\nBattery saver 3 min · Balanced 1 min · Precise 20 sec.\nSwitching off deletes your position.',
+      },
+      {
         heading: 'Claiming',
         target: 'squad-claim',
         body: 'Leaders and managers hand out doors.\n"Squad members claim their own doors" lets each member cut their own share instead. Off by default, resets at midnight.',
