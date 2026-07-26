@@ -3,7 +3,6 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import AppShell from '@/components/AppShell.vue'
-import CampaignProgress from '@/components/CampaignProgress.vue'
 import { supabase } from '@/lib/supabase'
 import { localDayRangeISO, localToday } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
@@ -261,7 +260,10 @@ onUnmounted(() => {
 
 <template>
   <AppShell title="Leaderboard">
-    <CampaignProgress />
+    <!-- Campaign progress lives on the Campaign page (2026-07-26, user call
+         — "really, we should just have the actual leaders on the
+         leaderboard"). This page ranks people; the campaign's own numbers
+         were a card of preamble in front of what anyone came here for. -->
     <div class="stack">
       <p v-if="loading" class="muted loading-row">
         <span class="spinner" aria-hidden="true"></span> Loading standings…

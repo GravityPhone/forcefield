@@ -137,13 +137,13 @@ onMounted(async () => {
         >
           <div class="goal-fill" :style="{ width: `${goalPct}%` }" />
         </div>
-        <!-- What the bar can't say: whether that rate makes the date. -->
+        <!-- What the bar can't say: how long there is to finish it. No
+             totals here — the line directly above is the totals. -->
         <CampaignPace
           class="goal-pace"
           :signatures="stats.signatures"
           :goal="stats.signature_goal"
           :deadline="deadline"
-          :signatures7d="stats.signatures_7d"
         />
       </div>
       <div class="tiles">

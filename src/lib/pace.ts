@@ -1,12 +1,15 @@
 /**
- * Campaign pace (2026-07-26) — how many signatures a day the campaign needs
- * to make its filing deadline, and whether it's making them.
+ * Campaign pace (2026-07-26) — how long the campaign has left, next to how
+ * far along it is.
  *
- * The goal alone (`campaigns.signature_goal`, on the card since 2026-07-22)
- * only ever answered "how far along are we". With `campaigns.deadline` beside
- * it the more useful question becomes answerable: at today's rate, does this
- * petition qualify? That's one subtraction and one division, but it's the
- * number a campaign actually runs on, so it goes everywhere the goal does.
+ * It shipped that morning as a RATE: signatures a day needed from here, plus
+ * an ahead/behind verdict measured against the last seven days. Both are gone
+ * by the afternoon (user call) — "we don't actually need the number of
+ * signatures a day, and we don't need the thing that says behind. You can
+ * just say forty nine days left and show how many out of how many signatures
+ * we have." Nobody standing at a door can act on a derived rate, and a verdict
+ * chip on every screen is a mood rather than information. What's left is the
+ * two facts that need no interpreting: days left, and signatures of the goal.
  *
  * The deadline is read straight off the campaigns row rather than through
  * get_campaign_stats — see the migration for why (that RPC belongs to the
@@ -21,40 +24,18 @@ import { supabase } from './supabase'
 
 const MS_PER_DAY = 86_400_000
 
-/** Where the campaign stands against its own deadline.
- *  - `met`      goal reached; nothing left to need
- *  - `passed`   deadline gone, goal not reached
- *  - `ahead`    recent rate covers what's still needed per day
- *  - `behind`   it doesn't */
-export type PaceStatus = 'met' | 'passed' | 'ahead' | 'behind'
-
-export interface CampaignPace {
-  /** Calendar days left INCLUDING today — today is still a day you can knock.
-   *  0 or less means the deadline has gone by. */
-  daysLeft: number
-  /** Signatures still to collect. Never negative. */
-  remaining: number
-  /** Signatures per day needed from here. 0 once the goal is met, and 0 once
-   *  the deadline is gone — a rate is meaningless without days to spread it
-   *  over, so callers show `remaining` instead. */
-  perDayNeeded: number
-  /** What the campaign has actually been averaging, from the last 7 days. */
-  recentPerDay: number
-  status: PaceStatus
-}
-
-/** Everything the pace line needs. Campaign name rides along for callers that
- *  aren't already showing it (the activity feed isn't). */
+/** What the pace line needs. A campaign missing either half gets the plain
+ *  totals it got before this existed, rather than a line full of dashes. */
 export interface CampaignPaceInput {
   signatures: number
   goal: number | null
   deadline: string | null
-  /** Signatures in the last 7 days — `signatures_7d` from get_campaign_stats. */
-  signatures7d: number
 }
 
 /**
- * Calendar days from today through `deadline`, inclusive.
+ * Calendar days from today through `deadline`, inclusive — today is still a
+ * day you can knock, so a deadline of today is 1 and yesterday is 0. Null
+ * when there's no deadline set.
  *
  * Built from split y/m/d components rather than `new Date('2026-09-12')`,
  * which parses a bare date string as UTC midnight and lands on the wrong day
@@ -72,34 +53,6 @@ export function daysUntil(deadline: string | null): number | null {
   return Math.round((end.getTime() - today.getTime()) / MS_PER_DAY) + 1
 }
 
-/**
- * The pace, or null when there's nothing to say — a campaign with no goal or
- * no deadline set gets the plain totals it got before this existed, rather
- * than a line full of dashes.
- */
-export function campaignPace(input: CampaignPaceInput): CampaignPace | null {
-  const { signatures, goal, deadline, signatures7d } = input
-  if (!goal || goal <= 0) return null
-  const daysLeft = daysUntil(deadline)
-  if (daysLeft === null) return null
-
-  const remaining = Math.max(0, goal - signatures)
-  const recentPerDay = Math.max(0, signatures7d) / 7
-  // A rate needs days to spread over: past the deadline there are none, and
-  // with the goal met there's nothing to spread.
-  const perDayNeeded = remaining > 0 && daysLeft > 0 ? Math.ceil(remaining / daysLeft) : 0
-
-  let status: PaceStatus
-  if (remaining === 0) status = 'met'
-  else if (daysLeft <= 0) status = 'passed'
-  // Measured against the last 7 days rather than the campaign's lifetime
-  // average: a campaign that started slow and found its feet should read as
-  // winning, and one that has stalled should stop looking fine.
-  else status = recentPerDay >= perDayNeeded ? 'ahead' : 'behind'
-
-  return { daysLeft, remaining, perDayNeeded, recentPerDay, status }
-}
-
 /** "48 days left" / "Last day" / "Deadline passed" — state, not explanation. */
 export function daysLeftLabel(daysLeft: number): string {
   if (daysLeft <= 0) return 'Deadline passed'
@@ -107,29 +60,11 @@ export function daysLeftLabel(daysLeft: number): string {
   return `${daysLeft.toLocaleString()} days left`
 }
 
-export const PACE_STATUS_LABELS: Record<PaceStatus, string> = {
-  met: 'Goal met',
-  passed: 'Deadline passed',
-  ahead: 'Ahead',
-  behind: 'Behind',
-}
-
-/** The theme token each status paints with. Amber for behind rather than red:
- *  behind is a thing to fix with a bigger Saturday, while a missed deadline is
- *  the one state nothing can be done about. */
-export const PACE_STATUS_TOKENS: Record<PaceStatus, string> = {
-  met: 'var(--success)',
-  passed: 'var(--danger)',
-  ahead: 'var(--success)',
-  behind: 'var(--warning)',
-}
-
 /** Shape returned by get_campaign_stats — the columns the pace needs. */
 interface StatsRow {
   campaign_id: string
   campaign_name: string
   signatures: number | string
-  signatures_7d: number | string
   signature_goal: number | string | null
 }
 
@@ -166,7 +101,6 @@ export async function loadCampaignPace(): Promise<LoadedPace | null> {
     campaignId: row.campaign_id,
     campaignName: row.campaign_name,
     signatures: Number(row.signatures),
-    signatures7d: Number(row.signatures_7d),
     goal,
     deadline: await fetchDeadline(row.campaign_id),
   }

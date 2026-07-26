@@ -456,15 +456,16 @@ function whoIdOf(item: FeedItem): string | null {
         </span>
       </div>
 
-      <!-- …and whether the day is adding up to the deadline. Renders only
-           once the campaign has both a goal and a filing date. -->
+      <!-- …and how the day sits against the deadline. Renders only once the
+           campaign has both a goal and a filing date. Carries its own totals:
+           there's no goal bar on this page to read them off. -->
       <div v-if="pace" class="card pace-card">
         <CampaignPace
           compact
+          with-totals
           :signatures="pace.signatures"
           :goal="pace.goal"
           :deadline="pace.deadline"
-          :signatures7d="pace.signatures7d"
         />
       </div>
 
