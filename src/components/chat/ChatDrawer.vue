@@ -114,11 +114,19 @@ function onBackTap() {
 }
 
 /** Mid-drag the panel tracks the finger; otherwise CSS classes handle it. */
-const drawerStyle = computed(() =>
-  draggingOpen.value
-    ? { transform: `translateX(${drawerWidth() - dragPx.value}px)`, transition: 'none' }
-    : undefined,
-)
+const drawerStyle = computed(() => {
+  if (!draggingOpen.value) return undefined
+  // Interpolate the SAME parked offset the CSS uses (panel width + the
+  // desktop gutter), so a half-pulled drawer sits where the finger is on a
+  // phone and never strands itself beside the frame on a desk. 1 = shut,
+  // 0 = open; --frame-gutter is 0px on a phone and 100% is this panel's own
+  // width, so there it reduces to the old translateX(width - dragged) exactly.
+  const shut = 1 - dragPx.value / drawerWidth()
+  return {
+    transform: `translateX(calc((100% + var(--frame-gutter)) * ${shut}))`,
+    transition: 'none',
+  }
+})
 
 // --- Drawer views: room list first (Dana's rule — land on what's waiting,
 // not wherever you last were), then a single room. ---
@@ -731,7 +739,8 @@ async function addPeople() {
 
 .back-pop-enter-from,
 .back-pop-leave-to {
-  transform: translateX(100%);
+  /* Clears the gutter too — see .drawer. */
+  transform: translateX(calc(100% + var(--frame-gutter)));
   opacity: 0;
 }
 
@@ -786,7 +795,13 @@ async function addPeople() {
   background: var(--bg);
   border-left: 1px solid var(--border);
   box-shadow: -6px 0 24px rgba(0, 0, 0, 0.18);
-  transform: translateX(100%);
+  /* Parked off the WINDOW, not just off the phone. 100% clears the panel's
+     own width, which is all a phone needs (the gutter is 0 there) — but on a
+     desktop the gutter beside the phone is empty VISIBLE space, and a drawer
+     parked in it reads as a second chat window that opened itself.
+     --frame-gutter, not --frame-right: a percentage inside a transform is a
+     percentage of this panel, not of the window (see style.css). */
+  transform: translateX(calc(100% + var(--frame-gutter)));
   transition: transform 0.22s ease;
 }
 

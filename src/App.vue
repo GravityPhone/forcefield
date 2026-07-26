@@ -29,16 +29,20 @@ watch(
     <p class="muted">Loading…</p>
   </div>
 
-  <!-- Desktop only: says what the column down the middle of the window is.
-       Lives here rather than in AppShell so the landing and login screens
-       carry it too, and teleports to <body> so it sits beside #app's box
-       rather than inside its overflow clip. Hidden below 820px, where the app
-       is full-bleed and the question doesn't come up (style.css, the frame
-       block). -->
+  <!-- Desktop only: labels the column down the middle of the window. Lives
+       here rather than in AppShell so the landing and login screens carry it
+       too, and teleports to <body> so it sits beside #app's box rather than
+       inside its overflow clip. Hidden below 820px, where the app is
+       full-bleed and the question doesn't come up (style.css, the frame
+       block).
+
+       A LABEL, not an explanation (2026-07-26, user call — "it just has to
+       say phone app demo"): the column is self-evidently a phone once you
+       see it, and the standing no-sub-copy rule applies to the chrome around
+       the app as much as to the screens inside it. -->
   <Teleport to="body">
-    <aside class="frame-note" aria-label="About this view">
-      <span class="frame-note-tag">Phone app</span>
-      <p>Forcefield is built for a phone at the door. On a desktop it runs at phone size — same screens, nothing added.</p>
+    <aside class="frame-note">
+      <span class="frame-note-tag">Phone app demo</span>
     </aside>
   </Teleport>
 </template>
@@ -82,18 +86,11 @@ watch(
 
   .frame-note-tag {
     display: block;
-    margin-bottom: 0.35rem;
     font-size: 0.72rem;
     font-weight: 800;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: color-mix(in srgb, var(--text) 45%, var(--bg));
-  }
-
-  .frame-note p {
-    margin: 0;
-    font-size: 0.84rem;
-    line-height: 1.5;
   }
 }
 </style>

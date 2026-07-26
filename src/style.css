@@ -35,6 +35,16 @@
   --frame-w: 100%;
   --frame-left: 0px;
   --frame-right: 0px;
+  /* The same gutter as --frame-left/right, but in ABSOLUTE units, for the one
+   * place a percentage can't go: inside a transform. A custom property is
+   * substituted as raw tokens, and a percentage means whatever the property
+   * consuming it says — in `right` it's the viewport, but in
+   * `translateX()` it's the ELEMENT'S OWN WIDTH, so the 50% in --frame-right
+   * silently becomes half a panel. Anything parking a fixed element off the
+   * window (the chat drawer) wants this one. Overshoots by the scrollbar's
+   * width on desktop, since 100vw includes it — harmless when the whole point
+   * is being off-screen. */
+  --frame-gutter: 0px;
   --app-vw: 1vw;
 }
 
@@ -391,6 +401,8 @@ input[type='radio'] {
        — the same box #app's auto margins center in, so the two agree. */
     --frame-left: calc(50% - 215px);
     --frame-right: calc(50% - 215px);
+    /* Transform-safe twin of the above — see the note in :root. */
+    --frame-gutter: calc((100vw - 430px) / 2);
     /* 1% of the column, so every vw-based clamp in the app lands where it
        would on a 430px phone instead of maxing out on a 1440px window. */
     --app-vw: 4.3px;
