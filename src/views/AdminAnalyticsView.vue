@@ -1613,12 +1613,30 @@ const focusRanks = computed<FocusRank[]>(() => {
   color: var(--danger);
 }
 
+/* All six tabs on ONE line, at any width (2026-07-26, user call — Canvassers
+   was dropping to a second row). Never wraps: the type shrinks with the
+   column instead (`--app-vw`, so a 430px desktop column measures itself as
+   the phone it's drawing, per style.css), capped by `--ui-scale` like every
+   other bit of chrome that mustn't grow with the Text size pref.
+
+   Measured against a replica of the stack: the six tabs fit 375 / 393 / 430px
+   in both a system sans and Verdana (the widest font on offer). The overflow
+   scroller is the fallback for the combinations that can't fit — Appointments
+   switched on below ~430px, or a wide font on a 320px phone — because a tab
+   you can swipe to beats one that's clipped off the edge, and clipped is what
+   the no-sideways-scrolling rule would otherwise give it. */
 .tabs {
   display: flex;
-  gap: 0.25rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  justify-content: space-between;
+  gap: 0;
   margin-bottom: 1rem;
   border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 .tab {
   appearance: none;
@@ -1627,8 +1645,10 @@ const focusRanks = computed<FocusRank[]>(() => {
   border-bottom: 2px solid transparent;
   color: var(--text-muted);
   font: inherit;
-  font-size: 0.9rem;
-  padding: 0.45rem 0.7rem;
+  font-size: calc(clamp(0.7rem, calc(3 * var(--app-vw)), 0.85rem) * var(--ui-scale));
+  padding: 0.45rem 0.22rem;
+  flex: 0 0 auto;
+  white-space: nowrap;
   cursor: pointer;
 }
 .tab.active {
