@@ -4192,7 +4192,9 @@ onUnmounted(() => {
    scrolling down through the streets table. */
 .editing-bar {
   position: sticky;
-  top: 0;
+  /* Under the app header, which is sticky itself now (2026-07-25) — at 0 this
+     bar would slide behind it. */
+  top: var(--app-top-h, 0px);
   z-index: 5;
   display: flex;
   align-items: center;

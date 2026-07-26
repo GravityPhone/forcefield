@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore, roleHome } from '@/stores/auth'
 import { ROLE_LABELS, ROLE_LABELS_SHORT, type AppRole } from '@/types'
@@ -10,6 +10,7 @@ import ChatDrawer from '@/components/chat/ChatDrawer.vue'
 import HelpTour from '@/components/ui/HelpTour.vue'
 import { hapticTap } from '@/lib/native'
 import { canvassGameOpen } from '@/lib/easterEgg'
+import { setChromeInsets } from '@/lib/appChrome'
 import { helpFor, type HelpTopic } from '@/lib/helpContent'
 
 // Easter-egg mini game (25 rapid taps on your own name, /profile) — async so the
@@ -250,6 +251,38 @@ function updateNavScrollHints() {
   canScrollNavRight.value = el.scrollLeft < maxScroll - 2
 }
 
+// --- Fixed chrome (2026-07-25, user call): the header stays on screen and the
+// tab bar already did, so the page scrolls in the band between them. Both are
+// measured rather than assumed — the header grows with the Text size pref and
+// with the notch inset, and the tab bar isn't there at all on desktop — and
+// published through lib/appChrome so scroll math (and scroll-padding, and any
+// page-level sticky bar) lands content below the header instead of under it.
+
+const headerEl = ref<HTMLElement | null>(null)
+const navWrapEl = ref<HTMLElement | null>(null)
+const tabBarEl = ref<HTMLElement | null>(null)
+let chromeResizeObserver: ResizeObserver | null = null
+
+function measureChrome() {
+  const header = headerEl.value?.getBoundingClientRect().height ?? 0
+  // The nav row sticks below the header, so the header's own height is what
+  // it stops at — published separately for that.
+  document.documentElement.style.setProperty('--app-header-h', `${Math.round(header)}px`)
+  setChromeInsets({
+    top: header + (navWrapEl.value?.getBoundingClientRect().height ?? 0),
+    bottom: tabBarEl.value?.getBoundingClientRect().height ?? 0,
+  })
+}
+
+function observeChrome() {
+  if (!chromeResizeObserver) return
+  chromeResizeObserver.disconnect()
+  for (const el of [headerEl.value, navWrapEl.value, tabBarEl.value]) {
+    if (el) chromeResizeObserver.observe(el)
+  }
+  measureChrome()
+}
+
 onMounted(() => {
   void nextTick(updateNavScrollHints)
   if (navEl.value) {
@@ -257,17 +290,31 @@ onMounted(() => {
     navResizeObserver.observe(navEl.value)
   }
   window.addEventListener('resize', updateNavScrollHints)
+
+  chromeResizeObserver = new ResizeObserver(measureChrome)
+  void nextTick(observeChrome)
+  window.addEventListener('resize', measureChrome)
 })
+
+// The tab bar and the desktop nav row both mount once the profile loads —
+// re-observe whenever either arrives or is replaced.
+watch([headerEl, navWrapEl, tabBarEl], observeChrome)
 
 onUnmounted(() => {
   navResizeObserver?.disconnect()
+  chromeResizeObserver?.disconnect()
   window.removeEventListener('resize', updateNavScrollHints)
+  window.removeEventListener('resize', measureChrome)
 })
 </script>
 
 <template>
   <div class="shell">
-    <header class="shell-header">
+    <!-- Stays on screen: the brand, the role, your name, and "?" are reachable
+         from anywhere in a long page (2026-07-25, user call). The desktop nav
+         row sticks directly under it; on phones that row is hidden and the
+         bottom tab bar is the other half of the frame. -->
+    <header ref="headerEl" class="shell-header">
       <div class="shell-header-inner">
         <div class="brand">
           <AppLogo class="brand-mark" size="1.25em" />
@@ -315,7 +362,7 @@ onUnmounted(() => {
 
     <!-- Desktop/tablet top tabs. AI Chat stays admin-only; the user-to-user
          Chat link is for everyone. -->
-    <div v-if="auth.profile" class="admin-nav-wrap">
+    <div v-if="auth.profile" ref="navWrapEl" class="admin-nav-wrap">
       <nav ref="navEl" class="admin-nav" @scroll="updateNavScrollHints">
         <template v-if="auth.profile.role === 'admin'">
           <router-link to="/admin">Dashboard</router-link>
@@ -369,7 +416,7 @@ onUnmounted(() => {
     <CanvassGame v-if="canvassGameOpen" @close="canvassGameOpen = false" />
 
     <!-- Phone bottom tab bar -->
-    <nav v-if="auth.profile" class="tab-bar" aria-label="Primary">
+    <nav v-if="auth.profile" ref="tabBarEl" class="tab-bar" aria-label="Primary">
       <router-link
         v-for="item in barItems"
         :key="item.to"
@@ -467,6 +514,13 @@ onUnmounted(() => {
    * status bar / notch — keep the header's surface there but push its content
    * clear of it. No-op in a regular browser tab (inset is 0). */
   padding-top: env(safe-area-inset-top, 0px);
+  /* Always on screen (2026-07-25, user call): the app is framed by fixed
+     chrome top and bottom, and the page scrolls in the band between. Below
+     the chat drawer (45) and the bottom bar (40) — those overlay everything,
+     including this. */
+  position: sticky;
+  top: 0;
+  z-index: 35;
 }
 
 .shell-header-inner {
@@ -683,7 +737,14 @@ onUnmounted(() => {
 }
 
 .admin-nav-wrap {
-  position: relative;
+  /* Rides under the header (which is itself stuck at 0) so the whole top
+     block stays put. The surface has to run the full width here: the nav
+     inside it is capped at 860px, and without this the page would scroll
+     through on either side of it. */
+  position: sticky;
+  top: var(--app-header-h, 0px);
+  z-index: 34;
+  background: var(--surface);
 }
 
 .admin-nav {

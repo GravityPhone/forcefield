@@ -20,6 +20,13 @@
   /* Display prefs (lib/themes.ts applyDisplayPrefs paints these). */
   --font-scale: 1;
   --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  /* Fixed chrome, measured and published by AppShell (lib/appChrome.ts):
+   * --app-header-h = the sticky header alone (what the desktop nav row sticks
+   * under), --app-top-h = the whole top block, --app-bottom-h = the phone tab
+   * bar. Zero until AppShell mounts, and on screens with no shell at all. */
+  --app-header-h: 0px;
+  --app-top-h: 0px;
+  --app-bottom-h: 0px;
 }
 
 * {
@@ -69,6 +76,14 @@ html {
    * however far the reading text goes. Everything else — body copy, names,
    * outcomes, feeds — scales all the way, which is the point of the pref. */
   --ui-scale: calc(min(var(--font-scale, 1), 1.1) / var(--font-scale, 1));
+
+  /* The header is sticky and the tab bar is fixed, so "the top of the screen"
+   * is no longer where content should land. Every scrollIntoView / anchor jump
+   * in the app stops clear of both instead of sliding underneath them
+   * (2026-07-25). Code that computes its own scroll offsets reads the same
+   * numbers through lib/appChrome. */
+  scroll-padding-top: var(--app-top-h, 0px);
+  scroll-padding-bottom: var(--app-bottom-h, 0px);
 }
 
 body {

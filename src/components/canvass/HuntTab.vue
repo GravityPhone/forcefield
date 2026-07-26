@@ -22,6 +22,7 @@ import type { BadgePerson } from '@/lib/doorBadges'
 import { attachMapScrollGuard } from '@/lib/mapScroll'
 import type { MapScrollGuard } from '@/lib/mapScroll'
 import { onAppResume } from '@/lib/appResume'
+import { safeViewport, topInset } from '@/lib/appChrome'
 import { geocodeAndCache, normalizeStreetName, streetAtPoint } from '@/lib/geocode'
 import { avatarUrl } from '@/lib/avatars'
 import { fetchAllRows, supabase } from '@/lib/supabase'
@@ -1380,12 +1381,13 @@ function pageScroller(): Element {
   return document.scrollingElement ?? document.documentElement
 }
 
-/** Page offset that puts the sheet's top edge at the top of the screen. */
+/** Page offset that puts the sheet's top edge just under the sticky header —
+ * "the top of the screen" is the header's bottom edge now, not y=0. */
 function raisedOffset(): number {
   const el = pageScroller()
   const sheet = sheetEl.value
   if (!sheet) return el.scrollTop
-  const top = sheet.getBoundingClientRect().top
+  const top = sheet.getBoundingClientRect().top - topInset()
   return Math.max(0, Math.min(el.scrollHeight - el.clientHeight, el.scrollTop + top - 6))
 }
 
@@ -1399,7 +1401,7 @@ function sheetIsRaised(): boolean {
   const el = pageScroller()
   if (el.scrollTop >= el.scrollHeight - el.clientHeight - 8) return true
   const sheet = sheetEl.value
-  return !!sheet && sheet.getBoundingClientRect().top <= RAISED_SLACK_PX
+  return !!sheet && sheet.getBoundingClientRect().top - topInset() <= RAISED_SLACK_PX
 }
 
 function raiseSheet() {
@@ -1439,11 +1441,13 @@ function onGripPointerDown(event: PointerEvent) {
       toggleSheet()
       return
     }
-    // Snap to whichever end the drag ended up nearer.
+    // Snap to whichever end the drag ended up nearer — measured against the
+    // band between the header and the tab bar, which is what's on screen.
     if (sheetIsRaised()) return
     const sheet = sheetEl.value
     if (!sheet) return
-    if (sheet.getBoundingClientRect().top < window.innerHeight * 0.55) raiseSheet()
+    const safe = safeViewport()
+    if (sheet.getBoundingClientRect().top < safe.top + safe.height * 0.55) raiseSheet()
     else lowerSheet()
   }
   grip.addEventListener('pointermove', onMove)
@@ -1451,23 +1455,20 @@ function onGripPointerDown(event: PointerEvent) {
   grip.addEventListener('pointercancel', onUp)
 }
 
-/** Bring the located house's row to the middle of the list (2026-07-25, user
- * call): tapping a pin already fills the search with its street and highlights
- * its row, but on a 100-house street that row was somewhere off in the scroll.
- * Scrolls the LIST only — never the page, which would yank you off the map you
- * were just reading. */
-/** Tap the row that's ALREADY located and the map comes up (2026-07-25, user
- * call). One tap keeps doing what it did — highlight the row, move the map,
- * leave the page where you're reading. The second tap is the one that says
- * "right, show me", and it lands the map at the top of the screen with the
- * located card and its knock button directly under it. */
-function scrollMapIntoView() {
-  mapWrapEl.value?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+/** Tap the row that's ALREADY located and the top of the page comes back
+ * (2026-07-25, user call). One tap keeps doing what it did — highlight the
+ * row, move the map, leave the page where you're reading. The second tap is
+ * the one that says "right, show me", and it goes all the way to the top:
+ * Talk/Scout, the located card with its knock button, and the map under them
+ * ("it takes me up to view the map, but I want it so that we view the talk and
+ * scout as well"). Same landing as lowering the sheet. */
+function showTopOfPage() {
+  lowerSheet()
 }
 
 function onDoorRowTap(a: AddressWithRoster) {
   if (a.id === locatedAddressId.value) {
-    scrollMapIntoView()
+    showTopOfPage()
     return
   }
   void locateAddress(a, { openStreet: false })
@@ -1475,20 +1476,43 @@ function onDoorRowTap(a: AddressWithRoster) {
 
 function onPersonRowTap(p: PersonHit) {
   if (p.household_id && p.household_id === locatedAddressId.value) {
-    scrollMapIntoView()
+    showTopOfPage()
     return
   }
   openPerson(p)
 }
 
+/** Rows of context to leave above the located house when it has to be brought
+ * in — "it should be towards the top… maybe, like, one down". */
+const ACTIVE_ROW_LEAD = 1
+
+/** Bring the located house's row into the part of the list you can actually
+ * SEE (2026-07-25, user call). It used to center the row inside the list's own
+ * box — but the list runs well past the bottom of the screen, so with the map
+ * up and five rows showing under it, "centered in the list" was somewhere below
+ * the fold. Now the target is the visible slice: if the row is already in it,
+ * nothing moves at all; otherwise it lands one row down from the top of
+ * whatever slice is showing. Scrolls the LIST only — never the page, which
+ * would yank you off the map you were just reading. */
 function scrollActiveIntoView() {
   const el = resultsListEl.value
   if (!el) return
   const row = el.querySelector<HTMLElement>('.result-active')
   if (!row) return
   const listBox = el.getBoundingClientRect()
+  const safe = safeViewport()
+  const winTop = Math.max(listBox.top, safe.top)
+  const winBottom = Math.min(listBox.bottom, safe.bottom)
+  // None of the list is on screen — moving it now would just be a scroll
+  // nobody sees, and the row would be wrong again by the time it is.
+  if (winBottom - winTop < 40) return
   const rowBox = row.getBoundingClientRect()
-  const target = el.scrollTop + (rowBox.top - listBox.top) - (listBox.height - rowBox.height) / 2
+  if (rowBox.top >= winTop - 1 && rowBox.bottom <= winBottom + 1) return
+  const lead = Math.min(
+    ACTIVE_ROW_LEAD * (rowBox.height + 6),
+    Math.max(0, (winBottom - winTop - rowBox.height) / 2),
+  )
+  const target = el.scrollTop + rowBox.top - winTop - lead
   el.scrollTo({
     top: Math.max(0, Math.min(el.scrollHeight - el.clientHeight, target)),
     behavior: 'smooth',
