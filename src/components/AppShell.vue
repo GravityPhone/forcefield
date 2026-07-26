@@ -106,14 +106,14 @@ const barItems = computed<NavItem[]>(() => {
   ]
 })
 
-/** Appointments earn a nav row only once the campaign is using them — except
- * for campaign managers, whose page it also is: the on/off switch lives on
- * it, so hiding the link while it's off would make the feature unreachable.
- * Admins don't knock and don't run the day, so they never get it. */
+/** Appointments earn a nav row only once a campaign manager switches them on
+ * (Settings → Appointments), managers included: the switch moved off the
+ * page it governs precisely so the whole feature can stay invisible until
+ * somebody wants it. Admins don't knock and don't run the day either way. */
 const showAppointments = computed(() => {
   const role = auth.profile?.role
   if (!role || role === 'admin') return false
-  return role === 'campaign_manager' || appointmentSettings.value.enabled
+  return appointmentSettings.value.enabled
 })
 
 const moreItems = computed<NavItem[]>(() => {

@@ -11,6 +11,7 @@ import {
   type WalkParity,
 } from '@/lib/streetWalk'
 import { fetchMyTurf } from '@/lib/myTurf'
+import { appointmentSettings } from '@/lib/appointments'
 import { useAuthStore } from './auth'
 import type { Address, Appointment, KnockLog, KnockOutcome, NewKnock, Person } from '@/types'
 
@@ -84,15 +85,21 @@ interface TalkState {
 
 /** Still-to-come, not-called-off appointments at one door, soonest first.
  * `ends_at` rather than `starts_at` is the cutoff on purpose: a window you're
- * standing inside is the most relevant appointment there is. */
-function appointmentQuery(addressId: string) {
-  return supabase
+ * standing inside is the most relevant appointment there is.
+ *
+ * Skipped entirely while the campaign has appointments switched off — that's
+ * the default, and opening a door is the hottest path in the app; it doesn't
+ * pay for a feature nobody turned on. */
+async function fetchDoorAppointments(addressId: string): Promise<Appointment[]> {
+  if (!appointmentSettings.value.enabled) return []
+  const { data } = await supabase
     .from('appointments')
     .select('*')
     .eq('household_id', addressId)
     .eq('status', 'scheduled')
     .gte('ends_at', new Date().toISOString())
     .order('starts_at')
+  return (data ?? []) as Appointment[]
 }
 
 const SEARCH_DEBOUNCE_MS = 250
@@ -184,13 +191,13 @@ export const useTalkStore = defineStore('talk', {
           .eq('household_id', addressId)
           .order('occurred_at', { ascending: false })
           .limit(500),
-        appointmentQuery(addressId),
+        fetchDoorAppointments(addressId),
       ])
       if (addressRes.error || !addressRes.data) return
       this.selectedAddress = addressRes.data as Address
       this.roster = (rosterRes.data ?? []) as Person[]
       this.history = (historyRes.data ?? []) as unknown as KnockHistoryEntry[]
-      this.appointments = (apptRes.data ?? []) as Appointment[]
+      this.appointments = apptRes
       this.selectedPerson = preselectPersonId
         ? (this.roster.find((p) => p.id === preselectPersonId) ?? null)
         : null
@@ -229,9 +236,9 @@ export const useTalkStore = defineStore('talk', {
     async reloadAppointments() {
       const id = this.selectedAddress?.id
       if (!id) return
-      const { data, error } = await appointmentQuery(id)
-      if (error || this.selectedAddress?.id !== id) return
-      this.appointments = (data ?? []) as Appointment[]
+      const rows = await fetchDoorAppointments(id)
+      if (this.selectedAddress?.id !== id) return
+      this.appointments = rows
     },
 
     clearAddress() {

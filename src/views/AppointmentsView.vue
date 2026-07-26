@@ -2,11 +2,12 @@
 // Appointments (2026-07-26) — every "come back at X" a canvasser promised at
 // a door, in one list, grouped by day.
 //
-// The campaign manager's knobs live HERE, in a collapsible card at the top,
-// rather than on the dashboard: the 2026-07-21 rule is that controls sit on
-// the screen they affect (Board options on /leaderboard, Feed options on
-// /activity). It also means the nav only ever grows by one row, which is the
-// whole reason this is a page and not three.
+// This page is only reachable once a campaign manager switches appointments
+// on, and the switch is NOT here — it's tucked into /admin/settings (user
+// call, 2026-07-26). That's a deliberate exception to the 2026-07-21 "knobs
+// live on the screen they affect" rule: Board options and Feed options
+// configure a screen everyone already has, while this one decides whether a
+// whole feature exists. A switch can't live on the page it hides.
 //
 // Whether an appointment was kept is DERIVED, never stored: a knock at that
 // door inside the window means somebody went back. Everything else the row
@@ -22,7 +23,6 @@ import {
   dayLabel,
   ensureAppointmentSettings,
   localDateKey,
-  refreshAppointmentSettings,
   windowLabel,
 } from '@/lib/appointments'
 import { useAuthStore } from '@/stores/auth'
@@ -109,7 +109,11 @@ async function loadKnocks(appts: ApptRow[], since: Date) {
 
 onMounted(async () => {
   await ensureAppointmentSettings()
-  draft.value = { ...appointmentSettings.value }
+  // Switched off campaign-wide: nothing to fetch, and the page says so.
+  if (!appointmentSettings.value.enabled) {
+    loading.value = false
+    return
+  }
   await load()
 })
 
@@ -242,91 +246,18 @@ async function cancel(a: ApptRow) {
   if (!error) a.status = 'canceled'
 }
 
-// --------------------------------------------------------------- options
-
-// Edits bind into a draft rather than the shared settings ref: this page reads
-// window length while you're typing it, and a half-typed "1" would rebuild
-// every window preview underneath. Save publishes.
-const optionsOpen = ref(false)
-const optionsSaving = ref(false)
-const optionsSaved = ref(false)
-const optionsError = ref('')
-const draft = ref({ ...appointmentSettings.value })
-
-/** The first chip of the day, as the settings currently read — clamped the
- * same way Save clamps, so the preview can't promise a window the DB would
- * refuse. */
-const windowPreview = computed(() => {
-  const d = new Date()
-  d.setHours(clampInt(draft.value.day_start_hour, 0, 23), 0, 0, 0)
-  const end = new Date(d.getTime() + clampInt(draft.value.window_minutes, 15, 480) * 60_000)
-  return windowLabel(d, end)
-})
-
-function clampInt(n: number, lo: number, hi: number): number {
-  return Math.min(hi, Math.max(lo, Math.round(Number.isFinite(n) ? n : lo)))
-}
-
-async function saveOptions() {
-  optionsSaving.value = true
-  optionsError.value = ''
-  const start = clampInt(draft.value.day_start_hour, 0, 23)
-  const patch = {
-    enabled: draft.value.enabled,
-    window_minutes: clampInt(draft.value.window_minutes, 15, 480),
-    day_start_hour: start,
-    day_end_hour: clampInt(draft.value.day_end_hour, start + 1, 24),
-    updated_at: new Date().toISOString(),
-  }
-  const { error } = await supabase.from('appointment_settings').update(patch).eq('id', true)
-  optionsSaving.value = false
-  if (error) {
-    optionsError.value = 'Could not save — try again.'
-    return
-  }
-  await refreshAppointmentSettings()
-  draft.value = { ...appointmentSettings.value }
-  optionsSaved.value = true
-  setTimeout(() => (optionsSaved.value = false), 2000)
-}
 </script>
 
 <template>
   <AppShell title="Appointments">
-    <div class="stack">
-      <!-- Manager knobs, on the screen they govern. -->
-      <div v-if="canManage" class="card options-card" data-help="appt-options">
-        <button class="options-head" :aria-expanded="optionsOpen" @click="optionsOpen = !optionsOpen">
-          <span>Appointment options</span>
-          <span class="options-state muted">{{ appointmentSettings.enabled ? 'On' : 'Off' }}</span>
-          <span class="options-caret" aria-hidden="true">{{ optionsOpen ? '▴' : '▾' }}</span>
-        </button>
-        <div v-if="optionsOpen" class="options-body">
-          <label class="check">
-            <input type="checkbox" v-model="draft.enabled" />
-            Offer a time when a door says come back
-          </label>
-          <div class="step-row">
-            window <input type="number" min="15" max="480" step="15" v-model.number="draft.window_minutes" /> minutes
-            <span class="preview">{{ windowPreview }}</span>
-          </div>
-          <div class="step-row">
-            between <input type="number" min="0" max="23" v-model.number="draft.day_start_hour" /> and
-            <input type="number" min="1" max="24" v-model.number="draft.day_end_hour" /> o’clock
-          </div>
-          <div class="options-actions">
-            <button class="btn btn-primary btn-sm" :disabled="optionsSaving" @click="saveOptions">
-              {{ optionsSaved ? 'Saved ✓' : optionsSaving ? 'Saving…' : 'Save' }}
-            </button>
-          </div>
-          <p v-if="optionsError" class="error options-error">{{ optionsError }}</p>
-        </div>
-      </div>
+    <!-- Deep-linked with the feature switched off. Managers get pointed at
+         the switch; nobody else has anything to do here. -->
+    <p v-if="!appointmentSettings.enabled" class="muted state">
+      Appointments are off.<template v-if="canManage">
+        Turn them on under <router-link to="/admin/settings">Settings</router-link>.</template>
+    </p>
 
-      <p v-if="!appointmentSettings.enabled && !canManage" class="muted state">
-        Appointments are off.
-      </p>
-
+    <div v-else class="stack">
       <div class="scope" data-help="appt-scope">
         <div class="chip-row" role="group" aria-label="Which appointments">
           <button
@@ -404,96 +335,6 @@ async function saveOptions() {
 .state {
   margin: 0;
   font-size: 0.92rem;
-}
-
-/* --- Manager options (same collapsible as Feed options / Board options) --- */
-
-.options-card {
-  padding: 0;
-}
-
-.options-head {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
-  padding: 0.7rem 0.9rem;
-  border: none;
-  background: transparent;
-  font: inherit;
-  font-size: 0.95rem;
-  font-weight: 700;
-  color: var(--text);
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.options-head > :first-child {
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-}
-
-.options-state {
-  font-weight: 600;
-  font-size: 0.88rem;
-}
-
-.options-caret {
-  color: var(--text-muted);
-}
-
-.options-body {
-  padding: 0 0.9rem 0.9rem;
-}
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.92rem;
-  margin: 0.35rem 0 0.75rem;
-}
-
-.check input {
-  width: auto;
-}
-
-.step-row {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-wrap: wrap;
-  margin: 0 0 0.75rem 1.75rem;
-  font-size: 0.88rem;
-  color: var(--text-muted);
-}
-
-.step-row input {
-  width: 4.6em;
-  padding: 0.25rem 0.4rem;
-  font: inherit;
-  font-size: 0.88rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-}
-
-/* What the first chip of the day will say — the setting, read back. */
-.preview {
-  font-weight: 700;
-  color: var(--text);
-}
-
-.options-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.options-error {
-  margin: 0.5rem 0 0;
 }
 
 .error {

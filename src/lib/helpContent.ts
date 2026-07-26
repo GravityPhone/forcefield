@@ -262,11 +262,6 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         target: 'appt-list',
         body: 'Tap a row to open that door in Talk. ✕ cancels it.\nKept: a knock landed inside the window. Missed: nobody went back.',
       },
-      {
-        heading: 'Options',
-        target: 'appt-options',
-        body: 'Campaign managers only.\nOff: the outcome button logs and never asks about a time.\nWindow: how long a come-back window runs.\nHours: the span windows are offered across.',
-      },
     ],
   },
 
@@ -412,6 +407,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         target: 'settings-sources',
         body: 'CSV import and VAN sync are not built. Addresses come from the imported county subset.',
+      },
+      {
+        heading: 'Appointments',
+        target: 'settings-appointments',
+        body: 'Off by default, and off means absent: no follow-up on the Come back another time button, no Appointments tab, no analytics tab.\nOn: that button offers a window to return in.\nWindow: how long one runs. Hours: the span they are offered across.',
       },
     ],
   },
