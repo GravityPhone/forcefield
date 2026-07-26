@@ -309,7 +309,7 @@ onBeforeUnmount(() => {
   left: 50%;
   transform: translateX(-50%);
   bottom: calc(0.85rem + env(safe-area-inset-bottom, 0px));
-  width: min(420px, calc(100vw - 1.5rem));
+  width: min(420px, calc(var(--frame-w) - 1.5rem));
   max-height: 48dvh;
   overflow-y: auto;
   z-index: 71;

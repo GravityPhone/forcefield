@@ -3020,7 +3020,8 @@ watch(
 
 /* Phone width is the tight case: two ~150px groups plus gutters is the
    whole screen. Tighter padding and a hair smaller type buys ~45px. */
-@media (max-width: 520px) {
+/* …and inside the 430px desktop phone frame (style.css). */
+@media (max-width: 520px), (min-width: 820px) {
   .layer-btn {
     padding: 0 0.4rem;
     font-size: calc(0.72rem * var(--ui-scale, 1));
@@ -3271,11 +3272,9 @@ watch(
   gap: 0.6rem;
 }
 
-@media (min-width: 900px) {
-  .member-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
+/* No 4-up variant any more (2026-07-26): a window wide enough for it draws
+   the app in a 430px phone column instead (style.css, the frame block), so
+   the wide grid could only ever fire on a screen that no longer stretches. */
 
 /* Square tiles. Grid items keep `min-height: auto`, so a long name or a full
    five-door list still pushes the tile taller instead of being clipped —

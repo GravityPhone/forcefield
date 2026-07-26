@@ -56,6 +56,14 @@ export const useAuthStore = defineStore('auth', {
     isLoggedIn: (s) => !!s.session,
     role: (s): AppRole | null => s.profile?.role ?? null,
     username: (s) => s.profile?.username ?? null,
+
+    /** Signed in but hasn't picked a campaign yet — the router sends these
+     * accounts to /join-campaign and lets nothing else through. New sign-ups
+     * are the normal case; someone who quit the chooser last time is the
+     * other, and they land right back on it. Admins are exempt: they create
+     * the campaigns everyone else joins, and belong to none of them. */
+    needsCampaign: (s): boolean =>
+      !!s.session && !!s.profile && s.profile.role !== 'admin' && !s.profile.campaign_id,
   },
 
   actions: {

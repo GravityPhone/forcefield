@@ -95,7 +95,7 @@ onMounted(async () => {
 
     <p v-if="loading" class="muted">Loading…</p>
     <p v-else-if="!stats" class="muted">
-      {{ switchable ? 'No campaigns yet.' : "Your team isn't assigned to a campaign yet." }}
+      {{ switchable ? 'No campaigns yet.' : "You're not on a campaign yet." }}
     </p>
     <template v-else>
       <p class="campaign-name">{{ stats.campaign_name }}</p>

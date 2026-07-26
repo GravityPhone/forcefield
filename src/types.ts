@@ -99,6 +99,11 @@ export interface Profile {
   color: string | null
   role: AppRole
   team_id: string | null
+  /** The campaign this member is working right now — one of the campaigns
+   * they've joined (campaign_members). Null means they haven't chosen yet,
+   * which is what sends a new account to the chooser; always null for
+   * admins, who run the server rather than a campaign. */
+  campaign_id: string | null
   theme: ThemeSettings
   /** Self-written intro, shown on the roster/member pages ("About me"). */
   bio: string | null

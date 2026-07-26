@@ -567,7 +567,8 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
   display: none;
 }
 
-@media (max-width: 539px) {
+/* …and inside the 430px desktop phone frame (style.css). */
+@media (max-width: 539px), (min-width: 820px) {
   .role-label-full {
     display: none;
   }

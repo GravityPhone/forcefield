@@ -3969,18 +3969,15 @@ onUnmounted(() => {
 
 .jump-nav {
   position: fixed;
-  left: 0.5rem;
+  /* The phone's left edge — 0 on a phone, the frame's gutter on a desktop
+     window (style.css). The tab bar is on every screen size now, so the old
+     `(min-width: 768px)` rule that lifted this to the window bottom is gone. */
+  left: calc(var(--frame-left) + 0.5rem);
   bottom: calc(5.25rem + env(safe-area-inset-bottom, 0px));
   z-index: 30;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-}
-
-@media (min-width: 768px) {
-  .jump-nav {
-    bottom: 1.25rem;
-  }
 }
 
 .jump-btn {

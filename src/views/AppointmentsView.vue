@@ -390,7 +390,8 @@ async function cancel(a: ApptRow) {
 
 /* On a phone the chips fill the row and this count wraps below them; pushed
  * right it reads as a stranded scrap, so let it sit under the chips instead. */
-@media (max-width: 460px) {
+/* …and inside the 430px desktop phone frame (style.css). */
+@media (max-width: 460px), (min-width: 820px) {
   .scope-right {
     margin-left: 0;
   }

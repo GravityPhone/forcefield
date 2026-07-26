@@ -287,7 +287,8 @@ const campaignOptions = computed(() => [
   align-items: start;
 }
 
-@media (max-width: 640px) {
+/* …and inside the 430px desktop phone frame (style.css). */
+@media (max-width: 640px), (min-width: 820px) {
   .columns {
     grid-template-columns: 1fr;
   }

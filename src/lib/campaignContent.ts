@@ -1,6 +1,7 @@
 /**
- * "The Campaign" page (/campaign, More menu, every role) — the why behind the
- * knocking, plus what to actually SAY at the door.
+ * "Campaign" page (/campaign, More menu, every role) — the why behind the
+ * knocking, plus what to actually SAY at the door. (The switcher at the top of
+ * that page is separate: which campaign you're on, see lib/campaigns.ts.)
  *
  * THE COPY HERE IS LOREM IPSUM ON PURPOSE (2026-07-24, user call). Forcefield
  * is a demo, and writing a plausible-sounding petition briefing meant shipping

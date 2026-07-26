@@ -43,6 +43,9 @@ const open = defineModel<boolean>('open', { required: true })
 .bs-backdrop {
   position: fixed;
   inset: 0;
+  /* Dim the phone column, not the desktop window around it (style.css). */
+  left: var(--frame-left);
+  right: var(--frame-right);
   z-index: 50;
   background: rgba(15, 18, 30, 0.45);
   backdrop-filter: blur(3px);
@@ -63,7 +66,9 @@ const open = defineModel<boolean>('open', { required: true })
   left: 50%;
   transform: translateX(-50%);
   z-index: 51;
-  width: min(520px, 100%);
+  /* left: 50% is already the phone's centre — the column is centred in the
+     window — so only the width has to know about the frame. */
+  width: min(520px, var(--frame-w));
   max-height: 88dvh;
   overflow-y: auto;
   background: var(--surface);

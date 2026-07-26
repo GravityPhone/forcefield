@@ -129,7 +129,7 @@ const moreItems = computed<NavItem[]>(() => {
   // Why we're knocking, and what to say — the same briefing for every role,
   // deliberately LAST in every list: it's read once and referred back to, not
   // navigated to daily.
-  const campaign: NavItem = { to: '/campaign', label: 'The Campaign', icon: 'flag' }
+  const campaign: NavItem = { to: '/campaign', label: 'Campaign', icon: 'flag' }
   if (auth.profile.role === 'admin') {
     // Admins have no team — their Roster opens with a team picker.
     return [
@@ -414,7 +414,7 @@ onUnmounted(() => {
         </template>
         <router-link to="/profile">About me</router-link>
         <router-link to="/appearance">Appearance</router-link>
-        <router-link to="/campaign">The Campaign</router-link>
+        <router-link to="/campaign">Campaign</router-link>
       </nav>
       <span v-if="canScrollNavLeft" class="nav-scroll-hint nav-scroll-hint-left" aria-hidden="true">‹</span>
       <span v-if="canScrollNavRight" class="nav-scroll-hint nav-scroll-hint-right" aria-hidden="true">›</span>
@@ -649,7 +649,9 @@ onUnmounted(() => {
   display: none;
 }
 
-@media (max-width: 539px) {
+/* …and inside the desktop phone frame, which is 430px wide (style.css). Every
+   width query left in the app carries that second clause — grep `820px`. */
+@media (max-width: 539px), (min-width: 820px) {
   .shell-header-inner {
     padding: 0.7rem 0.85rem;
   }
@@ -875,39 +877,39 @@ onUnmounted(() => {
   margin-bottom: 1rem;
 }
 
-/* --- Bottom tab bar (phones) --- */
+/* --- Bottom tab bar ---
+   Every screen size gets it (2026-07-26, user call): desktop shows the phone
+   app in a phone-width column (style.css, the frame block), so there is no
+   desktop layout left for a top nav row to belong to. The row's markup is
+   still here, hidden — put these two back behind a `(max-width: 767px)` and
+   the old desktop nav comes back with them. */
 
-.tab-bar {
+.admin-nav-wrap {
   display: none;
 }
 
-@media (max-width: 767px) {
-  /* Top row hands over to the bottom bar on phones. */
-  .admin-nav-wrap {
-    display: none;
-  }
+.logout-top {
+  display: none; /* lives in the More sheet */
+}
 
-  .logout-top {
-    display: none; /* lives in the More sheet on phones */
-  }
+.shell-main {
+  /* Keep the last content clear of the fixed bar. */
+  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px));
+}
 
-  .shell-main {
-    /* Keep the last content clear of the fixed bar. */
-    padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px));
-  }
-
-  .tab-bar {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    z-index: 40;
-    display: flex;
-    background: var(--surface);
-    border-top: 1px solid var(--border);
-    padding: 0.3rem 0.25rem calc(0.3rem + env(safe-area-inset-bottom, 0px));
-    box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.08);
-  }
+.tab-bar {
+  position: fixed;
+  bottom: 0;
+  /* 0 on a phone; the frame's gutters on a desktop window, so the bar sits
+     across the bottom of the phone column instead of the whole screen. */
+  left: var(--frame-left);
+  right: var(--frame-right);
+  z-index: 40;
+  display: flex;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 0.3rem 0.25rem calc(0.3rem + env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.08);
 }
 
 .tab-item {

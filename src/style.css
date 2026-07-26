@@ -27,6 +27,15 @@
   --app-header-h: 0px;
   --app-top-h: 0px;
   --app-bottom-h: 0px;
+  /* Phone frame (see the desktop block at the bottom of this file). These are
+   * the no-frame values, so a real phone reads them and nothing changes:
+   * --frame-w is the width of the phone column, --frame-left/right are the
+   * gaps between it and the window edges (what fixed chrome offsets by), and
+   * --app-vw is what 1vw means INSIDE the column. */
+  --frame-w: 100%;
+  --frame-left: 0px;
+  --frame-right: 0px;
+  --app-vw: 1vw;
 }
 
 * {
@@ -62,7 +71,7 @@ html {
    * sized for desktop overflows or crowds its container on a narrow phone.
    * --font-scale is the user's Text size pref — because the whole app is
    * rem-based, this one multiplier scales everything together. */
-  font-size: calc(clamp(14px, 3.5vw, 16px) * var(--font-scale, 1));
+  font-size: calc(clamp(14px, calc(3.5 * var(--app-vw)), 16px) * var(--font-scale, 1));
 
   /* …except for chrome that CAN'T grow with it (2026-07-24, user call).
    * Text size is for reading — the words at a door, a name, a street. Map
@@ -183,21 +192,21 @@ a {
   gap: 0.5rem;
   border: 1px solid transparent;
   border-radius: var(--radius);
-  padding: clamp(0.6rem, 2vw, 0.8rem) clamp(0.9rem, 3.5vw, 1.4rem);
+  padding: clamp(0.6rem, calc(2 * var(--app-vw)), 0.8rem) clamp(0.9rem, calc(3.5 * var(--app-vw)), 1.4rem);
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
   background: var(--surface-2);
   color: var(--text);
   transition: filter 0.12s ease, transform 0.05s ease;
-  min-height: clamp(40px, 11vw, 48px); /* tap-friendly, still shrinks on tight screens */
+  min-height: clamp(40px, calc(11 * var(--app-vw)), 48px); /* tap-friendly, still shrinks on tight screens */
   white-space: nowrap;
 }
 
 .btn-sm {
-  min-height: clamp(32px, 9vw, 36px);
-  padding: clamp(0.3rem, 1.5vw, 0.35rem) clamp(0.6rem, 2.5vw, 0.8rem);
-  font-size: clamp(0.78rem, 2.4vw, 0.85rem);
+  min-height: clamp(32px, calc(9 * var(--app-vw)), 36px);
+  padding: clamp(0.3rem, calc(1.5 * var(--app-vw)), 0.35rem) clamp(0.6rem, calc(2.5 * var(--app-vw)), 0.8rem);
+  font-size: clamp(0.78rem, calc(2.4 * var(--app-vw)), 0.85rem);
 }
 
 .btn:not(:disabled):active {
@@ -269,10 +278,10 @@ select {
 .field select {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: clamp(0.6rem, 2vw, 0.75rem) clamp(0.7rem, 2.5vw, 0.9rem);
+  padding: clamp(0.6rem, calc(2 * var(--app-vw)), 0.75rem) clamp(0.7rem, calc(2.5 * var(--app-vw)), 0.9rem);
   background: var(--surface);
   color: var(--text);
-  min-height: clamp(40px, 11vw, 48px);
+  min-height: clamp(40px, calc(11 * var(--app-vw)), 48px);
 }
 
 input[type='checkbox'],
@@ -314,9 +323,9 @@ input[type='radio'] {
 
 .badge {
   display: inline-block;
-  padding: clamp(0.12rem, 0.6vw, 0.15rem) clamp(0.4rem, 2vw, 0.6rem);
+  padding: clamp(0.12rem, calc(0.6 * var(--app-vw)), 0.15rem) clamp(0.4rem, calc(2 * var(--app-vw)), 0.6rem);
   border-radius: 999px;
-  font-size: clamp(0.68rem, 2vw, 0.75rem);
+  font-size: clamp(0.68rem, calc(2 * var(--app-vw)), 0.75rem);
   font-weight: 700;
   background: var(--surface-2);
   color: var(--text-muted);
@@ -349,5 +358,65 @@ input[type='radio'] {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* --- The phone frame (2026-07-26, user call) -----------------------------
+ *
+ * Forcefield is a phone app. On a desktop window it renders as the SAME
+ * screen at phone size in a column down the middle of the window, and the
+ * gutter beside it says so (the note lives in App.vue). Nothing about the app
+ * has a desktop variant any more: the bottom tab bar is unconditional, the
+ * old top nav row is hidden, and every width media query left in the app is
+ * written to fire inside the column too — grep `820px` for all of them.
+ *
+ * 820px is the one threshold. Below it the app is full-bleed as before (a
+ * phone, or a narrow desktop window); at or above it the frame appears
+ * together with its gutter note, which needs ~155px of side room to read.
+ *
+ * WHY A COLUMN AND NOT A FLOATING DEVICE MOCKUP: the page scrolls in the
+ * WINDOW, so a phone inset from the top would scroll its own bezel away, and
+ * every `100dvh`/`100svh` in the app (HuntTab's map height, #app, the sheets)
+ * would be measuring a window taller than the phone it's drawing in. Column
+ * height == window height keeps all of that arithmetic honest.
+ *
+ * Fixed chrome is NOT contained by the column — containment (which is what
+ * container queries would have cost) makes fixed elements resolve against
+ * their container, and with #app as tall as the document the tab bar would
+ * scroll away. Each piece offsets itself by --frame-left/right instead. */
+@media (min-width: 820px) {
+  :root {
+    --frame-w: 430px;
+    /* % of the initial containing block, i.e. the window minus its scrollbar
+       — the same box #app's auto margins center in, so the two agree. */
+    --frame-left: calc(50% - 215px);
+    --frame-right: calc(50% - 215px);
+    /* 1% of the column, so every vw-based clamp in the app lands where it
+       would on a 430px phone instead of maxing out on a 1440px window. */
+    --app-vw: 4.3px;
+  }
+
+  /* The desk the phone is lying on. Mixed from the scheme's own ink so all 18
+     themes get a surround that belongs to them. */
+  body {
+    background: color-mix(in srgb, var(--text) 14%, var(--bg));
+  }
+
+  #app {
+    width: var(--frame-w);
+    margin-inline: auto;
+    background: var(--bg);
+    /* The hairline edges ride OUTSIDE the box (spread ring), not as a border:
+       box-sizing is border-box everywhere, so a border would eat 2px off the
+       430 and the fixed tab bar — which spans the full column — would paint
+       over the line anyway. */
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 22%, var(--bg)), 0 0 44px rgba(10, 14, 26, 0.22);
+  }
+
+  /* Background patterns are fixed to the window — keep them on the phone. */
+  html[data-pattern] body::before,
+  html[data-pattern] body::after {
+    left: var(--frame-left);
+    right: var(--frame-right);
   }
 }

@@ -18,6 +18,18 @@ const router = createRouter({
     { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue'), meta: { guestOnly: true } },
     { path: '/signup', name: 'signup', component: () => import('@/views/SignUpView.vue'), meta: { guestOnly: true } },
 
+    // The gate every new account passes through: pick the campaign you're
+    // knocking for. Deliberately outside AppShell — there's no nav, no tabs
+    // and no way around it, because until this is answered the rest of the
+    // app has nothing to be about. Quitting here doesn't skip it; the guard
+    // below lands you back on it at the next login.
+    {
+      path: '/join-campaign',
+      name: 'join-campaign',
+      component: () => import('@/views/ChooseCampaignView.vue'),
+      meta: { roles: [] },
+    },
+
     // Canvasser home
     { path: '/canvass', name: 'canvass', component: () => import('@/views/CanvasserHomeView.vue'), meta: { roles: [] } },
 
@@ -97,9 +109,10 @@ const router = createRouter({
     // splitting lives on the Squad page. Kept only for stale bookmarks.
     { path: '/team', redirect: '/canvass' },
 
-    // "The Campaign" (More, last item, every role) — why the signatures are
-    // being gathered and what to say at the door. Pure briefing copy from
-    // src/lib/campaignContent.ts plus the live progress card.
+    // "Campaign" (More, last item, every role) — which campaign you're
+    // working (switch or join another at the top), why the signatures are
+    // being gathered, and what to say at the door. Briefing copy comes from
+    // src/lib/campaignContent.ts; the live progress card sits at the bottom.
     { path: '/campaign', name: 'campaign', component: () => import('@/views/CampaignView.vue'), meta: { roles: [] } },
 
     // Turf cutting/assignment — a campaign-manager job. Squad leaders get
@@ -138,11 +151,19 @@ router.beforeEach(async (to) => {
   const loggedIn = auth.isLoggedIn && !!auth.profile
 
   if (to.meta.guestOnly && loggedIn) {
-    return roleHome(auth.profile!.role)
+    // Someone mid-chooser has no home to bounce to yet.
+    return auth.needsCampaign ? '/join-campaign' : roleHome(auth.profile!.role)
   }
 
   if (to.meta.roles) {
     if (!loggedIn) return { path: '/login', query: { redirect: to.fullPath } }
+    // Campaign first: no screen in this app means anything until the account
+    // says which campaign it's working. Logging out is still reachable — the
+    // chooser has its own Log out, and it runs before this check next time.
+    if (auth.needsCampaign) {
+      return to.path === '/join-campaign' ? undefined : '/join-campaign'
+    }
+    if (to.path === '/join-campaign') return roleHome(auth.profile!.role)
     if (to.meta.roles.length > 0 && !to.meta.roles.includes(auth.profile!.role)) {
       return roleHome(auth.profile!.role)
     }

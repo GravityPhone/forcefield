@@ -678,7 +678,9 @@ async function addPeople() {
 
 .drawer-handle {
   position: fixed;
-  right: 0;
+  /* The phone's right edge, not the window's — 0 on a phone, the frame's
+     gutter on desktop (style.css). Same for .drawer-back and the panel. */
+  right: var(--frame-right);
   z-index: 47; /* above the panel so it stays grabbable mid-drag */
   display: flex;
   align-items: center;
@@ -700,7 +702,7 @@ async function addPeople() {
 
 .drawer-back {
   position: fixed;
-  right: 0;
+  right: var(--frame-right);
   z-index: 47; /* rides with the handle, above the panel */
   display: flex;
   align-items: center;
@@ -762,6 +764,9 @@ async function addPeople() {
 .drawer-backdrop {
   position: fixed;
   inset: 0;
+  /* Dim the phone, not the desk it's sitting on. */
+  left: var(--frame-left);
+  right: var(--frame-right);
   z-index: 45;
   background: rgba(15, 18, 30, 0.4);
 }
@@ -769,13 +774,13 @@ async function addPeople() {
 .drawer {
   position: fixed;
   top: 0;
-  right: 0;
+  right: var(--frame-right);
   bottom: 0;
   z-index: 46;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  width: min(430px, 100vw);
+  width: min(430px, var(--frame-w));
   padding: 0.6rem 0.6rem calc(0.6rem + env(safe-area-inset-bottom, 0px));
   padding-top: calc(0.6rem + env(safe-area-inset-top, 0px));
   background: var(--bg);
