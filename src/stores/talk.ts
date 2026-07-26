@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { supabase } from '@/lib/supabase'
 import { deleteKnock, submitKnock } from '@/lib/knockQueue'
+import { cachedDoor } from '@/lib/offlineCache'
 import { geocodeAndCache } from '@/lib/geocode'
 import {
   findNextOnStreet,
@@ -203,11 +204,24 @@ export const useTalkStore = defineStore('talk', {
           .limit(500),
         fetchDoorAppointments(addressId),
       ])
-      if (addressRes.error || !addressRes.data) return
-      this.selectedAddress = addressRes.data as Address
-      this.roster = (rosterRes.data ?? []) as Person[]
-      this.history = (historyRes.data ?? []) as unknown as KnockHistoryEntry[]
-      this.appointments = apptRes
+      // No signal (or the door simply isn't there). Fall back to what was
+      // downloaded before walking out — stale history beats a blank door, and
+      // this only ever runs AFTER the live query has failed, so a door with
+      // signal always shows the truth.
+      if (addressRes.error || !addressRes.data) {
+        const cached = await cachedDoor(addressId)
+        if (!cached) return
+        this.selectedAddress = cached.address
+        this.roster = cached.roster
+        this.history = cached.history as unknown as KnockHistoryEntry[]
+        // Appointments are deliberately never cached (see lib/offlineCache.ts).
+        this.appointments = []
+      } else {
+        this.selectedAddress = addressRes.data as Address
+        this.roster = (rosterRes.data ?? []) as Person[]
+        this.history = (historyRes.data ?? []) as unknown as KnockHistoryEntry[]
+        this.appointments = apptRes
+      }
       this.selectedPerson = preselectPersonId
         ? (this.roster.find((p) => p.id === preselectPersonId) ?? null)
         : null

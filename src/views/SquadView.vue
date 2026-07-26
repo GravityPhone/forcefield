@@ -33,6 +33,7 @@ import {
   doorStatusOutcome,
 } from '@/lib/outcomes'
 import { avatarUrl } from '@/lib/avatars'
+import { cacheState, cacheTodaysTurf, clearTurfCache, type CacheState } from '@/lib/offlineCache'
 import {
   fetchSquadPings,
   isExpired,
@@ -918,6 +919,49 @@ function onDoorTap(addressId: string) {
 async function openDoor(addressId: string) {
   await talk.loadAddress(addressId)
   await router.push({ name: 'canvass' })
+}
+
+// --- Taking the turf offline ---
+//
+// Knocks have always queued offline; the door itself didn't. This downloads
+// the crew's assignment — doors, rosters, recent history — so a dead zone
+// opens a real door instead of a blank one. Appointments are deliberately not
+// included (lib/offlineCache.ts says why).
+const cacheInfo = ref<CacheState>({ cachedAt: null, doors: 0 })
+const cacheBusy = ref(false)
+const cacheMsg = ref('')
+
+async function refreshCacheState() {
+  cacheInfo.value = await cacheState()
+}
+
+async function downloadTurf() {
+  const me = auth.profile?.id
+  if (!me || cacheBusy.value) return
+  cacheBusy.value = true
+  cacheMsg.value = ''
+  const n = await cacheTodaysTurf(me)
+  cacheBusy.value = false
+  await refreshCacheState()
+  cacheMsg.value =
+    n === null
+      ? 'Couldn’t download — no turf today, or no signal.'
+      : n === 0
+        ? 'No doors on your turf yet.'
+        : ''
+}
+
+async function forgetTurf() {
+  if (cacheBusy.value) return
+  cacheBusy.value = true
+  await clearTurfCache()
+  cacheBusy.value = false
+  cacheMsg.value = ''
+  await refreshCacheState()
+}
+
+function cachedAtLabel(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 }
 
 const shareBusy = ref(false)
@@ -2027,6 +2071,7 @@ onMounted(async () => {
   squads.subscribeToRosters()
   document.addEventListener('fullscreenchange', onFullscreenChange)
   document.addEventListener('webkitfullscreenchange', onFullscreenChange)
+  void refreshCacheState()
   await squads.loadToday()
   subscribeToKnocks()
 })
@@ -2547,6 +2592,24 @@ watch(
           <span class="add-mark" aria-hidden="true">+</span>
           <span class="add-label">Add someone</span>
         </button>
+      </div>
+
+      <!-- Take the ground with you before you lose signal. -->
+      <div class="share-card" data-help="squad-offline">
+        <button type="button" class="share-btn" :disabled="cacheBusy" @click="downloadTurf">
+          <span class="share-box" aria-hidden="true">{{ cacheInfo.doors ? '✓' : '' }}</span>
+          <span>{{ cacheBusy ? 'Downloading…' : 'Save today’s turf for offline' }}</span>
+        </button>
+        <p v-if="cacheMsg" class="muted share-note">{{ cacheMsg }}</p>
+        <div v-else-if="cacheInfo.cachedAt" class="cache-row">
+          <span class="muted share-note">
+            {{ cacheInfo.doors.toLocaleString() }} doors · saved
+            {{ cachedAtLabel(cacheInfo.cachedAt) }}
+          </span>
+          <button type="button" class="btn btn-sm" :disabled="cacheBusy" @click="forgetTurf">
+            Clear
+          </button>
+        </div>
       </div>
 
       <!-- Sharing where you are, with this crew only. Off unless you switch
@@ -3071,6 +3134,14 @@ watch(
 .share-err {
   margin: 0;
   font-size: 0.78rem;
+}
+
+.cache-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.4rem;
 }
 
 /* --- "Squad members claim their own doors": one button, bottom of the page.

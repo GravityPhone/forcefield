@@ -15,16 +15,54 @@ import Dexie, { type Table } from 'dexie'
 import { supabase } from './supabase'
 import type { NewKnock } from '@/types'
 
-class KnockDb extends Dexie {
+/** The one Dexie handle for the 'forcefield' database. The offline turf cache
+ * (lib/offlineCache.ts) rides in the SAME database on purpose: two Dexie
+ * instances opening one database at different versions fight over the upgrade
+ * and one of them ends up blocked. Add stores here, use them there. */
+export class KnockDb extends Dexie {
   pendingKnocks!: Table<NewKnock, string>
+  // v2 — the pre-cache, so a dead zone doesn't open an empty door.
+  cachedDoors!: Table<CachedDoor, string>
+  cachedPersons!: Table<CachedPerson, string>
+  cachedVisits!: Table<CachedVisit, string>
+  cacheMeta!: Table<CacheMeta, string>
 
   constructor() {
     super('forcefield')
     this.version(1).stores({ pendingKnocks: 'client_id' })
+    this.version(2).stores({
+      pendingKnocks: 'client_id',
+      cachedDoors: 'id',
+      // household_id is the only way any of this is ever read — one door at a
+      // time, as it's opened.
+      cachedPersons: 'id, household_id',
+      cachedVisits: 'id, household_id',
+      cacheMeta: 'key',
+    })
   }
 }
 
-const db = new KnockDb()
+export interface CachedDoor {
+  id: string
+  row: unknown
+}
+export interface CachedPerson {
+  id: string
+  household_id: string
+  row: unknown
+}
+export interface CachedVisit {
+  id: string
+  household_id: string
+  row: unknown
+}
+export interface CacheMeta {
+  key: string
+  cachedAt: string
+  doors: number
+}
+
+export const db = new KnockDb()
 
 const DIRECT_TIMEOUT_MS = 4000
 
