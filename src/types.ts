@@ -432,7 +432,7 @@ export interface ActivityFeedSettings {
 }
 
 /** Singleton knobs for appointments (2026-07-26) — the follow-up behind the
- * "Come back another time" outcome. Off campaign-wide until a campaign
+ * "Return" outcome. Off campaign-wide until a campaign
  * manager turns it on, from the Appointment options card on /appointments.
  * `window_minutes` is how long a come-back window is; the day hours bound
  * which windows get offered at the door. */
@@ -456,7 +456,7 @@ export const DEFAULT_APPOINTMENT_SETTINGS: AppointmentSettings = {
 }
 
 /** A promise to come back to a door inside a time window. Booked at the door
- * from the "Come back another time" button; read back on Talk (the door's own
+ * from the "Return" button; read back on Talk (the door's own
  * card), on /appointments, and in the Analytics Appointments tab.
  *
  * Whether it was KEPT is never stored — it's read off knock_logs (a knock at

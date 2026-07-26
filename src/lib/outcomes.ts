@@ -34,10 +34,11 @@ import type { KnockOutcome } from '@/types'
  *
  * `short`: the same outcome for chrome that has no room for a sentence —
  * chart axis labels (130px), filter chips, uppercase status pills, compact
- * rows. Identical to `label` for five of the six; it exists because "Come
- * back another time" is a phrase a canvasser reads on a full-width button
- * and nothing else in the app has that much width. Use OUTCOME_LABELS for
- * prose lines and buttons, OUTCOME_SHORT where the label is a tag. */
+ * rows. All six are identical to `label` since the 'maybe' rename to
+ * "Return" (2026-07-26) — the split stays because the two questions are
+ * still different ones, and the next long label shouldn't have to re-thread
+ * itself through every chart gutter and chip in the app. Use OUTCOME_LABELS
+ * for prose lines and buttons, OUTCOME_SHORT where the label is a tag. */
 export const OUTCOMES: {
   value: KnockOutcome
   label: string
@@ -54,12 +55,14 @@ export const OUTCOMES: {
   // behavior moved with it; this outcome closes a door for the walk exactly as
   // it always did (CLOSED_OUTCOMES in streetWalk.ts).
   { value: 'didnt_sign', label: 'Not Interested', short: 'Not Interested', hex: '#d64545', ink: '#ffffff', requiresPerson: false, doorLevel: false },
-  // Was "Maybe" until 2026-07-26 (user call). Same stored value, same color,
-  // same walk behavior — but "Maybe" described the canvasser's guess, and this
-  // describes what to DO about it. It's also the one button that asks a
-  // follow-up: with appointments enabled, tapping it offers a window to come
-  // back in (src/lib/appointments.ts, AppointmentSheet.vue).
-  { value: 'maybe', label: 'Come back another time', short: 'Come back', hex: '#e0a02e', ink: '#181c26', requiresPerson: false, doorLevel: false },
+  // "Maybe" → "Come back another time" → "Return" (both 2026-07-26, user
+  // calls). Same stored value, same color, same walk behavior throughout —
+  // only the wording moved, twice: "Maybe" described the canvasser's guess
+  // rather than what to do about it, and "Come back another time" said the
+  // right thing in five words where one does. It's also the one button that
+  // asks a follow-up: with appointments enabled, tapping it offers a window
+  // to come back in (src/lib/appointments.ts, AppointmentSheet.vue).
+  { value: 'maybe', label: 'Return', short: 'Return', hex: '#e0a02e', ink: '#181c26', requiresPerson: false, doorLevel: false },
   { value: 'not_home', label: 'Not Home', short: 'Not Home', hex: '#8a90a5', ink: '#181c26', requiresPerson: false, doorLevel: true },
   // Skip and Hostile share Not Interested's red ON PURPOSE (2026-07-14): to a
   // canvasser all three mean the same thing — "this door is a no, don't come

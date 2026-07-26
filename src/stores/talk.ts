@@ -415,7 +415,7 @@ export const useTalkStore = defineStore('talk', {
 
       // AND THE VISIT STILL RECORDS WHERE YOU STOOD. Without this row the door
       // drops off the day's map and the next canvasser re-knocks it. It's
-      // 'maybe' ("Come back another time") because that's the honest state of
+      // 'maybe' ("Return") because that's the honest state of
       // the door: its own residents still haven't been asked, and 'maybe'
       // keeps it yellow, walkable, and out of CLOSED_OUTCOMES.
       if (away && door) {

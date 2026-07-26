@@ -1712,12 +1712,17 @@ onUnmounted(() => {
       v-if="locatedAddress"
       v-motion="fadeUp()"
       class="card located-card"
-      :style="{
-        borderLeftColor: locatedStripe.fill,
-        boxShadow: locatedStripe.band ? `inset 3px 0 0 0 ${locatedStripe.band}` : undefined,
-        ...rowTintFor(locatedAddress.id),
-      }"
+      :style="rowTintFor(locatedAddress.id)"
     >
+      <!-- Status leads the line on every Scout row (2026-07-26, user call):
+           the square sits BEFORE the address, small, and the whole row is
+           washed in the same color behind it. -->
+      <OutcomeSquare
+        :fill="locatedStripe.fill"
+        :band="locatedStripe.band"
+        :label="statusLabelFor(locatedAddress.id)"
+        small
+      />
       <span class="result-left">
         <span class="result-name">
           {{ locatedAddress.street }}{{ locatedAddress.unit ? ' ' + locatedAddress.unit : '' }}
@@ -1747,11 +1752,6 @@ onUnmounted(() => {
         <span v-if="locatedTurfLabel" class="turf-tag">{{ locatedTurfLabel }}</span>
       </span>
       <span v-if="ratioFor(locatedAddress)" class="ratio-text">{{ ratioFor(locatedAddress) }}</span>
-      <OutcomeSquare
-        :fill="locatedStripe.fill"
-        :band="locatedStripe.band"
-        :label="statusLabelFor(locatedAddress.id)"
-      />
       <button
         class="btn btn-sm knock-btn"
         :style="{ background: knockColorFor(locatedAddress.id), color: '#fff' }"
@@ -1946,16 +1946,17 @@ onUnmounted(() => {
             :style="rowTintFor(a.id)"
             @click="onDoorRowTap(a)"
           >
+            <OutcomeSquare
+              :fill="paintFor(a.id).fill"
+              :band="paintFor(a.id).band"
+              :label="statusLabelFor(a.id)"
+              small
+            />
             <span class="result-left">
               <span class="result-name">{{ a.street }}{{ a.unit ? ' ' + a.unit : '' }}</span>
               <span v-if="wasKnockedToday(a.id)" class="today-badge">Knocked today</span>
             </span>
             <span v-if="ratioFor(a)" class="ratio-text">{{ ratioFor(a) }}</span>
-            <OutcomeSquare
-              :fill="paintFor(a.id).fill"
-              :band="paintFor(a.id).band"
-              :label="statusLabelFor(a.id)"
-            />
             <button
               class="btn btn-sm knock-btn"
               :style="{ background: knockColorFor(a.id), color: '#fff' }"
@@ -2003,6 +2004,12 @@ onUnmounted(() => {
                 :style="rowTintFor(p.household_id)"
                 @click="onPersonRowTap(p)"
               >
+                <OutcomeSquare
+                  :fill="paintFor(p.household_id).fill"
+                  :band="paintFor(p.household_id).band"
+                  :label="statusLabelFor(p.household_id)"
+                  small
+                />
                 <span class="result-left">
                   <span class="result-name">{{ p.name }}</span>
                   <span class="muted result-sub">
@@ -2013,11 +2020,6 @@ onUnmounted(() => {
                 <span v-if="ratioFor(p.addresses, p.household_id)" class="ratio-text">{{
                   ratioFor(p.addresses, p.household_id)
                 }}</span>
-                <OutcomeSquare
-                  :fill="paintFor(p.household_id).fill"
-                  :band="paintFor(p.household_id).band"
-                  :label="statusLabelFor(p.household_id)"
-                />
                 <button
                   v-if="p.household_id"
                   class="btn btn-sm knock-btn"
@@ -2287,11 +2289,11 @@ onUnmounted(() => {
   background: var(--row-tint, color-mix(in srgb, var(--located-accent) 6%, var(--surface)));
 }
 
-/* Left stripe carries knock status, painted inline from locatedStripe with
- * the SAME hexes as the map pin (outcomes.ts literals, never themed). The old
- * reached/not-reached/not-knocked classes are gone — they described a
- * different question than the pin did. The violet frame above is separate: it
- * means "this is the door you're looking at". */
+/* The whole left border is violet now (2026-07-26): the status square moved to
+ * the front of the line, so a 6px status stripe 12px away from it was the same
+ * fact twice. The thick violet edge means only what the rest of the frame
+ * means — "this is the door you're looking at" — and status is the square plus
+ * the wash behind it. */
 
 .turf-tag {
   padding: 0.1rem 0.45rem;

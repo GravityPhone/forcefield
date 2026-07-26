@@ -438,7 +438,8 @@ function dailyFor(sub: Knock[]) {
 }
 
 // Charts use OUTCOMES[].short, not .label — a bar's name lives in a 130px
-// gutter and "Come back another time" is a full-width button's worth of words.
+// gutter, and a label is written for a full-width button (that was "Come back
+// another time" when this split was made; "Return" since).
 function mixFor(sub: Knock[]): BarItem[] {
   const counts = new Map<KnockOutcome, number>()
   for (const k of sub) counts.set(k.outcome, (counts.get(k.outcome) ?? 0) + 1)
@@ -801,7 +802,7 @@ const CANVASSER_COLUMNS = ['Canvasser', 'Knocks', 'Conversations', 'Signatures',
 
 // ---------------------------------------------------------------- focus panel
 // ---------------------------------------------------------------- appointments
-// The "Come back another time" follow-up (2026-07-26). Nothing here is
+// The "Return" follow-up (2026-07-26). Nothing here is
 // stored: an appointment is KEPT when a knock landed at that door inside its
 // window, LATE when the return came after it, MISSED when nobody ever went
 // back — read straight off the knock history already in memory. Only

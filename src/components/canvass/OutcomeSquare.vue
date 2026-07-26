@@ -28,12 +28,18 @@ defineProps<{
   /** Names the color for screen readers and a long-press tooltip. Without it
    * the square is decorative and hidden from the accessibility tree. */
   label?: string | null
+  /** Smaller (20px), for Scout's rows — where the square LEADS the line
+   * (2026-07-26, user call) rather than sitting at the end of it. A marker in
+   * front of an address doesn't need the size one at the end does to be
+   * found, and the whole row already carries the same color. */
+  small?: boolean
 }>()
 </script>
 
 <template>
   <span
     class="outcome-square"
+    :class="{ small }"
     :style="{ '--sq-fill': fill }"
     :title="label ?? undefined"
     :role="label ? 'img' : undefined"
@@ -57,6 +63,12 @@ defineProps<{
    * row still reads as a distinct object rather than a smear. */
   box-shadow: 0 0 0 1.5px var(--surface), 0 0 0 2.5px color-mix(in srgb, var(--sq-fill) 55%, transparent);
   overflow: hidden;
+}
+
+.outcome-square.small {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
 }
 
 /* Matches the pins: the band is INSIDE the fill, not a border around it, so

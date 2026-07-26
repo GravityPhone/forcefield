@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import MyDoorsSheet from './MyDoorsSheet.vue'
 import AppointmentSheet from './AppointmentSheet.vue'
-import VolunteerSheet from './VolunteerSheet.vue'
+import VolunteerButton from './VolunteerButton.vue'
 import { OUTCOMES } from '@/lib/outcomes'
 import { popIn } from '@/lib/motion'
 import { hapticNotify, hapticTap } from '@/lib/native'
@@ -12,17 +12,15 @@ import type { KnockOutcome } from '@/types'
 
 const talk = useTalkStore()
 
-// "Come back another time" is the one button with a follow-up: when the
-// campaign has appointments switched on, logging it offers a window to come
-// back in. The knock is already written by then — the sheet is optional at
-// the door and closing it costs nothing.
+// "Return" is the ONE button with a follow-up now: when the campaign has
+// appointments switched on, logging it offers a window to come back in. The
+// knock is already written by then — the sheet is optional at the door and
+// closing it costs nothing.
+//
+// Signed used to have a second one (a sheet asking whether they'd knock doors
+// too) and it was removed 2026-07-26 at the user's request. The ask lives on
+// its own button below the grid instead — VolunteerButton.vue says why.
 const apptOpen = ref(false)
-
-// "Signed" has the other follow-up: the one ask worth making of somebody who
-// just signed is whether they'd knock doors too. Always on — unlike
-// appointments there's no switch, because a single optional sheet after a
-// signature isn't a feature that needs hiding.
-const volOpen = ref(false)
 
 // A physical tick under the finger confirms the tap registered without
 // looking down at the screen — this pair of buttons is the highest-frequency
@@ -39,12 +37,6 @@ function logOutcome(value: KnockOutcome) {
   if (!undoing && value === 'maybe' && appointmentSettings.value.enabled && talk.selectedAddress) {
     apptOpen.value = true
   }
-  // Signed always has a person on it (requiresPerson), so there's someone to
-  // ask about — same undo guard: taking a signature back must not ask whether
-  // the person who didn't sign wants to volunteer.
-  if (!undoing && value === 'signed' && talk.selectedPerson) {
-    volOpen.value = true
-  }
 }
 
 function confirmNext() {
@@ -60,7 +52,7 @@ function confirmPrevious() {
 // Only Signed needs a name on it (see requiresPerson in lib/outcomes.ts) —
 // every other button goes live the moment a door is loaded, and logs against
 // whoever's picked from the roster or against the household when nobody is.
-// Not Interested and Maybe joined that group 2026-07-25: you're talking to
+// Not Interested and Return joined that group 2026-07-25: you're talking to
 // someone at the door without knowing which resident they are.
 // Whether to offer the "My turf" switch at all — it needs turf to filter to.
 // (Labeled "My turf", not "My doors": it filters to the CREW's assignment,
@@ -119,6 +111,11 @@ function disabledReason(requiresPerson: boolean): string {
         {{ o.label }}
       </button>
     </div>
+    <!-- Not an outcome — a mark on the person, pressed if the conversation
+         goes there. Sits under the grid because that's where the thumb
+         already is after Signed, which is where the old sheet used to open
+         itself. -->
+    <VolunteerButton />
     <!-- Back and Next ride here whenever a door is loaded — no outcome
          required (with one logged, moving on doubles as the confirm; nothing
          auto-advances). Next walks the street per the direction pref above;
@@ -174,7 +171,6 @@ function disabledReason(requiresPerson: boolean): string {
     </div>
     <MyDoorsSheet v-model:open="myDoorsOpen" />
     <AppointmentSheet v-model:open="apptOpen" />
-    <VolunteerSheet v-model:open="volOpen" />
   </div>
 </template>
 
@@ -186,8 +182,10 @@ function disabledReason(requiresPerson: boolean): string {
 }
 
 /* minmax(0, 1fr), not 1fr: a plain 1fr floors at the content's min width, so
- * one long label ("Come back another time") widened its own column and
- * squeezed the other — the six buttons must stay one even 2×3 block. */
+ * one long label widened its own column and squeezed the other (that was
+ * "Come back another time", since shortened to "Return" — the guard stays,
+ * the next long label shouldn't break the grid) — the six buttons must stay
+ * one even 2×3 block. */
 .outcome-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-// "Come back another time" → when? (2026-07-26)
+// "Return" → when? (2026-07-26; the button read "Come back another time" for
+// the first afternoon this shipped, before the label was shortened)
 //
 // Opens straight off the outcome button, and answering is optional: the knock
 // is already logged by the time this appears, so closing it costs nothing.

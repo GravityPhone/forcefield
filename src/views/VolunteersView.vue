@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // Who said they'd knock doors (2026-07-26).
 //
-// The read side of the one follow-up after a signature (VolunteerSheet). It
-// exists so the ask isn't write-only — a list nobody can see is a list nobody
-// acts on, and acting on it is the entire point of asking.
+// The read side of the "Wants to volunteer" button on Talk
+// (VolunteerButton.vue). It exists so the ask isn't write-only — a list nobody
+// can see is a list nobody acts on, and acting on it is the entire point of
+// asking.
 //
 // Manager/admin only: recruiting is their job, and a canvasser's own asks are
 // already answered on the porch.

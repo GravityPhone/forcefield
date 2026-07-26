@@ -52,7 +52,7 @@ const DOOR_COLORS: HelpSwatch[] = [
   { fill: '#2f6fed', label: 'Not knocked' },
   { fill: '#2e9e5b', label: 'Everyone signed' },
   { fill: '#2e9e5b', band: '#e0a02e', label: 'Some signed, names left' },
-  { fill: '#e0a02e', label: 'Come back another time, nobody signed yet' },
+  { fill: '#e0a02e', label: 'Return, nobody signed yet' },
   { fill: '#d64545', label: 'Not interested, skip or hostile' },
   { fill: '#8a90a5', label: 'Not home' },
   { fill: '#2f6fed', halo: '#111111', label: 'Dark ring: knocked today' },
@@ -70,7 +70,12 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Outcomes',
         target: 'talk-outcomes',
-        body: 'Signed: pick a person first, then asks whether they’d knock doors too. Optional — close it and the signature still logged.\nAll others: the person picked, or the household if none.\nCome back another time: offers a window to return in, when the campaign has appointments on. Optional — close it and the knock still logged.',
+        body: 'Signed: pick a person first.\nAll others: the person picked, or the household if none.\nReturn: offers a window to come back in, when the campaign has appointments on. Optional — close it and the knock still logged.',
+      },
+      {
+        heading: 'Wants to volunteer',
+        target: 'talk-volunteer',
+        body: 'Marks the picked person as willing to knock doors. Press again to remove.\nNeeds a person picked, like Signed.\nYes only — nothing is recorded for a no.\nThe list is under More → Volunteers, for managers.',
       },
       {
         heading: 'Someone else',
@@ -279,7 +284,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'volunteers-count',
-        body: 'Signers who said they’d knock doors too, asked at the door right after signing.\nYes only — a missing name means no answer or no, which read the same.',
+        body: 'Signers marked with Talk’s Wants to volunteer button.\nYes only — a missing name means no answer or no, which read the same.',
       },
       {
         target: 'volunteers-list',
@@ -448,7 +453,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Appointments',
         target: 'settings-appointments',
-        body: 'Off by default, and off means absent: no follow-up on the Come back another time button, no Appointments tab, no analytics tab.\nOn: that button offers a window to return in.\nWindow: how long one runs. Hours: the span they are offered across.',
+        body: 'Off by default, and off means absent: no follow-up on the Return button, no Appointments tab, no analytics tab.\nOn: that button offers a window to come back in.\nWindow: how long one runs. Hours: the span they are offered across.',
       },
     ],
   },
