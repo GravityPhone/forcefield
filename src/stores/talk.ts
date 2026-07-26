@@ -53,6 +53,14 @@ interface TalkState {
    * it; both write through activeClientId so it's the same DB row. */
   pendingOutcome: KnockOutcome | null
   activeClientId: string | null
+  /** Set when the person signing is registered at a DIFFERENT door than the
+   * one loaded — a spouse, an adult kid, a new tenant, or somebody who just
+   * happened to answer here. Their signature belongs to their own registered
+   * household; carries the label so the door card can say where it went. */
+  signerHome: { id: string; label: string } | null
+  /** Client id of the second row an away signature writes — the VISIT at the
+   * door actually stood at. Tracked so tapping Signed again undoes both. */
+  awayVisitClientId: string | null
   /** Which way Next auto-advances on the current street — a per-device
    * preference (set from Hunt mode) mimicking how canvassers actually walk:
    * house numbers ascending/descending, one side of the street or both. */
@@ -121,6 +129,8 @@ export const useTalkStore = defineStore('talk', {
     notes: '',
     pendingOutcome: null,
     activeClientId: null,
+    signerHome: null,
+    awayVisitClientId: null,
     walkDirection: (localStorage.getItem(WALK_DIRECTION_KEY) as WalkDirection) || 'ascending',
     walkParity: (localStorage.getItem(WALK_PARITY_KEY) as WalkParity) || 'both',
     knockPartlySigned: localStorage.getItem(KNOCK_PARTLY_SIGNED_KEY) !== 'false',
@@ -203,6 +213,8 @@ export const useTalkStore = defineStore('talk', {
         : null
       this.pendingOutcome = null
       this.activeClientId = null
+      this.signerHome = null
+      this.awayVisitClientId = null
       this.activeTab = 'talk'
       this.clearSearch()
       void this.refreshUpcoming()
@@ -229,6 +241,35 @@ export const useTalkStore = defineStore('talk', {
       this.selectedPerson = this.selectedPerson?.id === person.id ? null : person
       this.pendingOutcome = null
       this.activeClientId = null
+      // A roster pick is by definition registered here.
+      this.signerHome = null
+      this.awayVisitClientId = null
+    },
+
+    /** Pick somebody found in the county roll rather than on this door's
+     * roster — the spouse, the adult kid, the new tenant, the neighbour who
+     * came over. They're registered somewhere, and where that is decides
+     * where their signature lands (see logOutcome). */
+    selectRollPerson(hit: PersonHit) {
+      if (this.selectedPerson?.id === hit.id) {
+        this.selectedPerson = null
+        this.signerHome = null
+      } else {
+        const { addresses, ...person } = hit
+        this.selectedPerson = person as Person
+        const sameDoor = !hit.household_id || hit.household_id === this.selectedAddress?.id
+        this.signerHome = sameDoor
+          ? null
+          : {
+              id: hit.household_id!,
+              label: addresses
+                ? [addresses.street, addresses.city].filter(Boolean).join(', ')
+                : 'their registered address',
+            }
+      }
+      this.pendingOutcome = null
+      this.activeClientId = null
+      this.awayVisitClientId = null
     },
 
     /** Re-read the loaded door's appointments — after the sheet books, moves
@@ -249,6 +290,8 @@ export const useTalkStore = defineStore('talk', {
       this.selectedPerson = null
       this.pendingOutcome = null
       this.activeClientId = null
+      this.signerHome = null
+      this.awayVisitClientId = null
       this.upcoming = null
       upcomingSeq++
     },
@@ -320,30 +363,67 @@ export const useTalkStore = defineStore('talk', {
 
       if (this.pendingOutcome === outcome && this.activeClientId) {
         const clientId = this.activeClientId
+        // An away signature wrote a visit row too — undo takes both, or the
+        // door keeps a knock for a signature that no longer exists.
+        const visitId = this.awayVisitClientId
         this.pendingOutcome = null
         this.activeClientId = null
-        this.history = this.history.filter((h) => h.client_id !== clientId)
+        this.awayVisitClientId = null
+        this.history = this.history.filter(
+          (h) => h.client_id !== clientId && h.client_id !== visitId,
+        )
         await deleteKnock(clientId)
+        if (visitId) await deleteKnock(visitId)
         return
       }
 
+      const door = this.selectedAddress
+      // WHERE A SIGNATURE LANDS: with the signer registered at another door,
+      // it belongs to THEIR household — 412 Grove goes green even though you
+      // knocked at 88 Oak — because the door-status math counts signatures by
+      // the knock's household_id. Every other outcome is about the visit, so
+      // it stays at the door you're standing at.
+      const away = outcome === 'signed' ? this.signerHome : null
+
       const clientId = this.activeClientId ?? crypto.randomUUID()
+      const occurredAt = new Date().toISOString()
       const knock: NewKnock = {
         client_id: clientId,
         person_id: this.selectedPerson?.id ?? null,
-        household_id: this.selectedAddress?.id ?? null,
+        household_id: away?.id ?? door?.id ?? null,
         canvasser_id: auth.profile.id,
-        occurred_at: new Date().toISOString(),
+        occurred_at: occurredAt,
         outcome,
         notes: this.notes.trim() || null,
       }
       this.pendingOutcome = outcome
       this.activeClientId = clientId
-      // This door is now the newest stop on your knock path (kept distinct —
-      // a re-knock moves it back to the front). Deliberately NOT removed on
-      // undo: you still physically visited, so Previous may return here.
-      if (knock.household_id) {
-        const id = knock.household_id
+
+      // AND THE VISIT STILL RECORDS WHERE YOU STOOD. Without this row the door
+      // drops off the day's map and the next canvasser re-knocks it. It's
+      // 'maybe' ("Come back another time") because that's the honest state of
+      // the door: its own residents still haven't been asked, and 'maybe'
+      // keeps it yellow, walkable, and out of CLOSED_OUTCOMES.
+      if (away && door) {
+        const visitId = this.awayVisitClientId ?? crypto.randomUUID()
+        this.awayVisitClientId = visitId
+        void submitKnock({
+          client_id: visitId,
+          person_id: null,
+          household_id: door.id,
+          canvasser_id: auth.profile.id,
+          occurred_at: occurredAt,
+          outcome: 'maybe',
+          notes: `Signature taken here for ${away.label}`,
+        })
+      }
+
+      // The door you physically stood at is the newest stop on your knock path
+      // — never the away household, which nobody visited. Kept distinct (a
+      // re-knock moves it to the front) and deliberately NOT removed on undo:
+      // you still went there, so Previous may return.
+      if (door) {
+        const id = door.id
         this.myKnockPath = [id, ...this.myKnockPath.filter((h) => h !== id)]
       }
       await submitKnock(knock)
@@ -354,25 +434,46 @@ export const useTalkStore = defineStore('talk', {
       if (this.activeClientId !== clientId || this.pendingOutcome !== outcome) return
       // Optimistic: reflect the (possibly corrected) knock in this
       // household's history, replacing any prior entry for the same log.
-      if (knock.household_id) {
+      // An away signature's row belongs to a DIFFERENT door's history, so what
+      // shows here is the visit it left behind — which is what a later reload
+      // of this door will fetch anyway.
+      const shown: NewKnock | null = away
+        ? door
+          ? {
+              ...knock,
+              client_id: this.awayVisitClientId!,
+              person_id: null,
+              household_id: door.id,
+              outcome: 'maybe',
+              notes: `Signature taken here for ${away.label}`,
+            }
+          : null
+        : knock
+      if (shown?.household_id) {
+        const entryClientId = shown.client_id
         this.history = [
           {
-            ...knock,
-            id: clientId,
-            created_at: knock.occurred_at,
+            ...shown,
+            id: entryClientId,
+            created_at: shown.occurred_at,
             // The DB stamps these on insert (squad of the day, door's turf) —
             // the optimistic row doesn't know them and nothing here reads them.
             squad_id: null,
             squad_name: null,
             turf_id: null,
             turf_name: null,
-            person: this.selectedPerson ? { name: this.selectedPerson.name } : null,
+            // The visit row is about the door, not the signer — its person_id
+            // is null and its name must be too.
+            person:
+              shown.person_id && this.selectedPerson
+                ? { name: this.selectedPerson.name }
+                : null,
             canvasser: {
               username: auth.profile.username,
               display_name: auth.profile.display_name,
             },
           },
-          ...this.history.filter((h) => h.client_id !== clientId),
+          ...this.history.filter((h) => h.client_id !== entryClientId),
         ]
       }
     },
@@ -411,6 +512,8 @@ export const useTalkStore = defineStore('talk', {
       this.pendingOutcome = null
       this.activeClientId = null
       this.selectedPerson = null
+      this.signerHome = null
+      this.awayVisitClientId = null
       this.notes = ''
 
       const current = this.selectedAddress
@@ -432,6 +535,8 @@ export const useTalkStore = defineStore('talk', {
       this.pendingOutcome = null
       this.activeClientId = null
       this.selectedPerson = null
+      this.signerHome = null
+      this.awayVisitClientId = null
       this.notes = ''
       await this.loadAddress(addressId)
     },
@@ -474,6 +579,8 @@ export const useTalkStore = defineStore('talk', {
       this.pendingOutcome = null
       this.activeClientId = null
       this.selectedPerson = null
+      this.signerHome = null
+      this.awayVisitClientId = null
       this.notes = ''
 
       await this.ensureKnockPath()

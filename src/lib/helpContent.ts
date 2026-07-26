@@ -73,6 +73,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'Signed: pick a person first, then asks whether they’d knock doors too. Optional — close it and the signature still logged.\nAll others: the person picked, or the household if none.\nCome back another time: offers a window to return in, when the campaign has appointments on. Optional — close it and the knock still logged.',
       },
       {
+        heading: 'Someone else',
+        target: 'talk-roll',
+        body: 'Searches the whole county roll, not just this door.\nFor the spouse, the adult kid, the new tenant — anyone the roster missed.\nRegistered at another address: their signature counts for that address, and this door still records the visit.\nNobody can be added to the roll from here.',
+      },
+      {
         heading: 'Come back',
         target: 'talk-appointment',
         body: 'Somebody promised to be back at this door. Whoever is on the street can take it.\nThe whole list is under More → Appointments.',
