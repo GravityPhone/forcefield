@@ -461,6 +461,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'Ask in plain English. Read-only database access, enforced at the database.\nStreet names in an answer are links. They open the turf cutter on that street.',
       },
       { target: 'aichat-suggestions', body: 'Three follow-ups after each answer. Tap to send.' },
+      {
+        target: 'aichat-history',
+        body: 'Chats are kept, and this is the list of them — yours only, newest first.\nTap one to reopen it. ✎ renames. ✕ twice deletes.',
+      },
+      { target: 'aichat-new', body: 'Empty chat. The one you were in stays in the list.' },
     ],
   },
 }
