@@ -25,6 +25,7 @@ import type { CanvasDoor, DoorBadge, DoorPaintState } from '@/lib/doorCanvas'
 import { createBadgeFactory } from '@/lib/doorBadges'
 import { attachMapScrollGuard } from '@/lib/mapScroll'
 import type { MapScrollGuard } from '@/lib/mapScroll'
+import { afterScrollUnlock } from '@/lib/appChrome'
 import {
   OUTCOME_HEX,
   OUTCOME_SHORT,
@@ -1134,17 +1135,21 @@ function fitToSquad() {
 /**
  * Bring the map card up under the header.
  *
- * Deferred a frame, and that's the whole point (2026-07-26): every caller is
- * reached from a member sheet that has just closed, and reka-ui releases its
- * body scroll lock when the dialog unmounts — a scrollIntoView fired in the
- * same tick lands on a body that still can't scroll and silently does
- * nothing. That was "when we click assign at the bottom, bring us up to the
- * top" not happening. `scroll-padding-top` in style.css (lib/appChrome.ts
- * publishes it) keeps the landing clear of the sticky header.
+ * Held back until the scroll lock is off, and that's the whole point
+ * (2026-07-26): every caller is reached from a member sheet that has just
+ * closed, and Reka releases its body scroll lock only when the dialog
+ * UNMOUNTS — 0.2s later, once the slide-down animation has run. A scroll
+ * fired before then is a silent no-op and is simply lost (see
+ * afterScrollUnlock), so the page stays down among the crew cards where you
+ * tapped. That was "I click assign and the viewport is snapped to the bottom
+ * of the screen". An earlier fix deferred a single frame, which is inside the
+ * dead window and changed nothing. `scroll-padding-top` in style.css
+ * (lib/appChrome.ts publishes it) keeps the landing clear of the sticky
+ * header.
  */
 function scrollMapIntoView() {
   void nextTick(() => {
-    requestAnimationFrame(() => {
+    afterScrollUnlock(() => {
       mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   })
@@ -1215,18 +1220,16 @@ function focusDoorSet(doors: { lat: number | null; lng: number | null }[]) {
   if (!bounds.isEmpty()) map.fitBounds(bounds, 56)
 }
 
-/** Opening shot for assign mode: the ground you're actually dividing — the
- * doors in the pools you may cut from, biggest patch first. Starting zoomed
- * out on the whole county means every assign session begins with the same
- * pinch-and-hunt.
+/** Frame the ground you're allowed to divide — the doors in the pools you may
+ * cut from, biggest patch first. Starting zoomed out on the whole county
+ * means every assign session begins with the same pinch-and-hunt.
  *
- * But only when none of it is on screen (2026-07-26, user call). Re-fitting
- * on every tap is what made tapping a member, then Assign in their sheet,
- * then the map's own Assign button each land somewhere different — three
- * fits of the same ground from three different starting frames. With any of
- * it visible, the frame you already have is a frame that works, so the map
- * holds still; flying there only helps when the map is showing you nothing. */
-function focusAssignPool() {
+ * Holds still when some of it is already on screen (2026-07-26, user call),
+ * which is what merely TAPPING a person does: the sheet shouldn't jerk the
+ * map behind it, and the frame you already have is a frame that works.
+ * `force` is for the moment assign mode actually opens — see
+ * focusAssignTarget. */
+function focusAssignPool(force = false) {
   const pool: TurfDoor[] = []
   for (const d of turfDoors.value.values()) {
     if (poolParentOf(d) !== null) pool.push(d)
@@ -1234,8 +1237,32 @@ function focusAssignPool() {
   // The pool, not the whole crew turf: assign mode paints nothing outside it,
   // so a visible door you can't divide would still leave an empty map.
   const doors = pool.length ? pool : [...turfDoors.value.values()]
-  if (anyDoorInView(doors)) return
+  if (!force && anyDoorInView(doors)) return
   focusDoorSet(doors)
+}
+
+/** Opening shot for assign mode: THEIR doors when they already have some,
+ * otherwise the whole pool you're dividing (2026-07-26, user call — "have our
+ * turf zoomed into, or rather their doors if they have any").
+ *
+ * Unconditional, unlike focusAssignPool's own rule. Framing on every tap was
+ * dropped this morning because the three ways in each fit the same pool from
+ * a different starting frame, so the map read as wandering — but a target
+ * that depends on WHO you picked lands in the same place every time you pick
+ * that person, from any of the three doors in. Consistency was the point, not
+ * holding still. */
+function focusAssignTarget(theirs: Set<string>) {
+  const mine: TurfDoor[] = []
+  for (const id of theirs) {
+    const d = turfDoors.value.get(id)
+    if (d && d.lat != null && d.lng != null) mine.push(d)
+  }
+  // No doors yet — or none of them geocoded, which frames nothing at all.
+  if (!mine.length) {
+    focusAssignPool(true)
+    return
+  }
+  focusDoorSet(mine)
 }
 
 function focusTurf(turfId: string) {
@@ -1448,9 +1475,9 @@ function startAssign(memberId: string) {
   scrollMapIntoView()
   // Land on the ground being divided, not on the county. The map is already
   // filtered to that turf (paintForDoor), so this frames exactly what's
-  // painted — set up and ready to sweep. No-ops when some of that ground is
-  // already on screen; the scroll up is the move, not a re-fit.
-  focusAssignPool()
+  // painted — set up and ready to sweep. `pre` is what's already theirs, so
+  // re-opening someone frames the pile you're about to edit.
+  focusAssignTarget(pre)
 }
 
 function cancelAssign() {

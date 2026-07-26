@@ -79,3 +79,44 @@ export function scrollIntoSafeView(el: HTMLElement, behavior: ScrollBehavior = '
   if (delta === 0) return
   window.scrollBy({ top: delta, behavior })
 }
+
+/**
+ * Run `cb` once the modal scroll lock is off — i.e. once the last BottomSheet
+ * is really gone, not merely closing.
+ *
+ * A sheet is a Reka UI dialog, and Reka locks the page by setting
+ * `body { overflow: hidden }`. Measured 2026-07-26 on /squad: with the page
+ * scrolled to 722, that one style collapses the document's scrollable height
+ * from 1534 to the viewport's 812, clamps the offset to 0, and makes every
+ * programmatic scroll a SILENT no-op — scrollTo, scrollBy and scrollIntoView
+ * all return having done nothing. The offset is not restored on unlock, so a
+ * scroll attempted during the lock isn't merely delayed; it's lost, and the
+ * page settles back roughly where it was.
+ *
+ * The trap is that the lock outlives the close: it's released when
+ * DialogContent UNMOUNTS, which waits out the 0.2s slide-down animation. So
+ * "close the sheet, then scroll" has to actually wait, and a nextTick or a
+ * frame is nowhere near long enough. Poll instead, with a deadline so a stuck
+ * animation can't strand the callback forever. With no sheet open this costs
+ * one tick.
+ *
+ * A timer rather than requestAnimationFrame, deliberately: frames stop
+ * entirely while the page is hidden, so an rAF poll parks a half-finished
+ * gesture until the canvasser comes back and then scrolls the page out from
+ * under them. A throttled timer still resolves. When visible the two are
+ * indistinguishable.
+ */
+export function afterScrollUnlock(cb: () => void, timeoutMs = 900): void {
+  const deadline = performance.now() + timeoutMs
+  const tick = () => {
+    // The style Reka actually writes — the thing blocking the scroll — rather
+    // than a guess at which element is a sheet. A second sheet still up keeps
+    // it set, which is correct: we'd only no-op again.
+    if (document.body.style.overflow !== 'hidden' || performance.now() >= deadline) {
+      cb()
+      return
+    }
+    setTimeout(tick, 24)
+  }
+  setTimeout(tick, 24)
+}
