@@ -257,6 +257,14 @@ function isGroupOpen(g: StreetGroup): boolean {
   return g.segs.some((s) => s.key === expandedSegKey.value)
 }
 
+/** Chip tap inside an open street: switch which stretch the editor is on.
+ *  Tapping the chip you're already on is a no-op — collapsing the street out
+ *  from under your finger isn't what picking a stretch means. */
+function openSegChunk(key: string) {
+  if (expandedSegKey.value === key) return
+  toggleSegEditor(key)
+}
+
 /** Row tap: close if any chunk of this street is open, else open its FIRST
  * chunk (multi-chunk streets stay reachable per-chunk via the individual
  * range chips, which call toggleSegEditor directly). */
@@ -3726,88 +3734,97 @@ onUnmounted(() => {
         </p>
 
         <template v-if="segments.length">
-          <!-- Streets table: ONE row per street. Multiple chunks on the same
-               street (a trimmed hole splits a run) list their ranges side by
-               side, left to right, as individually tappable chips. Tapping
-               the row (or a chip) opens the editor below AND focuses TRIM
-               mode on that street (its doors paint; each map tap
-               drops/restores a house). -->
-          <div class="seg-table" role="table" aria-label="Streets in this turf" data-help="turf-streets">
-            <div class="seg-thead" role="row">
-              <span role="columnheader">Street</span>
-              <span role="columnheader">Numbers</span>
-              <span role="columnheader" class="seg-col-num">Doors</span>
-              <span role="columnheader" aria-label="Remove"></span>
-            </div>
+          <!-- Streets list: ONE line per street, its name and its door count,
+               nothing else (2026-07-26, user call — house-number ranges on
+               every row made a twelve-street turf a wall of digits). Tap a
+               street and everything about it opens under its own row: which
+               stretches of it are in, the from–to and side editor, and
+               dropping it. A street cut into several stretches (a trimmed
+               hole splits a run) lists them as chips, one tap each — the
+               segments themselves are unchanged, this is display only.
+               Opening a street also focuses the map on it: its doors paint,
+               and map taps trim houses. -->
+          <div class="seg-table" role="list" aria-label="Streets in this turf" data-help="turf-streets">
             <div
               v-for="group in streetGroups"
               :key="group.key"
-              class="seg-row"
-              :class="{ open: isGroupOpen(group), empty: !group.doorCount }"
-              role="row"
-              @click="toggleGroupEditor(group)"
+              class="seg-item"
+              :class="{ open: isGroupOpen(group) }"
+              role="listitem"
             >
-              <span class="seg-street-name" role="cell">{{ group.street_name }}</span>
-              <span class="seg-range-text" role="cell">
-                <button
-                  v-for="seg in group.segs"
-                  :key="seg.key"
-                  type="button"
-                  class="seg-range-chip"
-                  :class="{ active: expandedSegKey === seg.key }"
-                  @click.stop="toggleSegEditor(seg.key)"
-                >{{ rangeLabel(seg) }}</button>
-              </span>
-              <span class="seg-count" role="cell">{{ group.doorCount }}</span>
               <button
-                class="seg-x"
-                :aria-label="`Remove ${group.street_name}`"
-                @click.stop="removeGroupWithUndo(group)"
+                type="button"
+                class="seg-row"
+                :aria-expanded="isGroupOpen(group)"
+                @click="toggleGroupEditor(group)"
               >
-                ✕
+                <span class="seg-street-name">{{ group.street_name }}</span>
+                <span
+                  class="seg-count"
+                  :class="{ 'seg-count-empty': !group.doorCount }"
+                >{{ group.doorCount }}</span>
+                <span class="seg-caret" aria-hidden="true">{{ isGroupOpen(group) ? '▴' : '▾' }}</span>
               </button>
+
+              <div v-if="isGroupOpen(group) && expandedSeg" class="seg-panel">
+                <!-- One stretch needs no chooser. -->
+                <div v-if="group.segs.length > 1" class="seg-chunks">
+                  <button
+                    v-for="seg in group.segs"
+                    :key="seg.key"
+                    type="button"
+                    class="seg-range-chip"
+                    :class="{ active: expandedSegKey === seg.key }"
+                    @click="openSegChunk(seg.key)"
+                  >{{ rangeLabel(seg) }}</button>
+                </div>
+                <div class="seg-editor-controls">
+                  <input
+                    type="number"
+                    class="seg-cell-num"
+                    :value="expandedSeg.range_start"
+                    min="0"
+                    aria-label="Range start"
+                    @change="expandedSeg.range_start = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(expandedSeg)"
+                  />
+                  <span class="muted">–</span>
+                  <input
+                    type="number"
+                    class="seg-cell-num"
+                    :value="expandedSeg.range_end"
+                    min="0"
+                    aria-label="Range end"
+                    @change="expandedSeg.range_end = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(expandedSeg)"
+                  />
+                  <select
+                    class="seg-side-select"
+                    :value="expandedSeg.parity"
+                    aria-label="Which side of the street"
+                    @change="onSegmentParityChange(expandedSeg, ($event.target as HTMLSelectElement).value)"
+                  >
+                    <option value="both">Both sides</option>
+                    <option value="even">Even side</option>
+                    <option value="odd">Odd side</option>
+                  </select>
+                </div>
+                <p v-if="expandedSegSkipNote" class="muted seg-trim-hint">{{ expandedSegSkipNote }}</p>
+                <div class="seg-panel-foot">
+                  <span class="seg-panel-facts">
+                    <span class="seg-doors" :class="{ 'seg-doors-empty': !expandedSeg.doorCount }">
+                      {{ expandedSeg.doorCount }} doors
+                    </span>
+                    <span class="muted">{{ expandedSeg.city ?? 'any city' }}</span>
+                  </span>
+                  <button
+                    class="btn btn-ghost btn-sm seg-remove"
+                    :aria-label="`Remove ${group.street_name}`"
+                    @click="removeGroupWithUndo(group)"
+                  >
+                    Remove street
+                  </button>
+                </div>
+              </div>
             </div>
-          </div>
-          <!-- Editor for the open row: house-number range, side, and
-               trim-by-tapping on the map. -->
-          <div v-if="expandedSeg" class="seg-editor">
-            <div class="seg-editor-title">
-              <strong>{{ expandedSeg.street_name }}</strong>
-              <span class="muted">{{ expandedSeg.city ?? 'any city' }}</span>
-              <span class="seg-doors" :class="{ 'seg-doors-empty': !expandedSeg.doorCount }">
-                {{ expandedSeg.doorCount }} doors
-              </span>
-            </div>
-            <div class="seg-editor-controls">
-              <input
-                type="number"
-                class="seg-cell-num"
-                :value="expandedSeg.range_start"
-                min="0"
-                aria-label="Range start"
-                @change="expandedSeg.range_start = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(expandedSeg)"
-              />
-              <span class="muted">–</span>
-              <input
-                type="number"
-                class="seg-cell-num"
-                :value="expandedSeg.range_end"
-                min="0"
-                aria-label="Range end"
-                @change="expandedSeg.range_end = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(expandedSeg)"
-              />
-              <select
-                class="seg-side-select"
-                :value="expandedSeg.parity"
-                aria-label="Which side of the street"
-                @change="onSegmentParityChange(expandedSeg, ($event.target as HTMLSelectElement).value)"
-              >
-                <option value="both">Both sides</option>
-                <option value="even">Even side</option>
-                <option value="odd">Odd side</option>
-              </select>
-            </div>
-            <p v-if="expandedSegSkipNote" class="muted seg-trim-hint">{{ expandedSegSkipNote }}</p>
           </div>
         </template>
         <p v-else class="muted empty-note">No streets yet.</p>
@@ -4811,9 +4828,10 @@ onUnmounted(() => {
   box-shadow: 0 0 3px rgba(0, 0, 0, 0.35);
 }
 
-/* --- Streets table: one THIN text row per swept stretch (2026-07-24
-   night — "more compact, just rows and columns"). No inline inputs; the
-   open row's editor sits below the table. --- */
+/* --- Streets list: one line per street, everything else behind a tap
+   (2026-07-26 — "just have the streets listed"). The open street's panel
+   drops in under its OWN row rather than at the bottom of the list, so on a
+   twelve-street turf the controls are where the finger already is. --- */
 
 .seg-table {
   display: flex;
@@ -4822,60 +4840,64 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
-}
-
-.seg-thead,
-.seg-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 2.4rem 1.9rem;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0 0.2rem 0 0.55rem;
-}
-
-.seg-thead {
-  min-height: 24px;
-  font-size: 0.66rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--text-muted);
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
-}
-
-.seg-row {
-  min-height: 36px;
   background: var(--surface);
-  cursor: pointer;
 }
 
-.seg-row + .seg-row {
+.seg-item + .seg-item {
   border-top: 1px solid var(--border);
 }
 
-/* The open row is the map's trim target. */
-.seg-row.open {
+/* The open street is also the map's trim target. */
+.seg-item.open {
   background: color-mix(in srgb, var(--draft-color) 10%, var(--surface));
   box-shadow: inset 3px 0 0 var(--draft-color);
 }
 
+.seg-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 1rem;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 0.55rem;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  /* A <button> gets centered, clamped text from the UA styles otherwise. */
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+
 .seg-street-name {
   font-weight: 700;
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Multiple chunks on one street list side by side, left to right. */
-.seg-range-text {
-  display: inline-flex;
-  align-items: center;
+.seg-caret {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-align: right;
+}
+
+/* Everything about the open street, under its own row. */
+.seg-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.1rem 0.55rem 0.6rem;
+}
+
+/* A street cut into several stretches picks one to edit. */
+.seg-chunks {
+  display: flex;
   flex-wrap: wrap;
-  gap: 0.15rem;
-  font-size: 0.78rem;
-  font-variant-numeric: tabular-nums;
+  gap: 0.25rem;
 }
 
 .seg-range-chip {
@@ -4909,51 +4931,30 @@ onUnmounted(() => {
   color: var(--draft-color);
 }
 
-.seg-col-num {
-  text-align: right;
-}
-
-.seg-row.empty .seg-count {
+/* A range that matched no doors is the one thing worth shouting from a
+   collapsed row — it means the street is in the turf but empty. */
+.seg-count-empty {
   color: var(--danger);
 }
 
-.seg-x {
-  min-height: 34px;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  font: inherit;
-  font-size: 0.85rem;
-  cursor: pointer;
-  padding: 0;
-}
-
-.seg-x:hover {
-  color: var(--danger);
-}
-
-/* Editor for the open row. */
-.seg-editor {
+.seg-panel-foot {
   display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  padding: 0.55rem 0.65rem;
-  margin-bottom: 0.6rem;
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--draft-color);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-
-.seg-editor-title {
-  display: flex;
-  align-items: baseline;
+  align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
 }
 
-.seg-editor-title .muted {
-  flex: 1;
-  font-size: 0.82rem;
+.seg-panel-facts {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  min-width: 0;
+  font-size: 0.8rem;
+}
+
+.seg-remove {
+  flex-shrink: 0;
+  color: var(--danger);
 }
 
 .seg-doors {
