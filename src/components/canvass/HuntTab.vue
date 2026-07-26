@@ -297,12 +297,20 @@ const haveMyDoors = computed(() => myOwnTurfIds.value.size > 0)
 
 // The pref outlives the assignment: yesterday's claim is gone this morning,
 // and a stored 'doors' would then hide every pin behind a button that isn't
-// rendered. Fall back to the crew's ground. Guarded on turfs having actually
-// loaded — an empty set during startup isn't the same as "you have none".
-watch([haveMyDoors, allTurfs], () => {
-  if (turfShade.value === 'doors' && allTurfs.value.length && !haveMyDoors.value) {
+// rendered. Fall back to the crew's ground, and from there all the way off if
+// there's no crew ground either (2026-07-26, user call) — "My turf" is a
+// filter, so with nothing assigned today it empties the map, which reads as
+// the app breaking. Guarded on turfs having actually loaded: an empty set
+// during startup isn't the same as "you have none".
+watch([haveMyDoors, myTurfIds, allTurfs], () => {
+  if (!allTurfs.value.length) return
+  if (turfShade.value === 'doors' && !haveMyDoors.value) {
     turfShade.value = 'mine'
     writeTurfShadeMode('map-turf-shading', 'mine')
+  }
+  if (turfShade.value === 'mine' && !myTurfIds.value.size) {
+    turfShade.value = 'off'
+    writeTurfShadeMode('map-turf-shading', 'off')
   }
 })
 

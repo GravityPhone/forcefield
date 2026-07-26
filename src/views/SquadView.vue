@@ -753,14 +753,22 @@ async function setTurfShade(mode: 'mine' | 'all') {
   if (turfShade.value === 'mine' && !ourTurfInView()) focusDoorSet([...turfDoors.value.values()])
 }
 
-/** Is any of the crew's own turf on screen right now? */
-function ourTurfInView(): boolean {
+/** Is any of these doors on screen right now? The rule behind every
+ * "don't re-frame a map somebody is already reading" check on this page —
+ * Scout's, verbatim. Reads the MAP's viewport, not the page's, so it answers
+ * the same whether or not the map card is scrolled into view. */
+function anyDoorInView(doors: Iterable<{ lat: number | null; lng: number | null }>): boolean {
   const bounds = map?.getBounds()
   if (!bounds) return false
-  for (const d of turfDoors.value.values()) {
+  for (const d of doors) {
     if (d.lat != null && d.lng != null && bounds.contains({ lat: d.lat, lng: d.lng })) return true
   }
   return false
+}
+
+/** Is any of the crew's own turf on screen right now? */
+function ourTurfInView(): boolean {
+  return anyDoorInView(turfDoors.value.values())
 }
 
 /** Turf color by id across the WHOLE campaign, not just the crew's turfs —
@@ -1121,6 +1129,25 @@ function fitToSquad() {
   if (!bounds.isEmpty()) map.fitBounds(bounds, 48)
 }
 
+/**
+ * Bring the map card up under the header.
+ *
+ * Deferred a frame, and that's the whole point (2026-07-26): every caller is
+ * reached from a member sheet that has just closed, and reka-ui releases its
+ * body scroll lock when the dialog unmounts — a scrollIntoView fired in the
+ * same tick lands on a body that still can't scroll and silently does
+ * nothing. That was "when we click assign at the bottom, bring us up to the
+ * top" not happening. `scroll-padding-top` in style.css (lib/appChrome.ts
+ * publishes it) keeps the landing clear of the sticky header.
+ */
+function scrollMapIntoView() {
+  void nextTick(() => {
+    requestAnimationFrame(() => {
+      mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  })
+}
+
 /** "Show on map" in a member's sheet: zoom to the last door they knocked, and
  * bring the map into view. Tapping the person themselves frames the crew's
  * turf instead — see openMemberSheet. */
@@ -1132,7 +1159,7 @@ function selectMember(memberId: string, scroll = true) {
     map.panTo({ lat: spot.lat, lng: spot.lng })
     map.setZoom(17)
   }
-  if (scroll) mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  if (scroll) scrollMapIntoView()
 }
 
 /** Cell edge for clustering, degrees latitude (~1.1km) — same as Scout's
@@ -1189,13 +1216,24 @@ function focusDoorSet(doors: { lat: number | null; lng: number | null }[]) {
 /** Opening shot for assign mode: the ground you're actually dividing — the
  * doors in the pools you may cut from, biggest patch first. Starting zoomed
  * out on the whole county means every assign session begins with the same
- * pinch-and-hunt. */
+ * pinch-and-hunt.
+ *
+ * But only when none of it is on screen (2026-07-26, user call). Re-fitting
+ * on every tap is what made tapping a member, then Assign in their sheet,
+ * then the map's own Assign button each land somewhere different — three
+ * fits of the same ground from three different starting frames. With any of
+ * it visible, the frame you already have is a frame that works, so the map
+ * holds still; flying there only helps when the map is showing you nothing. */
 function focusAssignPool() {
   const pool: TurfDoor[] = []
   for (const d of turfDoors.value.values()) {
     if (poolParentOf(d) !== null) pool.push(d)
   }
-  focusDoorSet(pool.length ? pool : [...turfDoors.value.values()])
+  // The pool, not the whole crew turf: assign mode paints nothing outside it,
+  // so a visible door you can't divide would still leave an empty map.
+  const doors = pool.length ? pool : [...turfDoors.value.values()]
+  if (anyDoorInView(doors)) return
+  focusDoorSet(doors)
 }
 
 function focusTurf(turfId: string) {
@@ -1383,7 +1421,7 @@ function poolParentOf(door: TurfDoor): string | null {
 
 function startAssign(memberId: string) {
   if (assigningMemberId.value === memberId) {
-    mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    scrollMapIntoView()
     return
   }
   assignError.value = ''
@@ -1405,10 +1443,11 @@ function startAssign(memberId: string) {
   assignUndo.value = []
   disarmTools()
   sweepFlash.value = ''
-  mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  scrollMapIntoView()
   // Land on the ground being divided, not on the county. The map is already
   // filtered to that turf (paintForDoor), so this frames exactly what's
-  // painted — set up and ready to sweep.
+  // painted — set up and ready to sweep. No-ops when some of that ground is
+  // already on screen; the scroll up is the move, not a re-fit.
   focusAssignPool()
 }
 
@@ -1880,7 +1919,8 @@ async function openMemberSheet(memberId: string) {
   sheetMemberId.value = memberId
   // Frame OUR TURF, not their last stop (2026-07-25, user call): tapping a
   // person is the first move of handing them doors, so the map underneath the
-  // sheet should already be the ground you'd divide — hit Assign and you're
+  // sheet should already be the ground you'd divide — and holds still when it
+  // already is, so the sheet doesn't jerk the map behind it — hit Assign and you're
   // set up. Where they physically are is a different question, and it has its
   // own button in the sheet ("Show on map").
   focusAssignPool()
