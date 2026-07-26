@@ -294,7 +294,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Cutting',
         target: 'turf-create',
-        body: '+ Create new turf, take streets, assign to a squad or one canvasser.\nWhile a cut is open, the bar at the top of the page names the turf and counts its doors.\nTurf lasts. Squads do not: re-point turf at today’s crew each morning.',
+        body: '+ Create new turf, take streets, assign to a squad or one canvasser.\nSave, Start over and Cancel sit under the map. The bar at the top names the turf and counts its doors.\nTurf lasts. Squads do not: re-point turf at today’s crew each morning.',
       },
       {
         heading: 'Search, then add',
@@ -309,12 +309,12 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Streets table',
         target: 'turf-streets',
-        body: 'One row per street: ranges, door count, ✕ to drop.\nTap a row to edit from and to, set both, even or odd, and trim single houses on the map.',
+        body: 'One row per street: ranges, door count, ✕ to drop.\nTap a row to edit from and to, and set both, even or odd.',
       },
       {
         heading: 'Reading the map',
         target: 'turf-map',
-        body: 'Every door shows from the moment the page opens, colored by knock status.\nThe Turf layer adds ownership on top: one ring per door, in its turf’s color. Same in overview and while cutting.\nOne turf, one color — per-member shares are a Squad page matter and don’t show here.\nTap a dot at any zoom for its turf, residents and recent knocks.',
+        body: 'Every door shows from the moment the page opens, colored by knock status.\nThe Turf layer adds ownership on top: one ring per door, in its turf’s color. Same in overview and while cutting.\nOne turf, one color — per-member shares are a Squad page matter and don’t show here.\nCutting: tap a door to put it in the turf, tap it again to take it out. Doors in the turf wear a dark ring.\nOverview: tap a door at any zoom for its turf, residents and recent knocks.',
         swatches: DOOR_COLORS,
       },
       {

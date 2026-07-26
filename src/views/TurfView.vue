@@ -193,12 +193,6 @@ const segments = ref<DraftSegment[]>([])
  * is also the map's TRIM target: its doors paint as tappable dots. */
 const expandedSegKey = ref<string | null>(null)
 const expandedSeg = computed(() => segments.value.find((s) => s.key === expandedSegKey.value) ?? null)
-/** The street being trimmed door-by-door — follows the open table row. */
-const focusedStreet = computed(() =>
-  expandedSeg.value
-    ? { name: expandedSeg.value.street_name, city: expandedSeg.value.city }
-    : null,
-)
 /** The street last picked from search — its doors paint so "which houses is
  * this?" has an answer on an otherwise blank map. */
 const locatedStreet = ref<{ name: string; city: string | null } | null>(null)
@@ -210,13 +204,12 @@ function toggleSegEditor(key: string) {
   }
   expandedSegKey.value = key
   ensureKnockStatuses()
-  // Trim mode owns the map taps — the armed tools and the history bubble
-  // step aside.
+  // The editor is about ONE street, so put it on screen: disarm the street
+  // tool (its taps would fight yours) and zoom there.
   streetTapActive.value = false
   doorInfo.value = null
   const seg = segments.value.find((s) => s.key === key)
-  // Opening trim mode zooms to the street and pins down its unmapped doors
-  // so there's something to tap.
+  // Pin down the street's unmapped doors so there's something to tap.
   if (seg) void materializeStreetPins(seg.street_name, seg.city, true, true)
 }
 
@@ -526,10 +519,13 @@ const listTurfs = computed(() => {
 // The cutter's "Turf" button gates exactly ONE thing: whether every door
 // wears the color of the turf that owns it. One meaning, the same in
 // overview and while cutting (2026-07-25) — no area shading, no symbols,
-// no mode where the colors go away. OFF BY DEFAULT on its own per-device
-// key: a fresh cutter opens on plain Scout-style status dots. Deliberately
-// NOT Scout's shared pref — its layer filters ITS map's doors.
-const showTurfColors = ref(readMapPref('cutter-turf-layer', false))
+// no mode where the colors go away. ON by default here, unlike Scout and
+// Squad, where nothing-toggled means plain status pins: this is the page
+// that exists to show how the county is divided, so opening it with no
+// division drawn was starting everyone one tap behind. Turn it off to read
+// pure knock status. Deliberately NOT Scout's shared pref — its layer
+// filters ITS map's doors.
+const showTurfColors = ref(readMapPref('cutter-turf-layer', true))
 const showCity = ref(readMapPref('map-show-city', false))
 
 function toggleTurfColors() {
@@ -649,17 +645,22 @@ const flashMsg = ref('')
 const flashAction = ref<{ label: string; run: () => void } | null>(null)
 let flashTimer: ReturnType<typeof setTimeout> | undefined
 
-function flash(msg: string, action: { label: string; run: () => void } | null = null) {
+function flash(
+  msg: string,
+  action: { label: string; run: () => void } | null = null,
+  ms?: number,
+) {
   flashMsg.value = msg
   flashAction.value = action
   clearTimeout(flashTimer)
-  // Messages with a decision on them hang around longer.
+  // Messages with a decision on them hang around longer; a caller can ask
+  // for a shorter one (naming each door as you tap it, say).
   flashTimer = setTimeout(
     () => {
       flashMsg.value = ''
       flashAction.value = null
     },
-    action ? 8000 : 3500,
+    ms ?? (action ? 8000 : 3500),
   )
 }
 
@@ -1252,9 +1253,16 @@ async function geocodeTurfDoors(turfId: string) {
 }
 
 // --- Tapping (all synchronous — the draft lives entirely in memory) ---
-// Tap routing, in priority order: armed street-tap tool → trim mode's door
-// toggles → a painted dot opens its compact house history → empty map
-// closes whatever's open.
+// ONE rule per mode, which is the whole point (2026-07-25: "we need to be
+// able to pretty easily change the dots that are in each turf"):
+//
+//   cutting  → tap a door, it joins the turf; tap it again, it leaves.
+//              Any door on the map, no row to open first, no mode to find.
+//   overview → tap a door for its house history + the turf it belongs to.
+//
+// An armed sweep tool (☝ Streets) still wins over both — that's what arming
+// it means. Everything else is scale: door taps while cutting need real pins
+// to aim at, so below PINS_MIN_ZOOM they say so instead of guessing.
 
 function onMapClick(e: google.maps.MapMouseEvent) {
   if (!e.latLng || !map) return
@@ -1262,22 +1270,22 @@ function onMapClick(e: google.maps.MapMouseEvent) {
     void handleStreetTap(e.latLng)
     return
   }
-  if (focusedStreet.value) {
-    // Trimming keeps its zoom floor: dropping ONE house out of a range wants
-    // pins you can actually aim at, not 2px dots.
-    if ((map.getZoom() ?? 14) < PINS_MIN_ZOOM) return
+  if (draftOpen.value) {
+    if ((map.getZoom() ?? 14) < PINS_MIN_ZOOM) {
+      flash('Zoom in to pick doors.')
+      return
+    }
     const id = doorLayer?.doorAt(e.latLng, TAP_RADIUS_PX)
-    if (id) toggleTrimDoor(id)
-    else expandedSegKey.value = null
+    if (id) toggleDoorInDraft(id)
     return
   }
-  // The history bubble works at EVERY zoom (2026-07-25, user call: "I wanna
+  // Overview's bubble works at EVERY zoom (2026-07-25, user call: "I wanna
   // be able to tap one of the dots in one of the turfs and edit that turf").
   // Turf colors are exactly what you read zoomed OUT — the whole county's
-  // ground at a glance — and the old PINS_MIN_ZOOM floor meant that at the
-  // one zoom where you can see which turf is which, tapping it did nothing.
-  // Nearest painted door wins, so a fat-fingered tap at town zoom still
-  // lands in the right turf.
+  // ground at a glance — and a PINS_MIN_ZOOM floor meant that at the one zoom
+  // where you can see which turf is which, tapping it did nothing. Nearest
+  // painted door wins, so a fat-fingered tap at town zoom still lands in the
+  // right turf.
   const id = doorLayer?.doorAt(e.latLng, TAP_RADIUS_PX)
   if (id) void showDoorInfo(id)
   else doorInfo.value = null
@@ -1386,23 +1394,34 @@ function editOwnerTurf(t: TurfWithMeta) {
   editTurf(t)
 }
 
-/** Trim-mode door tap: drop the house from the draft, or restore it. The
- * street's segments are rebuilt as honest runs (split only around house
- * numbers that actually exist) so toggling never leaves phantom ranges. */
-function toggleTrimDoor(addressId: string) {
+/** The single door gesture while cutting: in the turf, or out of it. The
+ * street's segments rebuild as honest runs (split only around house numbers
+ * that actually exist), so toggling never leaves a phantom range behind.
+ *
+ * This used to be "trim mode" and only worked on the one street whose table
+ * row was open — you had to find the row before you could touch the door
+ * (2026-07-25: it now works on any door, anywhere, which is what makes
+ * changing the dots in a turf easy). The open row still drives the
+ * range/side editor; it just no longer gates the map. */
+function toggleDoorInDraft(addressId: string) {
   const a = addressById.get(addressId)
-  const f = focusedStreet.value
-  if (!a || !f) return
-  // Painted doors can also belong to the search-located street — trimming
-  // only ever edits the focused one.
-  if (!doorOnStreet(a, f)) return
+  if (!a) return
   const name = streetNameOf(a.street)
-  const city = f.city ?? a.city
+  if (!name) return
+  // Rebuild under the CITY THE SEGMENT USES, not the door's: a turf's stored
+  // segments can carry a null city (meaning "this street, any city"), and
+  // narrowing one to the tapped door's city would quietly drop the same
+  // street's houses in the next town over.
+  // (`?? a.city` would be wrong here — a segment's city is legitimately
+  // null, and nullish-coalescing would overwrite exactly that case.)
+  const covering = matchingSegments(name, a.city)[0]
+  const city = covering ? covering.city : a.city
   const n = houseNumber(a.street)
-  if (!draftMemberIds.value.has(addressId) && !claimableDoor(a)) {
-    // Restoring a door another turf owns: never silently — flash it, and
+  const inDraft = draftMemberIds.value.has(addressId)
+  if (!inDraft && !claimableDoor(a)) {
+    // A door another turf owns never joins silently — flash whose it is, and
     // offer the steal when this cutter may re-cut the owner.
-    const owner = a.turf_id ? turfById.value.get(a.turf_id) : undefined
+    const owner = a.turf_id ? paintTurfOf(a.turf_id) : undefined
     flash(
       `${a.street} belongs to ${owner ? `"${owner.name}"` : 'another turf'}.`,
       owner && canStealFrom(owner)
@@ -1410,7 +1429,7 @@ function toggleTrimDoor(addressId: string) {
             label: 'Take it',
             run: () => {
               stealIds.value.add(addressId)
-              toggleTrimDoor(addressId)
+              toggleDoorInDraft(addressId)
             },
           }
         : null,
@@ -1426,12 +1445,22 @@ function toggleTrimDoor(addressId: string) {
   if (nums.has(n)) nums.delete(n)
   else nums.add(n)
   for (const s of segs) removeSegment(s)
-  if (nums.size) addStreetRuns(name, city, nums)
-  // Segments were rebuilt with fresh keys — re-point trim mode at the
-  // street's first surviving segment (or end it if the street's gone).
+  // Only the doors that are actually ON the map can be "left out" — an
+  // ungeocoded neighbour has no dot to tap, so it must not split a run.
+  const visible = new Set<number>()
+  for (const row of streetRows(name, city)) {
+    if (row.lat != null && row.lng != null) visible.add(houseNumber(row.street))
+  }
+  if (nums.size) addStreetRuns(name, city, nums, visible)
+  // Segments were rebuilt with fresh keys — re-point the open editor at the
+  // street's first surviving segment, or close it if the street is gone.
   const after = matchingSegments(name, city)
-  expandedSegKey.value = after[0]?.key ?? null
-  if (!after.length) flash(`${name} removed from the draft.`)
+  if (expandedSegKey.value && !segments.value.some((s) => s.key === expandedSegKey.value)) {
+    expandedSegKey.value = after[0]?.key ?? null
+  }
+  // Short: it's there to name the house your thumb actually hit, and the dot
+  // itself has already changed.
+  flash(inDraft ? `${a.street} removed.` : `${a.street} added.`, null, 1400)
 }
 
 function matchesSegment(a: AddressLite, seg: Pick<DraftSegment, 'range_start' | 'range_end' | 'parity'>): boolean {
@@ -1664,6 +1693,9 @@ function onSegmentParityChange(seg: DraftSegment, parity: string) {
 }
 
 function clearDraft() {
+  // The house bubble belongs to overview — a draft opening or closing under
+  // it would leave it hanging over a map whose taps now mean something else.
+  doorInfo.value = null
   segments.value = []
   stealIds.value = new Set()
   autoStolenIds = new Set()
@@ -2722,9 +2754,12 @@ async function saveTurf() {
       })),
     })
     if (rpcError) throw rpcError
-    // Saved: back to the overview, where the new turf shows in its color.
+    // Saved: back to the overview with the turf you just cut SELECTED, so it
+    // lights up on the map and its bar is right there — the answer to "did
+    // that land?" without hunting for it in a dropdown.
     closeDraft()
     await reloadAll()
+    selectedTurfId.value = turfId
     // Fill in dots for every door now in this turf, in the background —
     // never blocks the save.
     void geocodeTurfDoors(turfId)
@@ -3139,22 +3174,14 @@ onUnmounted(() => {
         :style="{ '--draft-color': draftColor }"
       >
         <span class="editing-dot" aria-hidden="true"></span>
-        <span class="editing-what">{{ editingTurfId ? 'Editing' : 'New turf' }}</span>
+        <span class="editing-what">{{
+          editingTurfId
+            ? isSubcutter ? 'Editing sub-turf' : 'Editing'
+            : isSubcutter ? 'New sub-turf' : 'New turf'
+        }}</span>
         <strong class="editing-name">{{ draftName.trim() || defaultDraftName }}</strong>
         <span class="editing-count">{{ draftDoorCount }} door{{ draftDoorCount === 1 ? '' : 's' }}</span>
         <span v-if="takeMode" class="editing-take">Take</span>
-      </div>
-
-      <!-- Per-gesture feedback only ("Added WALNUT ST, 41 doors"), and only
-           while a flash is up — no standing instructions. -->
-      <div v-if="hint" class="sweep-bar" :style="{ '--draft-color': draftColor }">
-        <span class="sweep-dot" aria-hidden="true"></span>
-        <p class="sweep-hint">{{ hint }}</p>
-        <!-- One optional action on the flash — e.g. "Take them too" after a
-             capture skipped another turf's doors. -->
-        <button v-if="flashAction" class="btn btn-sm btn-primary sweep-action" @click="runFlashAction">
-          {{ flashAction.label }}
-        </button>
       </div>
 
       <!-- Turf is for today: a previous day's turfs still holding doors get
@@ -3426,10 +3453,25 @@ onUnmounted(() => {
             Take
           </button>
         </div>
-        <!-- The map's bottom edge: the house you tapped, and under it the
-             turf that's selected. Stacked so the two never cover each
+        <!-- The map's bottom edge: what just happened, the house you tapped,
+             and the turf that's selected. Stacked, so they never cover each
              other. -->
         <div class="map-bottom">
+        <!-- Per-gesture feedback ("Added WALNUT ST, 41 doors"), and only
+             while a flash is up — no standing instructions. It lives ON the
+             map (2026-07-25): tapping doors one at a time would otherwise
+             shove the map down the page with every tap, and a flash above
+             the map is invisible in fullscreen, which is where sweeping
+             actually happens. -->
+        <div v-if="hint" class="sweep-bar" :style="{ '--draft-color': draftColor }">
+          <span class="sweep-dot" aria-hidden="true"></span>
+          <p class="sweep-hint">{{ hint }}</p>
+          <!-- One optional action on the flash — e.g. "Take them too" after a
+               capture skipped another turf's doors. -->
+          <button v-if="flashAction" class="btn btn-sm btn-primary sweep-action" @click="runFlashAction">
+            {{ flashAction.label }}
+          </button>
+        </div>
         <!-- Compact house history: tap a dot (no tool armed) to see the
              door's last knocks. -->
         <div v-if="doorInfo" class="door-card">
@@ -3588,11 +3630,9 @@ onUnmounted(() => {
         </div>
         <p v-if="saveError" class="error">{{ saveError }}</p>
 
-        <h3 class="draft-title">
-          <span class="draft-swatch" aria-hidden="true"></span>
-          {{ editingTurfId ? (isSubcutter ? 'Editing sub-turf' : 'Editing turf') : isSubcutter ? 'New sub-turf' : 'New turf' }}
-          <span v-if="draftDoorCount" class="draft-count">{{ draftDoorCount }} doors</span>
-        </h3>
+        <!-- No heading here: the sticky bar at the top of the page already
+             says which turf this is and how many doors are in it, and saying
+             it twice on a phone screen is a card's worth of nothing. -->
 
         <!-- Which turf the sub-turf carves from (auto when there's one). -->
         <AppSelect
@@ -3723,8 +3763,11 @@ onUnmounted(() => {
       </div>
 
       <!-- Existing turfs: one dropdown instead of a long list. Picking a
-           turf zooms the map to it and opens its management card. -->
-      <div class="card">
+           turf zooms the map to it and opens its management card. Overview
+           only — while you're cutting, the picker and the dispatch list below
+           are a different job, and they made a long page longer (2026-07-25
+           common-sense pass). -->
+      <div v-if="!draftOpen" class="card">
         <h3>{{ isSubcutter ? 'Your turf' : 'Turfs' }}</h3>
         <p v-if="!listTurfs.length" class="muted empty-note">
           {{ isSubcutter ? 'No turf assigned to you yet.' : 'No turf cut yet.' }}
@@ -3793,7 +3836,7 @@ onUnmounted(() => {
            way to assign a squad to a turf"). The picker card above handles
            ONE turf at a time and made sending five crews out a five-trip
            job. Managers only — a sub-cutter doesn't dispatch. -->
-      <div v-if="isManager && dispatchTurfs.length" class="card" data-help="turf-dispatch">
+      <div v-if="!draftOpen && isManager && dispatchTurfs.length" class="card" data-help="turf-dispatch">
         <h3>Today's turf</h3>
         <div class="dispatch-list">
           <div
@@ -3899,15 +3942,18 @@ onUnmounted(() => {
 
 /* --- Sweep bar --- */
 
+/* Flash line, pinned inside the map's bottom stack. */
 .sweep-bar {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  padding: 0.55rem 0.75rem;
+  padding: 0.5rem 0.7rem;
   border: 1px solid var(--border);
   border-left: 6px solid var(--draft-color);
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--draft-color) 6%, var(--surface));
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
 }
 
 .sweep-dot {
@@ -4320,6 +4366,17 @@ onUnmounted(() => {
   pointer-events: auto;
 }
 
+/* The flash is a message, not a surface: it sits over the map's bottom edge
+   while you're tapping doors, so taps must pass straight through it. Only
+   its action button catches them. */
+.map-bottom > .sweep-bar {
+  pointer-events: none;
+}
+
+.sweep-action {
+  pointer-events: auto;
+}
+
 .door-card {
   min-height: 0;
   padding: 0.5rem 0.65rem;
@@ -4684,13 +4741,6 @@ onUnmounted(() => {
   background: var(--draft-color);
   border: 2px solid #fff;
   box-shadow: 0 0 3px rgba(0, 0, 0, 0.35);
-}
-
-.draft-count {
-  margin-left: auto;
-  font-size: 0.85rem;
-  font-weight: 700;
-  color: var(--draft-color);
 }
 
 /* --- Streets table: one THIN text row per swept stretch (2026-07-24
