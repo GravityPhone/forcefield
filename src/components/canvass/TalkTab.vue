@@ -2,8 +2,7 @@
 import CanvassSearch from './CanvassSearch.vue'
 import RosterList from './RosterList.vue'
 import OutcomeButtons from './OutcomeButtons.vue'
-import MyDoorsSheet from './MyDoorsSheet.vue'
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import { hapticTap } from '@/lib/native'
 import { OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, OUTCOME_REQUIRES_PERSON, PIN_DEFAULT_HEX } from '@/lib/outcomes'
@@ -12,8 +11,6 @@ import { useTalkStore, type KnockHistoryEntry } from '@/stores/talk'
 import type { Address, KnockOutcome } from '@/types'
 
 const talk = useTalkStore()
-
-const myDoorsOpen = ref(false)
 
 // --- Walk navigation: the Up-next grid ---
 
@@ -97,14 +94,10 @@ const PARTLY_SIGNED_OPTIONS = [
          screen never navigates away mid-conversation. -->
     <CanvassSearch />
 
-    <!-- The whole list of what your crew was given today, grouped by street
-         (2026-07-25, user call). Answers "what street am I on?" without
-         needing the map. Sits right under the search because it IS the other
-         way of finding a door. -->
-    <button class="my-doors-btn" data-help="talk-mydoors" @click="myDoorsOpen = true">
-      🚪 My doors
-    </button>
-    <MyDoorsSheet v-model:open="myDoorsOpen" />
+    <!-- "My doors" — the crew's whole assignment by street — used to sit
+         here under the search. It's a square in the Back/Next row now
+         (OutcomeButtons), beside the turf filter: one row for every "which
+         door next" control. -->
 
     <div
       v-if="talk.selectedAddress"
@@ -229,21 +222,6 @@ const PARTLY_SIGNED_OPTIONS = [
 </template>
 
 <style scoped>
-/* Sits between the search and the door card: the other way of finding a
-   house when you don't already know its name. */
-.my-doors-btn {
-  align-self: flex-start;
-  min-height: 40px;
-  padding: 0 0.9rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: inherit;
-  font: inherit;
-  font-weight: 700;
-  cursor: pointer;
-}
-
 .talk {
   display: flex;
   flex-direction: column;

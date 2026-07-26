@@ -68,11 +68,6 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'Scout: the map.\nTalk: the door. Roster, past visits, outcome buttons.\nTap a pin in Scout to open that door in Talk.',
       },
       {
-        heading: 'My doors',
-        target: 'talk-mydoors',
-        body: 'Every door your crew holds today, grouped by street.\nType letters to filter streets. Type digits to find a house number.\nTap a house to open it.',
-      },
-      {
         heading: 'Outcomes',
         target: 'talk-outcomes',
         body: 'Signed, Not Interested, Maybe: pick a person first.\nNot Home, Skip, Hostile: household only.',
@@ -81,6 +76,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         heading: 'Next and Back',
         target: 'talk-advance',
         body: 'Next: next door on the walk.\nBack: doors you knocked, newest first.\nNeither needs an outcome logged first.\nMy turf: limits both to your crew’s turf today. On by default.',
+      },
+      {
+        heading: 'My doors',
+        target: 'talk-mydoors',
+        body: 'Every door your crew holds today, grouped by street.\nType letters to filter streets. Type digits to find a house number.\nTap a house to open it.',
       },
       {
         heading: 'Up next',
