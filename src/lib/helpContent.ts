@@ -304,7 +304,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Map tools',
         target: 'turf-tools',
-        body: '◯ Lasso: drag a loop. Catches dots inside it or under the line.\n☝ Streets: tap a road to take or drop the whole street.\nAdd and Erase set direction, on the row underneath.\nTake: sweeps pull doors out of whoever holds them, with no prompt. The old turf gives them up when you save.\nUndo steps back one gesture.',
+        body: '◯ Lasso: drag a loop. Catches dots inside it or under the line.\n☝ Streets: tap a road to take or drop the whole street.\nAdd and Erase set direction, on the row underneath.\nTake shows while a tool is set to Add: sweeps pull doors out of whoever holds them, with no prompt. The old turf gives them up when you save.\nUndo steps back one gesture.',
       },
       {
         heading: 'Streets table',
@@ -314,7 +314,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Reading the map',
         target: 'turf-map',
-        body: 'Every door shows from the moment the page opens, colored by knock status.\nThe Turf layer adds ownership on top: a colored ring per door.\nWhile cutting, doors another turf holds cross out in that turf’s color.\nTap a dot at any zoom for its turf, residents and recent knocks. Edit this turf opens it for cutting.',
+        body: 'Every door shows from the moment the page opens, colored by knock status.\nThe Turf layer adds ownership on top: one ring per door, in its turf’s color. Same in overview and while cutting.\nOne turf, one color — per-member shares are a Squad page matter and don’t show here.\nTap a dot at any zoom for its turf, residents and recent knocks.',
         swatches: DOOR_COLORS,
       },
       {

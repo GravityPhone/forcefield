@@ -1,13 +1,16 @@
 <script setup lang="ts">
-// Turf cutter, SEARCH-FIRST (2026-07-24 rework): the map starts BLANK —
-// just the basemap; there is NO area shading here at all (2026-07-24 night,
-// user call — the door symbols carry all the meaning). The flow: type a
-// street name, tap a match (the map zooms to it and its doors appear as
-// dots), then tap "Add to turf" on the match to take every door. Drafted
-// streets live in a compact TABLE: one thin text row per street; tapping a
-// row opens the range/side editor below the table AND focuses TRIM mode —
-// that street's doors paint and each map tap drops or restores one house.
-// The Lasso still circles a whole patch at once.
+// Turf cutter, SEARCH-FIRST (2026-07-24 rework): the flow is type a street
+// name, tap a match (the map zooms to it), then tap "Add to turf" on the
+// match to take every door. Drafted streets live in a compact TABLE: one
+// thin text row per street; tapping a row opens the range/side editor below
+// the table AND focuses TRIM mode — that street's doors paint and each map
+// tap drops or restores one house. The Lasso still circles a whole patch at
+// once, and Save / Start over / Cancel sit in the row directly under the
+// map, where your thumb already is.
+//
+// A turf is never drawn as a SHAPE here — no areas, no outlines. Doors carry
+// everything: status in the fill, the owning turf in the ring, one color per
+// turf however it's split up inside. See the paint-state section below.
 //
 // TURF IS FOR TODAY (2026-07-24 night, user call): the cutter only works
 // with turfs cut TODAY (local day of created_at). When a previous day's
@@ -179,13 +182,6 @@ const partlySignedDoors = ref<Set<string>>(new Set())
 // --- Zoom thresholds ---
 // PINS_MIN_ZOOM / NUMBERS_MIN_ZOOM / TAP_RADIUS_PX are shared with Scout and
 // Squad (src/lib/doorCanvas.ts) — all three maps change scale together.
-/** Other turfs' doors (Turf layer on — crossed out while cutting, colored
- * by owner in overview) start showing this much farther OUT than regular
- * door pins — 2026-07-24 later still, user call: seeing whose ground is
- * whose is useful at a wider view than trimming individual doors is. Still
- * gated behind the toggle, still tiny dots below PINS_MIN_ZOOM
- * (doorCanvas's own tiny-vs-full split is unchanged). */
-const TAKEN_MIN_ZOOM = PINS_MIN_ZOOM - 2
 /** How close (screen px) the lasso LINE must pass to a door to brush it —
  * touching a dot with the stroke selects it, no enclosure needed. */
 const LASSO_BRUSH_PX = 16
@@ -527,19 +523,18 @@ const listTurfs = computed(() => {
 })
 
 // Layer toggles, persisted per device like Hunt's pin mode.
-// The cutter's "Turf" button gates exactly ONE thing now: the door-level
-// "taken" symbols for other turfs' doors (there is no area shading in the
-// cutter at all — 2026-07-24 night, user call). OFF BY DEFAULT on its own
-// per-device key: a fresh cutter opens clean, showing plain Scout-style
-// status dots; flip Turf on to see whose ground is whose, door by door.
-// Deliberately NOT Scout's shared tri-state pref — Scout shading on must
-// not drag the cutter's taken symbols on with it.
-const showTakenDoors = ref(readMapPref('cutter-turf-layer', false))
+// The cutter's "Turf" button gates exactly ONE thing: whether every door
+// wears the color of the turf that owns it. One meaning, the same in
+// overview and while cutting (2026-07-25) — no area shading, no symbols,
+// no mode where the colors go away. OFF BY DEFAULT on its own per-device
+// key: a fresh cutter opens on plain Scout-style status dots. Deliberately
+// NOT Scout's shared pref — its layer filters ITS map's doors.
+const showTurfColors = ref(readMapPref('cutter-turf-layer', false))
 const showCity = ref(readMapPref('map-show-city', false))
 
-function toggleTakenDoors() {
-  showTakenDoors.value = !showTakenDoors.value
-  writeMapPref('cutter-turf-layer', showTakenDoors.value)
+function toggleTurfColors() {
+  showTurfColors.value = !showTurfColors.value
+  writeMapPref('cutter-turf-layer', showTurfColors.value)
 }
 
 // Turf FOOTPRINTS are gone (2026-07-25, user call — "I actually don't want
@@ -779,20 +774,23 @@ function segmentLabel(s: { street_name: string; range_start: number; range_end: 
 }
 
 // --- Door canvas paint state ---
-// The map stays blank except for: every door in the DRAFT (they accumulate
-// as streets are added, so the turf builds up visibly), the located street
-// (picked from search), the street being trimmed (the open table row), and
-// — with the Turf layer on at pin zoom — every door another turf owns.
+// Every door on the map, always, and each one answers three questions in
+// three concentric bands — the whole color system on this page (2026-07-25,
+// after "the turf coloring system is still not making sense"):
 //
-// Cutter-local pin palette (2026-07-24, replaced the per-turf rainbow): a
-// dot answers ONE question — how does this door stand? Green = everyone
-// signed, green with a yellow ring = partly signed (project-wide rule),
-// red = closed (didn't sign / skip / hostile), white = anything else
-// (untouched, not-home, maybe). Turf membership is not a color anymore:
-// every draft door wears ONE uniform dark ring ("this door is going into
-// the turf I'm editing"), and doors another turf owns draw as the hollow
-// red "taken" symbol carrying the owner-assignee's avatar/initial. The
-// hexes reuse outcomes.ts literals — never change those there.
+//   FILL   how does this door stand? Green = everyone signed, green with a
+//          yellow band = partly signed (project-wide rule), red = closed
+//          (didn't sign / skip / hostile), white = anything else. The hexes
+//          reuse outcomes.ts literals — never change those there.
+//   RING   whose ground is it? The owning turf's identity color, with the
+//          Turf layer on — ONE color per turf, sub-turfs painted as their
+//          parent, and the SAME while cutting as in overview. A door going
+//          into the draft you're building wears the uniform dark ring
+//          instead: that's the one membership that changes minute to minute.
+//   HALO   the turf you SELECTED, lit up whole (overview only).
+//
+// Plus one face in the middle: whoever knocked the door today. Nothing else
+// is drawn — no assignee avatars, no cross-outs, no areas, no shapes.
 const FILL_SIGNED = OUTCOME_HEX.signed
 const FILL_CLOSED = OUTCOME_HEX.didnt_sign
 const RING_PARTLY = OUTCOME_HEX.maybe
@@ -802,11 +800,10 @@ const OPEN_INK = '#1d2433'
 const DRAFT_RING = '#1d2433'
 
 /** Avatars on doors, from the factory every map shares
- * (src/lib/doorBadges.ts): `badgeFor` builds the today-knocker chip, `image`
- * feeds the taken-door symbol, which draws its own shape (white disc, red
- * ring) and so wants the raw bitmap rather than a colored badge. Images
- * decode async — the layer repaints when one lands. */
-const { badgeFor, image: badgeImage } = createBadgeFactory(() => doorLayer?.requestRepaint())
+ * (src/lib/doorBadges.ts). ONE kind of face rides a door here: whoever
+ * knocked it today. Images decode async — the layer repaints when one
+ * lands. */
+const { badgeFor } = createBadgeFactory(() => doorLayer?.requestRepaint())
 
 /** door id -> the id of whoever last knocked it today, and those people's
  * profiles — the avatar badge every map wears. Filled by fetchTodayKnockers
@@ -814,12 +811,26 @@ const { badgeFor, image: badgeImage } = createBadgeFactory(() => doorLayer?.requ
 const todayKnockerByDoor = ref<Map<string, string>>(new Map())
 const knockerById = ref<Map<string, BadgePerson>>(new Map())
 
-/** A turf's identity color for the OVERVIEW rings: the assignee's own accent
- * (the same color their Squad card / chat name wears) when it's one
- * person's turf, else the turf's auto-assigned palette hue — squad-assigned
- * and unassigned turfs still each get a distinct color. */
+/** A turf's identity color: the assignee's own accent (the same color their
+ * Squad card / chat name wears) when it's one person's turf, else the turf's
+ * auto-assigned palette hue — squad-assigned and unassigned turfs still each
+ * get a distinct color. */
 function turfDisplayColor(t: TurfWithMeta): string {
   return t.assignee ? memberColor(t.assignee) : t.color
+}
+
+/** The turf whose color a door WEARS: always the top-level one (2026-07-25,
+ * user call: "it's important that one turf is all one color… I don't even
+ * want the turf page to reflect sub doors that are assigned"). Per-member
+ * "<name>'s doors" sub-turfs are a Squad-page concept — cut there, dissolved
+ * nightly — and painting each one in its member's accent shattered a single
+ * crew's ground into five colors on the one page that exists to show how the
+ * county is divided between CREWS. Only one nesting level exists, so one hop
+ * is the whole walk. */
+function paintTurfOf(turfId: string): TurfWithMeta | undefined {
+  const t = turfById.value.get(turfId)
+  if (!t?.parent_turf_id) return t
+  return turfById.value.get(t.parent_turf_id) ?? t
 }
 
 function doorOnStreet(a: AddressLite, s: { name: string; city: string | null }): boolean {
@@ -839,37 +850,19 @@ function paintForDoor(id: string): DoorPaintState | null {
   // street, or — with the Turf layer on — somebody else's ground, which made
   // the layer toggle read as the switch that turns the map on at all.
   //
-  // Now the baseline is Scout's: the whole county on knock-status colors, and
-  // the Turf layer is purely additive on top of it (rings in overview,
-  // crossed-out symbols while cutting). Nothing is filtered out here; the
-  // canvas already drops to cheap dots below PINS_MIN_ZOOM, which is what
-  // keeps ~23k doors affordable.
+  // The baseline is Scout's: the whole county on knock-status colors, and the
+  // Turf layer is purely additive on top of it — ONE ring per door, in the
+  // color of the turf that owns it, and the SAME in overview and while
+  // cutting (2026-07-25, user call: "when I click on a turf and then I edit
+  // it, I should still see all of the colors for all of the turfs"). The
+  // red cross-out "taken" symbol is gone with that: the turf colors already
+  // say a door is somebody's, and flipping every one of them to a red X the
+  // moment you opened a draft threw away the picture you were reading.
+  //
   // Draft members can still carry another turf's stamp (a sub-cut claims
   // from its parent pool, a steal from its victim until save) — membership
-  // wins over anything else. Otherwise, with the Turf layer on, another
-  // turf's door reads one of two ways depending on what you're doing
-  // (2026-07-24 later still, user call): while a draft is OPEN those doors
-  // are obstacles, so they cross out; with no draft open the page is a pure
-  // OVERVIEW, so they keep their status fill and wear their turf's color as
-  // a ring instead.
-  const owner = ownedElsewhere && !inDraft ? turfById.value.get(a.turf_id!) : undefined
-  if (owner && showTakenDoors.value && draftOpen.value) {
-    const who = owner.assignee
-    return {
-      fill: FILL_OPEN,
-      // The cross-out says "taken", the RING says taken BY WHOM (2026-07-25,
-      // user call: "they need to be color coded in addition to having the
-      // cross out on them"). Same identity color the overview rings use and
-      // the same color that turf's outline is stroked in, so a door and the
-      // shape around it agree.
-      ring: turfDisplayColor(owner),
-      emphasis: false,
-      taken: {
-        initial: who ? (who.display_name || who.username).charAt(0).toUpperCase() : '',
-        img: who ? badgeImage(who.avatar) : null,
-      },
-    }
-  }
+  // wins over anything else.
+  const owner = ownedElsewhere && !inDraft ? paintTurfOf(a.turf_id!) : undefined
   const eff = statusByAddress.value.get(id)
   let fill = FILL_OPEN
   let innerRing: string | null = null
@@ -880,8 +873,10 @@ function paintForDoor(id: string): DoorPaintState | null {
   } else if (eff === 'didnt_sign' || eff === 'skip' || eff === 'hostile') fill = FILL_CLOSED
   // Whoever knocked this door TODAY rides in the middle of it, same as Scout
   // and Squad — the door keeps saying what happened, the avatar says who was
-  // there. Never on a taken symbol above: that door is already carrying a
-  // different person's face for a different reason.
+  // there. That's the only face on this map now: an ASSIGNEE's avatar never
+  // rides a door here (same 2026-07-25 call), because who a door is assigned
+  // to is a Squad-page question and it fought the turf color for the middle
+  // of the pin.
   const badge = todayBadge(id)
   // The SELECTED turf lights up: every door of it (sub-turfs included) wears
   // a halo in the turf's own color and draws big and last. This is what tells
@@ -900,7 +895,7 @@ function paintForDoor(id: string): DoorPaintState | null {
     // turf's identity color.
     ring: inDraft
       ? DRAFT_RING
-      : owner && showTakenDoors.value
+      : owner && showTurfColors.value
         ? turfDisplayColor(owner)
         : pickedColor,
     innerRing,
@@ -922,10 +917,10 @@ function todayBadge(id: string): DoorBadge | null {
 }
 
 // Any paint-relevant state change repaints the one canvas (rAF-coalesced in
-// the layer). showTakenDoors governs the door-level taken symbols; zoom
-// crossings repaint via the layer's own idle check.
+// the layer). showTurfColors governs the per-door turf color; zoom crossings
+// repaint via the layer's own idle check.
 watch(
-  [draftMemberIds, statusByAddress, partlySignedDoors, expandedSegKey, locatedStreet, turfs, editingTurfId, showTakenDoors, pinMode, draftOpen, todayKnockerByDoor, knockerById],
+  [draftMemberIds, statusByAddress, partlySignedDoors, expandedSegKey, locatedStreet, turfs, editingTurfId, showTurfColors, pinMode, draftOpen, todayKnockerByDoor, knockerById],
   () => doorLayer?.requestRepaint(),
 )
 
@@ -1362,12 +1357,13 @@ function knockWho(k: DoorKnock): string {
   return k.person?.name || (by ? `by ${by}` : '')
 }
 
-/** The turf that owns the bubbled door, when it's not the one being edited —
- * the bubble names it and offers the deliberate "Edit this turf" hop. */
+/** The turf that owns the bubbled door, when it's not the one being edited.
+ * The TOP-LEVEL one, like everything else on this page — a door in "Angie's
+ * doors" reads as the crew turf it was carved from. */
 const doorOwner = computed(() => {
   const tid = doorInfo.value?.address.turf_id
   if (!tid || editingTurfId.value === tid) return null
-  return turfById.value.get(tid) ?? null
+  return paintTurfOf(tid) ?? null
 })
 
 function ownerAssignment(t: TurfWithMeta): string {
@@ -2075,6 +2071,19 @@ function toggleStreetTap() {
     expandedSegKey.value = null
   }
 }
+
+/** Take rides with the sweep tools: it only changes what an ADD sweep does
+ * (take the doors it lands on instead of skipping and asking), so it shows
+ * only while one is armed to add — 2026-07-25, user call. Declared down here
+ * with the tool refs, and disarmed the moment its row leaves: a destructive
+ * mode you can't see is a mode you've forgotten is on. */
+const canTake = computed(
+  () => draftOpen.value && (lassoActive.value || streetTapActive.value) && selectMode.value === 'add',
+)
+
+watch(canTake, (can) => {
+  if (!can && takeMode.value) toggleTakeMode()
+})
 
 /** Match reverse-geocoded route names to a voter-file street. Exact
  * normalized match first, then directional-stripped; ties break by Google's
@@ -2817,11 +2826,12 @@ function clearTurfSelection() {
 }
 
 /** Tapping a door selects the turf that owns it — the map is the fastest way
- * to ask "whose is this, and let me at it". The exact owner, sub-turf
- * included: that's the honest answer to what the dot belongs to. */
+ * to ask "whose is this, and let me at it". The TOP-LEVEL turf, the same one
+ * whose color the dot is wearing: this page divides the county between
+ * crews, and per-member shares belong to the Squad page. */
 function selectTurfOfDoor(a: AddressLite) {
   if (draftOpen.value || !a.turf_id) return
-  selectedTurfId.value = a.turf_id
+  selectedTurfId.value = paintTurfOf(a.turf_id)?.id ?? a.turf_id
 }
 
 // Repaint on selection (the highlight is paint state), and close the details
@@ -2974,10 +2984,16 @@ function focusTurf(turfId: string) {
   else if (pinsLoading.value) flash('Still loading street data — try that again in a moment.')
 }
 
-const draftCardEl = ref<HTMLElement | null>(null)
-
+/** Opening a draft keeps you AT THE TOP — on the map, with Save / Start over
+ * / Cancel in the row directly under it (2026-07-25, user call: "when we
+ * edit, we don't want to get brought to the bottom of the screen, we just
+ * wanna stay up top"). It used to scroll the draft CARD into view, which
+ * back when the card led with its streets table meant riding down past the
+ * map to reach the buttons; with the buttons moved up, the map IS the draft
+ * card's front door. `nearest` means no movement at all when you started up
+ * there — tapping Edit on the map bar doesn't twitch the page. */
 function focusDraft() {
-  draftCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  scrollMapIntoView()
 }
 
 // --- Map fullscreen. Same approach as Scout's (HuntTab): Safari (incl.
@@ -3279,16 +3295,16 @@ onUnmounted(() => {
             123
           </button>
         </div>
-        <!-- Map layers: other turfs' doors (taken symbols) and city limits.
-             Stacked directly beneath the pin-style toggle. -->
+        <!-- Map layers: color every door by the turf that owns it, and city
+             limits. Stacked directly beneath the pin-style toggle. -->
         <div class="layer-toggle" role="group" aria-label="Map layers">
           <button
             type="button"
             class="layer-btn"
-            :class="{ active: showTakenDoors }"
-            :aria-pressed="showTakenDoors"
-            title="Mark doors that belong to other turfs"
-            @click="toggleTakenDoors"
+            :class="{ active: showTurfColors }"
+            :aria-pressed="showTurfColors"
+            title="Ring every door in the color of the turf that owns it"
+            @click="toggleTurfColors"
           >
             Turf
           </button>
@@ -3393,8 +3409,12 @@ onUnmounted(() => {
           </button>
         </div>
         <!-- Destructive create. Armed, every sweep takes the doors it lands
-             on from whoever holds them, instead of skipping and asking. -->
-        <div v-if="draftOpen" class="take-row">
+             on from whoever holds them, instead of skipping and asking. Only
+             while a sweep tool is armed to ADD (2026-07-25, user call: "only
+             when I have lasso in add mode do we see Take") — it modifies what
+             a sweep does, so it has no business on screen when no sweep can
+             happen. -->
+        <div v-if="canTake" class="take-row">
           <button
             type="button"
             class="layer-btn btn-tiny take-btn"
@@ -3533,7 +3553,6 @@ onUnmounted(() => {
       <!-- Draft tray: the turf being cut. -->
       <div
         v-if="draftOpen"
-        ref="draftCardEl"
         class="card draft-card"
         :style="{ '--draft-color': draftColor }"
       >
@@ -3546,6 +3565,29 @@ onUnmounted(() => {
           <p class="muted empty-note">No turf assigned to you yet.</p>
         </template>
         <template v-else>
+        <!-- Save / Start over / Cancel FIRST, so they sit directly under the
+             map (2026-07-25, user call: "I want those buttons right below the
+             map so they're right there and easy to get to"). Everything else
+             about the draft — its name, who it's for, the streets in it — is
+             set once; these three are what you reach for after every
+             gesture. -->
+        <div class="draft-actions">
+          <button class="btn btn-primary" :disabled="saving" @click="saveTurf">
+            {{ saving ? 'Saving…' : editingTurfId ? 'Save changes' : 'Create turf' }}
+          </button>
+          <button v-if="canUndo" class="btn btn-ghost" :disabled="saving" @click="undoDraft">
+            Undo
+          </button>
+          <button v-if="segments.length" class="btn btn-ghost" :disabled="saving" @click="startOverDraft">
+            Start over
+          </button>
+          <!-- Always a way back out to the overview, not just mid-edit. -->
+          <button class="btn btn-ghost" :disabled="saving" @click="cancelEdit">
+            {{ editingTurfId ? 'Cancel edit' : 'Cancel' }}
+          </button>
+        </div>
+        <p v-if="saveError" class="error">{{ saveError }}</p>
+
         <h3 class="draft-title">
           <span class="draft-swatch" aria-hidden="true"></span>
           {{ editingTurfId ? (isSubcutter ? 'Editing sub-turf' : 'Editing turf') : isSubcutter ? 'New sub-turf' : 'New turf' }}
@@ -3671,27 +3713,11 @@ onUnmounted(() => {
             aria-label="Turf name (optional)"
           />
           <AppSelect v-model="assignChoice" :options="assignOptions" aria-label="Assign this turf to" />
-          <div class="draft-actions">
-            <button class="btn btn-primary" :disabled="saving" @click="saveTurf">
-              {{ saving ? 'Saving…' : editingTurfId ? 'Save changes' : 'Create turf' }}
-            </button>
-            <button v-if="canUndo" class="btn btn-ghost" :disabled="saving" @click="undoDraft">
-              Undo
-            </button>
-            <button v-if="segments.length" class="btn btn-ghost" :disabled="saving" @click="startOverDraft">
-              Start over
-            </button>
-            <!-- Always a way back out to the overview, not just mid-edit. -->
-            <button class="btn btn-ghost" :disabled="saving" @click="cancelEdit">
-              {{ editingTurfId ? 'Cancel edit' : 'Cancel' }}
-            </button>
-          </div>
           <p v-if="draftTakenCount" class="muted">
             {{ draftTakenCount }} door{{ draftTakenCount === 1 ? '' : 's' }} inside these ranges
             belong{{ draftTakenCount === 1 ? 's' : '' }} to another turf and
             {{ draftTakenCount === 1 ? 'is' : 'are' }} skipped.
           </p>
-          <p v-if="saveError" class="error">{{ saveError }}</p>
         </div>
         </template>
       </div>
@@ -4923,8 +4949,11 @@ onUnmounted(() => {
   outline-offset: -1px;
 }
 
+/* Top of the draft card = directly under the map. Wraps rather than
+   squeezing: Save keeps its size on a narrow phone. */
 .draft-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
