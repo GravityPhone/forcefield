@@ -18,8 +18,9 @@
 // streets/assignee — day squads never carry) or "Clear" (their doors
 // release; the old rows stay behind, door-less, as history). Doors owned by
 // another turf never silently join a capture — they're skipped with a
-// flash, which offers a "Take them too" steal when the cutter may re-cut
-// the owner (managers for top-level turfs, sub-cutters for siblings).
+// flash that names who holds them and where to free them, and offers a
+// "Take them too" steal when this draft may re-cut the owner (a top-level
+// cut takes top-level turfs, a sub-cut takes siblings — canStealFrom).
 // Existing turfs live behind ONE dropdown — picking a turf zooms to it and
 // shows a single compact management card (edit / delete / reassign), not a
 // long list.
@@ -648,13 +649,14 @@ function flash(msg: string, action: { label: string; run: () => void } | null = 
   flashMsg.value = msg
   flashAction.value = action
   clearTimeout(flashTimer)
-  // Messages with a decision on them hang around longer.
+  // Messages with a decision on them hang around longer — and so do the long
+  // ones, which are the skip lines that name a holder and where to go next.
   flashTimer = setTimeout(
     () => {
       flashMsg.value = ''
       flashAction.value = null
     },
-    action ? 8000 : 3500,
+    action ? 8000 : msg.length > 80 ? 6500 : 3500,
   )
 }
 
@@ -1418,8 +1420,17 @@ function autoStealable(a: AddressLite): boolean {
   return !!a.turf_id && canStealFrom(turfById.value.get(a.turf_id))
 }
 
-/** May the current cutter steal doors from this turf? Managers re-cut
- * TOP-LEVEL turfs only.
+/** May the current cutter steal doors from this turf? The gate is the shape
+ * of the DRAFT, not the role — a steal is only ever safe when releasing the
+ * victim lands the doors in the pool this draft claims from:
+ *
+ *   top-level draft → released doors go unassigned → top-level victims only
+ *   sub-cut draft    → released doors go to the shared parent → siblings only
+ *
+ * A manager can Edit a sub-turf too, so keying this off `isManager` was
+ * wrong in one reachable way: taking from a top-level turf while editing a
+ * sub-turf released those doors to unassigned and then the sub-cut's RPC
+ * declined them — the victim lost them and nobody got them.
  *
  * THE CUTTER NEVER TAKES DOORS OUT OF A PER-MEMBER SUB-TURF, and that rule
  * is load-bearing (2026-07-25, learned the hard way): those "<name>'s doors"
@@ -1431,15 +1442,17 @@ function autoStealable(a: AddressLite): boolean {
  * nothing on screen to show a boundary being crossed. Their segment rows are
  * rewritten by the RPC, so the split could not be restored. To take ground
  * that a crew has already divided, dissolve the split on the Squad page
- * first — deliberately a decision someone makes on purpose.
+ * first — deliberately a decision someone makes on purpose, and what
+ * skipSentence() sends you to do.
  *
  * Sub-cutters take only from a SIBLING sub-turf: those released doors land
  * in the shared parent pool, which is exactly where their draft claims from,
  * and re-arranging their own crew's split is their job. */
 function canStealFrom(victim: TurfWithMeta | undefined): boolean {
   if (!victim || !isTodayTurf(victim)) return false
-  if (isManager.value) return victim.parent_turf_id === null
-  return victim.parent_turf_id !== null && victim.parent_turf_id === effectiveParentId.value
+  const parentId = effectiveParentId.value
+  if (parentId !== null) return victim.parent_turf_id === parentId
+  return isManager.value && victim.parent_turf_id === null
 }
 
 /** (Re)derive a segment's members from the street index. Pure memory —
@@ -1907,15 +1920,91 @@ function scrollMapIntoView() {
 // marks the doors in stealIds (drafts treat them as claimable); the owning
 // turf is only actually re-cut around them at save time.
 
-/** What a batch of skipped doors actually belongs to. Doors inside a
- * per-member sub-turf get their own wording: on this map they wear their
- * parent's color, so "another turf's" reads as wrong when you're editing
- * that very turf — and the reason they can't be taken here is that someone
- * on the crew is walking them (see canStealFrom). */
-function skippedNote(doors: AddressLite[]): string {
-  const allSub = doors.every((a) => a.turf_id && turfById.value.get(a.turf_id)?.parent_turf_id)
-  return allSub ? "assigned to the crew on the Squad page" : "another turf's"
+/** Who holds a batch of skipped doors, and why this cutter can't have them.
+ * The three cases are the three reasons canStealFrom() says no. */
+function skipSummary(doors: AddressLite[]): {
+  holders: TurfWithMeta[]
+  reason: 'past-day' | 'crew-split' | 'other-turf'
+} {
+  const holders = new Map<string, TurfWithMeta>()
+  for (const a of doors) {
+    const t = a.turf_id ? turfById.value.get(a.turf_id) : undefined
+    if (t) holders.set(t.id, t)
+  }
+  const list = [...holders.values()]
+  const every = (fn: (t: TurfWithMeta) => unknown) => list.length > 0 && list.every((t) => !!fn(t))
+  return {
+    holders: list,
+    reason: every((t) => !isTodayTurf(t))
+      ? 'past-day'
+      : every((t) => t.parent_turf_id)
+        ? 'crew-split'
+        : 'other-turf',
+  }
 }
+
+/** One dry line for a skipped batch: how many, who has them, and the way to
+ * get them when there is one.
+ *
+ * Specific on purpose (2026-07-25, reported from the field: "it's saying that
+ * they are in another turf, but obviously I know that, and that's why I'm
+ * using the take toggle"). The old note said "another turf's" for every
+ * refusal, so with Take armed the copy was word-for-word the copy with Take
+ * off and the toggle read as broken. Each reason now names its holder and
+ * points at the one place the doors can actually be freed.
+ *
+ * Doors in a per-member sub-turf are the common case, and the most confusing:
+ * on this map they wear their PARENT's color, so while you're editing that
+ * parent they look like they're already yours. They aren't — the crew divided
+ * them on the Squad page, and that's where the split comes undone (see
+ * canStealFrom for why Take must never swallow it silently). */
+function skipSentence(doors: AddressLite[], lead?: string): string {
+  const head = lead ?? `${doors.length} skipped`
+  const blocked = doors.filter(
+    (a) => !canStealFrom(a.turf_id ? turfById.value.get(a.turf_id) : undefined),
+  )
+  // Doors still one tap away (the "Take them too" button) aren't the
+  // friction. When part of a batch is out of reach entirely, that part is
+  // what the line has to be about.
+  const focus = blocked.length ? blocked : doors
+  const part = focus.length < doors.length ? `${focus.length} of them ` : ''
+  const them = focus.length === 1 ? 'it' : 'them'
+  const { holders, reason } = skipSummary(focus)
+  const one = holders.length === 1 ? holders[0] : null
+  if (reason === 'past-day') {
+    const who = one ? `${one.name}, cut ${prettyDay(turfDay(one))}` : `${holders.length} turfs from earlier days`
+    return `${head} — ${part ? `${part}in ` : ''}${who}. Copy or clear old turf above first.`
+  }
+  if (reason === 'crew-split') {
+    const who = one ? one.name : `${holders.length} crew splits`
+    return `${head} — ${part ? `${part}in ` : ''}${who}, split on the Squad page. Dissolve the split there to take ${them}.`
+  }
+  const who = one ? one.name : holders.length ? `${holders.length} other turfs` : 'another turf'
+  return `${head} — ${part}held by ${who}.`
+}
+
+/** The unclaimable doors a segment's range sweeps over — the ones behind
+ * takenCount, resolved back to rows so a note can name who holds them. */
+function takenDoorsOf(seg: DraftSegment): AddressLite[] {
+  return streetRows(seg.street_name, seg.city).filter(
+    (a) => matchesSegment(a, seg) && !claimableDoor(a),
+  )
+}
+
+const expandedSegSkipNote = computed(() => {
+  const seg = expandedSeg.value
+  if (!seg?.takenCount) return ''
+  return skipSentence(takenDoorsOf(seg), `${seg.takenCount} in this range skipped`)
+})
+
+const draftSkipNote = computed(() => {
+  const n = draftTakenCount.value
+  if (!n) return ''
+  return skipSentence(
+    segments.value.flatMap(takenDoorsOf),
+    `${n} door${n === 1 ? '' : 's'} in these ranges skipped`,
+  )
+})
 
 /** The flash action for a batch of skipped doors, or null when none of
  * their owners can be stolen from. */
@@ -1965,7 +2054,7 @@ function flashAddResult(streetName: string, city: string | null, prefix: string)
     (a) => segsNow.some((s) => matchesSegment(a, s)) && !claimableDoor(a),
   )
   flash(
-    `${prefix} — ${got} door${got === 1 ? '' : 's'} · ${taken} skipped (${skippedNote(takenDoors)}).`,
+    `${prefix} — ${got} door${got === 1 ? '' : 's'}. ${skipSentence(takenDoors, `${taken} skipped`)}`,
     stealActionFor(takenDoors),
   )
 }
@@ -2330,9 +2419,7 @@ function onLassoUp() {
   const taken = doors.filter((a) => !claimableDoor(a))
   if (!free.length) {
     flash(
-      wasTap
-        ? `${taken[0].street} is ${skippedNote(taken)}.`
-        : `Every door in that loop is ${skippedNote(taken)} (${taken.length} skipped).`,
+      skipSentence(taken, wasTap ? taken[0].street : `Every door in that loop skipped`),
       stealActionFor(taken),
     )
     return
@@ -2348,7 +2435,7 @@ function onLassoUp() {
     wasTap
       ? `${free[0].street} added.`
       : taken.length
-        ? `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'} · ${taken.length} skipped (${skippedNote(taken)}).`
+        ? `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}. ${skipSentence(taken)}`
         : `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
     taken.length ? stealActionFor(taken) : null,
   )
@@ -3720,10 +3807,7 @@ onUnmounted(() => {
                 <option value="odd">Odd side</option>
               </select>
             </div>
-            <p v-if="expandedSeg.takenCount" class="muted seg-trim-hint">
-              {{ expandedSeg.takenCount }} door{{ expandedSeg.takenCount === 1 ? '' : 's' }} in
-              this range belong to another turf — skipped.
-            </p>
+            <p v-if="expandedSegSkipNote" class="muted seg-trim-hint">{{ expandedSegSkipNote }}</p>
           </div>
         </template>
         <p v-else class="muted empty-note">No streets yet.</p>
@@ -3738,11 +3822,7 @@ onUnmounted(() => {
             aria-label="Turf name (optional)"
           />
           <AppSelect v-model="assignChoice" :options="assignOptions" aria-label="Assign this turf to" />
-          <p v-if="draftTakenCount" class="muted">
-            {{ draftTakenCount }} door{{ draftTakenCount === 1 ? '' : 's' }} inside these ranges
-            belong{{ draftTakenCount === 1 ? 's' : '' }} to another turf and
-            {{ draftTakenCount === 1 ? 'is' : 'are' }} skipped.
-          </p>
+          <p v-if="draftSkipNote" class="muted">{{ draftSkipNote }}</p>
         </div>
         </template>
       </div>
