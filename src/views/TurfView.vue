@@ -1418,21 +1418,27 @@ function autoStealable(a: AddressLite): boolean {
   return !!a.turf_id && canStealFrom(turfById.value.get(a.turf_id))
 }
 
-/** May the current cutter steal doors from this turf? Managers can re-cut
- * ANY turf out today — including a per-member sub-turf (2026-07-25: most of
- * a crew's ground can be sitting inside "<name>'s doors" rows cut on the
- * Squad page, and with sub-turfs painted as their parent there is no way to
- * see that from here; refusing meant Take silently did nothing on most of a
- * turf). Releasing a sub-turf hands its doors up to the PARENT rather than
- * to the free pool, so releaseStolenDoors() re-cuts the parent around them
- * too — see there.
+/** May the current cutter steal doors from this turf? Managers re-cut
+ * TOP-LEVEL turfs only.
  *
- * Sub-cutters still only take from a SIBLING sub-turf: those released doors
- * land in the shared parent pool, which is exactly where their draft claims
- * from. Anywhere else would be out of reach. */
+ * THE CUTTER NEVER TAKES DOORS OUT OF A PER-MEMBER SUB-TURF, and that rule
+ * is load-bearing (2026-07-25, learned the hard way): those "<name>'s doors"
+ * rows are the crew's own split, cut on the Squad page, and they're what
+ * puts each canvasser's avatar on their doors there. Letting Take reach them
+ * for one afternoon cost a real one — editing NW Richwood with Take armed
+ * swallowed all four members' shares (190 doors) into the parent in a single
+ * save, silently, because sub-turfs paint as their parent here and there was
+ * nothing on screen to show a boundary being crossed. Their segment rows are
+ * rewritten by the RPC, so the split could not be restored. To take ground
+ * that a crew has already divided, dissolve the split on the Squad page
+ * first — deliberately a decision someone makes on purpose.
+ *
+ * Sub-cutters take only from a SIBLING sub-turf: those released doors land
+ * in the shared parent pool, which is exactly where their draft claims from,
+ * and re-arranging their own crew's split is their job. */
 function canStealFrom(victim: TurfWithMeta | undefined): boolean {
   if (!victim || !isTodayTurf(victim)) return false
-  if (isManager.value) return true
+  if (isManager.value) return victim.parent_turf_id === null
   return victim.parent_turf_id !== null && victim.parent_turf_id === effectiveParentId.value
 }
 
@@ -1901,6 +1907,16 @@ function scrollMapIntoView() {
 // marks the doors in stealIds (drafts treat them as claimable); the owning
 // turf is only actually re-cut around them at save time.
 
+/** What a batch of skipped doors actually belongs to. Doors inside a
+ * per-member sub-turf get their own wording: on this map they wear their
+ * parent's color, so "another turf's" reads as wrong when you're editing
+ * that very turf — and the reason they can't be taken here is that someone
+ * on the crew is walking them (see canStealFrom). */
+function skippedNote(doors: AddressLite[]): string {
+  const allSub = doors.every((a) => a.turf_id && turfById.value.get(a.turf_id)?.parent_turf_id)
+  return allSub ? "assigned to the crew on the Squad page" : "another turf's"
+}
+
 /** The flash action for a batch of skipped doors, or null when none of
  * their owners can be stolen from. */
 function stealActionFor(doors: AddressLite[]): { label: string; run: () => void } | null {
@@ -1949,7 +1965,7 @@ function flashAddResult(streetName: string, city: string | null, prefix: string)
     (a) => segsNow.some((s) => matchesSegment(a, s)) && !claimableDoor(a),
   )
   flash(
-    `${prefix} — ${got} door${got === 1 ? '' : 's'} · ${taken} skipped (another turf's).`,
+    `${prefix} — ${got} door${got === 1 ? '' : 's'} · ${taken} skipped (${skippedNote(takenDoors)}).`,
     stealActionFor(takenDoors),
   )
 }
@@ -2315,8 +2331,8 @@ function onLassoUp() {
   if (!free.length) {
     flash(
       wasTap
-        ? `${taken[0].street} belongs to another turf.`
-        : `Every door in that loop belongs to another turf (${taken.length} skipped).`,
+        ? `${taken[0].street} is ${skippedNote(taken)}.`
+        : `Every door in that loop is ${skippedNote(taken)} (${taken.length} skipped).`,
       stealActionFor(taken),
     )
     return
@@ -2332,7 +2348,7 @@ function onLassoUp() {
     wasTap
       ? `${free[0].street} added.`
       : taken.length
-        ? `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'} · ${taken.length} skipped (another turf's).`
+        ? `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'} · ${taken.length} skipped (${skippedNote(taken)}).`
         : `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
     taken.length ? stealActionFor(taken) : null,
   )
@@ -2505,25 +2521,10 @@ interface SegmentPayload {
  * keep — stolen or never-owned — so a rebuilt range can never annex an
  * in-between door the victim didn't hold (ranges claim from the open pool
  * on re-cut). The server's honest-rewrite trims further anyway. */
-function victimSegmentsMinus(
-  victimId: string,
-  stolen: Set<string>,
-  includeSubs = false,
-): SegmentPayload[] {
+function victimSegmentsMinus(victimId: string, stolen: Set<string>): SegmentPayload[] {
   const byStreet = new Map<string, { name: string; city: string; keep: Set<number> }>()
   for (const a of addressById.values()) {
-    if (!a.turf_id) continue
-    // Re-cutting a PARENT to free doors a sub-turf just handed back counts
-    // the subs' doors as its own, so the runs describe the crew's ground as
-    // one stretch with only the stolen doors punched out — a door a sibling
-    // sub still holds isn't in the free pool, so declaring it claims nothing,
-    // and the server's honest rewrite trims the stored segments to what was
-    // actually claimed either way. What matters is the reverse: every stolen
-    // number breaks a run, so the parent can't take them back.
-    const mine =
-      a.turf_id === victimId ||
-      (includeSubs && turfById.value.get(a.turf_id)?.parent_turf_id === victimId)
-    if (!mine) continue
+    if (a.turf_id !== victimId) continue
     const name = streetNameOf(a.street)
     if (!name) continue
     const key = `${name}|${a.city.toUpperCase()}`
@@ -2558,13 +2559,12 @@ function victimSegmentsMinus(
  * user chose to steal, so those doors land in this draft's claim pool
  * (unassigned for a top-level cut, the parent for a sub-cut).
  *
- * Sub-turf victims take TWO hops. Releasing a sub-turf hands its doors up to
- * the parent, not to the free pool — so a top-level draft would then find
- * them owned by the parent and claim nothing. Each affected parent is re-cut
- * around the same doors right after, which is what actually frees them. A
- * sub-cutter's draft is the exception and always was: the parent pool IS
- * where it claims from, so that second hop is skipped (and would fail — it's
- * not their turf to re-cut). */
+ * One hop is enough because canStealFrom() only ever yields victims whose
+ * release lands the doors where this draft can claim them: a top-level turf
+ * for a manager (released to unassigned), a sibling sub-turf for a
+ * sub-cutter (released to the shared parent, which IS their pool). A
+ * two-hop sub-turf release lived here briefly and is gone with the rule that
+ * needed it — see canStealFrom. */
 async function releaseStolenDoors() {
   const byVictim = new Map<string, Set<string>>()
   for (const id of stealIds.value) {
@@ -2576,31 +2576,13 @@ async function releaseStolenDoors() {
     if (set) set.add(id)
     else byVictim.set(a.turf_id, new Set([id]))
   }
-  const recut = async (turfId: string, segments: SegmentPayload[]) => {
+  for (const [victimId, ids] of byVictim) {
     const { error } = await supabase.rpc('set_turf_segments', {
-      target_turf_id: turfId,
-      segments,
+      target_turf_id: victimId,
+      segments: victimSegmentsMinus(victimId, ids),
     })
     if (error) throw error
   }
-  // Subs first, so their doors are sitting at the parent when it's re-cut.
-  const subs = [...byVictim].filter(([id]) => turfById.value.get(id)?.parent_turf_id)
-  const tops = [...byVictim].filter(([id]) => !turfById.value.get(id)?.parent_turf_id)
-  for (const [victimId, ids] of subs) await recut(victimId, victimSegmentsMinus(victimId, ids))
-  const byParent = new Map<string, Set<string>>()
-  for (const [victimId, ids] of subs) {
-    const parentId = turfById.value.get(victimId)?.parent_turf_id
-    if (!parentId) continue
-    if (parentId === effectiveParentId.value) continue // sub-cutter: already the claim pool
-    if (editingTurfId.value === parentId) continue // it's the turf being edited: already ours
-    const set = byParent.get(parentId) ?? new Set<string>()
-    for (const id of ids) set.add(id)
-    byParent.set(parentId, set)
-  }
-  for (const [parentId, ids] of byParent) {
-    await recut(parentId, victimSegmentsMinus(parentId, ids, true))
-  }
-  for (const [victimId, ids] of tops) await recut(victimId, victimSegmentsMinus(victimId, ids))
 }
 
 // --- Copy-or-clear: a previous day's turfs still holding doors ---

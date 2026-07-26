@@ -646,8 +646,13 @@ async function ensureOrgDoors(): Promise<void> {
  * (2026-07-25, user call), so it composes with the turf row rather than
  * competing with it: filter to the crew's ground AND see how it's split.
  * Assign mode turns it on for free — dividing turf is exactly when "who has
- * what" is the question. */
-const ownerLayer = ref(readMapPref('squad-owner-layer', false))
+ * what" is the question.
+ *
+ * ON by default since 2026-07-25 (user call: "I do [want individual people's
+ * doors] on the squad map"): who is walking what is the crew page's subject,
+ * not a layer you go looking for. Today's knocker still wins the badge slot,
+ * so this only ever fills in doors nobody has reached yet. */
+const ownerLayer = ref(readMapPref('squad-owner-layer', true))
 
 function toggleOwnerLayer() {
   ownerLayer.value = !ownerLayer.value
