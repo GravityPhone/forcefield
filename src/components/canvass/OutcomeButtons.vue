@@ -171,20 +171,27 @@ function disabledReason(requiresPerson: boolean): string {
   gap: 0.6rem;
 }
 
+/* minmax(0, 1fr), not 1fr: a plain 1fr floors at the content's min width, so
+ * one long label ("Come back another time") widened its own column and
+ * squeezed the other — the six buttons must stay one even 2×3 block. */
 .outcome-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.6rem;
 }
 
 .outcome-btn {
   position: relative;
   min-height: 64px;
+  padding-inline: 0.5rem;
   font-size: 1.05rem;
   font-weight: 700;
+  line-height: 1.2;
   background: var(--surface);
   border: 2px solid var(--outcome-color);
   color: var(--outcome-color);
+  /* .btn is nowrap for one-word buttons; this one is a phrase and wraps. */
+  white-space: normal;
 }
 
 .outcome-btn:active {

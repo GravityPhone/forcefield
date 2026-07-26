@@ -54,6 +54,12 @@ const chosen = computed<ApptWindow | null>(() => {
   return { start, end, label: windowLabel(start, end) }
 })
 
+/** A window that already closed can only ever be a missed appointment, so
+ * Save won't take it. Only reachable through the typed time — the chips drop
+ * ended windows on their own. A window you're standing INSIDE is fine ("come
+ * back within the hour"), so this is end-of-window, not start. */
+const chosenIsPast = computed(() => !!chosen.value && chosen.value.end.getTime() <= Date.now())
+
 /** This door's soonest appointment that I booked — saving MOVES it rather
  * than stacking a second promise on the same door. Someone else's stays put
  * (their promise, and RLS wouldn't let us touch it anyway). */
@@ -220,7 +226,8 @@ async function cancelExisting() {
         <button
           class="btn btn-primary save"
           type="button"
-          :disabled="!chosen || saving"
+          :disabled="!chosen || chosenIsPast || saving"
+          :title="chosenIsPast ? 'That window already closed' : undefined"
           @click="save"
         >
           {{ saving ? 'Saving…' : 'Save' }}
@@ -384,14 +391,13 @@ async function cancelExisting() {
   gap: 0.6rem;
 }
 
+/* Equal halves on purpose. Elsewhere the forward action takes the width
+ * (Next in the walk row), but booking a time is genuinely optional here —
+ * "Not now" is a right answer, not a bail-out, so it gets the same thumb. */
 .actions .btn {
   flex: 1;
   min-height: 52px;
   font-size: 1rem;
   font-weight: 700;
-}
-
-.save {
-  flex: 1.6;
 }
 </style>

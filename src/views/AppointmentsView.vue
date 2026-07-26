@@ -117,16 +117,18 @@ onMounted(async () => {
 
 type ApptState = 'upcoming' | 'now' | 'kept' | 'late' | 'missed' | 'canceled'
 
+/** Tags stay one short word — this column sits beside an address on a phone.
+ * "Late" is spelled out in the help ("the return came after the window"). */
 const STATE_LABELS: Record<ApptState, string> = {
   upcoming: '',
   now: 'Now',
   kept: 'Kept',
-  late: 'Went back late',
+  late: 'Late',
   missed: 'Missed',
   canceled: 'Canceled',
 }
 
-function stateOf(a: ApptRow, now = Date.now()): ApptState {
+function stateOf(a: ApptRow, now: number): ApptState {
   if (a.status === 'canceled') return 'canceled'
   const start = new Date(a.starts_at).getTime()
   const end = new Date(a.ends_at).getTime()
@@ -137,6 +139,15 @@ function stateOf(a: ApptRow, now = Date.now()): ApptState {
   if (knocks.some((t) => t > end)) return 'late'
   return 'missed'
 }
+
+/** Resolved once per render pass rather than three times per row in the
+ * template — and off ONE clock reading, so a row can't be "still to come" in
+ * its color and "missed" in its tag for straddling a second boundary. */
+const stateById = computed(() => {
+  const now = Date.now()
+  return new Map(rows.value.map((a) => [a.id, stateOf(a, now)]))
+})
+const stateFor = (a: ApptRow): ApptState => stateById.value.get(a.id) ?? 'upcoming'
 
 // --------------------------------------------------------------- scope
 
@@ -184,10 +195,17 @@ const groups = computed<DayGroup[]>(() => {
   return out
 })
 
+/** Honors "Mine only" — a count in the same row as the switch that ignored it
+ * would just look like the list was hiding rows. */
 const upcomingCount = computed(() => {
   const now = Date.now()
-  return rows.value.filter((a) => a.status === 'scheduled' && new Date(a.ends_at).getTime() >= now)
-    .length
+  const me = auth.profile?.id
+  return rows.value.filter(
+    (a) =>
+      a.status === 'scheduled' &&
+      new Date(a.ends_at).getTime() >= now &&
+      (!mineOnly.value || a.canvasser_id === me),
+  ).length
 })
 
 // --------------------------------------------------------------- row actions
@@ -235,10 +253,13 @@ const optionsSaved = ref(false)
 const optionsError = ref('')
 const draft = ref({ ...appointmentSettings.value })
 
+/** The first chip of the day, as the settings currently read — clamped the
+ * same way Save clamps, so the preview can't promise a window the DB would
+ * refuse. */
 const windowPreview = computed(() => {
   const d = new Date()
-  d.setHours(draft.value.day_start_hour, 0, 0, 0)
-  const end = new Date(d.getTime() + Math.max(15, draft.value.window_minutes) * 60_000)
+  d.setHours(clampInt(draft.value.day_start_hour, 0, 23), 0, 0, 0)
+  const end = new Date(d.getTime() + clampInt(draft.value.window_minutes, 15, 480) * 60_000)
   return windowLabel(d, end)
 })
 
@@ -339,16 +360,22 @@ async function saveOptions() {
       <section v-for="g in groups" :key="g.key" class="day" data-help="appt-list">
         <h3 class="day-head">{{ g.label }}</h3>
         <ul class="appt-list">
-          <li v-for="a in g.items" :key="a.id" class="appt-row" :class="stateOf(a)">
+          <li v-for="a in g.items" :key="a.id" class="appt-row" :class="stateFor(a)">
+            <!-- Left rail is the visit — when, and how it went. The address
+                 and the people get the rest of the width; on a phone that is
+                 the difference between a readable street name and two words
+                 a line. -->
             <button class="appt-main" @click="openDoor(a)">
-              <span class="appt-time">{{ windowLabel(new Date(a.starts_at), new Date(a.ends_at)) }}</span>
+              <span class="appt-when">
+                <span class="appt-time">{{ windowLabel(new Date(a.starts_at), new Date(a.ends_at)) }}</span>
+                <span v-if="STATE_LABELS[stateFor(a)]" class="appt-state">{{ STATE_LABELS[stateFor(a)] }}</span>
+              </span>
               <span class="appt-body">
                 <span class="appt-door">{{ doorLine(a) }}</span>
                 <span class="muted appt-meta">
                   <template v-if="a.person?.name">{{ a.person.name }} · </template>{{ bookedBy(a) }}
                 </span>
               </span>
-              <span v-if="STATE_LABELS[stateOf(a)]" class="appt-state">{{ STATE_LABELS[stateOf(a)] }}</span>
             </button>
             <button
               v-if="canCancel(a)"
@@ -520,6 +547,14 @@ async function saveOptions() {
   margin-left: auto;
 }
 
+/* On a phone the chips fill the row and this count wraps below them; pushed
+ * right it reads as a stranded scrap, so let it sit under the chips instead. */
+@media (max-width: 460px) {
+  .scope-right {
+    margin-left: 0;
+  }
+}
+
 /* --- The list --- */
 
 .day-head {
@@ -586,8 +621,15 @@ async function saveOptions() {
   background: var(--surface-2);
 }
 
-.appt-time {
+.appt-when {
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+}
+
+.appt-time {
   font-weight: 800;
   font-size: 0.88rem;
   white-space: nowrap;
@@ -612,11 +654,11 @@ async function saveOptions() {
 }
 
 .appt-state {
-  flex-shrink: 0;
   font-size: 0.72rem;
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  white-space: nowrap;
   color: var(--text-muted);
 }
 
