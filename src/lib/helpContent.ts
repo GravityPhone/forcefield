@@ -205,9 +205,9 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     title: 'Team feed',
     sections: [
       {
-        heading: 'Pace',
+        heading: 'Deadline',
         target: 'campaign-pace',
-        body: 'Days left to the filing deadline, and signatures a day needed from here.\nAhead or behind measures the last 7 days against that rate.',
+        body: 'Days left to the filing deadline, and signatures of the goal so far.\nBoth are set on Campaigns & Teams.',
       },
       {
         target: 'feed-list',
@@ -232,11 +232,6 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
   '/leaderboard': {
     title: 'Leaderboard',
     sections: [
-      {
-        heading: 'Pace',
-        target: 'campaign-pace',
-        body: 'Days left to the filing deadline, and signatures a day needed from here.\n"Now" is the last 7 days averaged — what Ahead and Behind compare against.\nGoal and deadline are set on Campaigns & Teams.',
-      },
       {
         target: 'board-canvassers',
         body: 'Standings since midnight. Canvassers and squads rank separately.\nYour own row is highlighted. The chip beside each heading gives your place and jumps to it.',
@@ -378,9 +373,9 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'A turf only changes through a tool. Arm one first.\n◯ Lasso: drag a loop — catches dots inside it or under the line. Tap a single dot for that one door.\n☝ Streets: tap a road to take or drop the whole street.\nAdd and Erase set direction, on the row underneath.\nTake shows while a tool is set to Add: sweeps pull doors out of whoever holds them, with no prompt. The old turf gives them up when you save.\nTake stays on until you turn it off, from its button or the red chip at the top. Doors already taken stay taken.\nUndo steps back one gesture.',
       },
       {
-        heading: 'Streets table',
+        heading: 'Streets',
         target: 'turf-streets',
-        body: 'One row per street: ranges, door count, ✕ to drop.\nTap a row to edit from and to, and set both, even or odd.',
+        body: 'One line per street: name, door count. A red count means the range matched no doors.\nTap a street for the rest — its stretches, from and to, both/even/odd, and Remove street.\nAn open street is the map’s trim target: its doors paint, and a map tap drops or restores a house.',
       },
       {
         heading: 'Reading the map',
