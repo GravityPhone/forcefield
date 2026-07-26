@@ -153,6 +153,46 @@ export function doorPartlySigned(
   return latest !== 'skip' && latest !== 'hostile'
 }
 
+/** The two colors a door is painted with, from one call: the fill every
+ * surface uses, plus the yellow inset band a partly-signed door wears over
+ * its green. Same pair the map pins draw (doorCanvas's fill + innerRing) and
+ * the same pair the list rows show as a square — HuntTab had two copies of
+ * this three-line dance before it lived here. */
+export function doorPaint(
+  latest: KnockOutcome | null | undefined,
+  signedCount: number | null | undefined,
+  personCount: number | null | undefined,
+): { fill: string; band: string | null } {
+  const partly = doorPartlySigned(latest, signedCount, personCount)
+  const outcome = doorStatusOutcome(latest, signedCount, personCount)
+  return {
+    fill: partly ? OUTCOME_HEX.signed : outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX,
+    band: partly ? OUTCOME_HEX.maybe : null,
+  }
+}
+
+/** Wash a whole list row in a subdued version of its status color (2026-07-26,
+ * user call — "shades the entire bar in a similar color, but a lighter, more
+ * subdued shade, and then also puts a square, so it's really obvious").
+ *
+ * Returns CSS variables rather than a `background`, for two reasons: an inline
+ * `background` would beat every `:hover` and `.active` rule in the sheet, and
+ * a row's resting surface differs by screen (a card, a bottom sheet, a
+ * transparent list). Rows read `var(--row-tint, <their own default>)`, so a
+ * row with no status looks exactly as it did before.
+ *
+ * Mixed against `var(--surface)` rather than `transparent` so the result is
+ * opaque: it then composites identically over a card, a sheet or a striped
+ * list, and it follows the theme — the same green is a pale wash on a day
+ * scheme and a deep one at night, with no second palette to maintain. */
+export function outcomeRowTint(hex: string | null | undefined): Record<string, string> {
+  if (!hex) return {}
+  return {
+    '--row-tint': `color-mix(in srgb, ${hex} 15%, var(--surface))`,
+    '--row-tint-hover': `color-mix(in srgb, ${hex} 26%, var(--surface))`,
+  }
+}
+
 /** Coarse 4-bucket status color for the Hunt "Knock" button — green once
  * signed, yellow while still a maybe, red once it's a closed no (didn't
  * sign / skip / hostile), blue for not-home or never-visited (nothing

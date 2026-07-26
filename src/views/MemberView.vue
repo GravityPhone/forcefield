@@ -6,7 +6,8 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
-import { OUTCOME_HEX, OUTCOME_LABELS } from '@/lib/outcomes'
+import { OUTCOME_HEX, OUTCOME_LABELS, outcomeRowTint } from '@/lib/outcomes'
+import OutcomeSquare from '@/components/canvass/OutcomeSquare.vue'
 import { embeddedPhone, telHref } from '@/lib/phone'
 import { ROLE_LABELS, type AppRole, type KnockOutcome } from '@/types'
 
@@ -180,8 +181,8 @@ function doorLine(v: VisitRow): string {
             </span>
           </h3>
           <ul v-if="visits.length" class="visit-list">
-            <li v-for="v in visits" :key="v.id" class="visit-row">
-              <span class="visit-dot" :style="{ background: OUTCOME_HEX[v.outcome] }" aria-hidden="true"></span>
+            <li v-for="v in visits" :key="v.id" class="visit-row" :style="outcomeRowTint(OUTCOME_HEX[v.outcome])">
+              <OutcomeSquare :fill="OUTCOME_HEX[v.outcome]" />
               <span class="visit-main">
                 <span class="visit-what">
                   <strong>{{ doorLine(v) }}</strong>
@@ -340,20 +341,16 @@ function doorLine(v: VisitRow): string {
   overflow-y: auto;
 }
 
+/* Square instead of a dot, and the whole line washed in the same color
+ * (2026-07-26, user call) — the list reads as a pattern of outcomes rather
+ * than a column of text with specks beside it. */
 .visit-row {
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
-}
-
-.visit-dot {
-  flex-shrink: 0;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  margin-top: 0.25rem;
-  border: 1.5px solid #fff;
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
+  padding: 0.4rem 0.5rem;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--row-tint, transparent);
 }
 
 .visit-main {

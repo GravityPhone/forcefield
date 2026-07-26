@@ -31,7 +31,9 @@ import {
   PIN_DEFAULT_HEX,
   doorPartlySigned,
   doorStatusOutcome,
+  outcomeRowTint,
 } from '@/lib/outcomes'
+import OutcomeSquare from '@/components/canvass/OutcomeSquare.vue'
 import { avatarUrl } from '@/lib/avatars'
 import { cacheState, cacheTodaysTurf, clearTurfCache, type CacheState } from '@/lib/offlineCache'
 import {
@@ -2773,9 +2775,10 @@ watch(
               type="button"
               class="feed-row"
               :disabled="!row.addressId"
+              :style="outcomeRowTint(OUTCOME_HEX[row.outcome])"
               @click="openFeedDoor(row)"
             >
-              <span class="feed-dot" :style="{ background: OUTCOME_HEX[row.outcome] }" aria-hidden="true"></span>
+              <OutcomeSquare :fill="OUTCOME_HEX[row.outcome]" />
               <span class="feed-main">
                 <span class="feed-street">{{ prettyStreet(row.street) || 'Door' }}</span>
                 <span class="muted feed-meta">
@@ -3904,6 +3907,9 @@ watch(
   flex-direction: column;
 }
 
+/* Square, and the outcome washed across the line (2026-07-26, user call):
+ * this sheet is "what did they get through today", and the answer is the
+ * shape of the colors down it. */
 .feed-row {
   display: flex;
   align-items: center;
@@ -3912,10 +3918,10 @@ watch(
   font: inherit;
   color: inherit;
   text-align: left;
-  background: none;
+  background: var(--row-tint, none);
   border: none;
   border-bottom: 1px solid var(--border);
-  padding: 0.5rem 0.15rem;
+  padding: 0.5rem 0.4rem;
   cursor: pointer;
 }
 
@@ -3924,16 +3930,7 @@ watch(
 }
 
 .feed-row:not(:disabled):hover {
-  background: var(--surface-2);
-}
-
-.feed-dot {
-  flex-shrink: 0;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, 0.7);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  background: var(--row-tint-hover, var(--surface-2));
 }
 
 .feed-main {

@@ -5,7 +5,8 @@ import OutcomeButtons from './OutcomeButtons.vue'
 import { computed } from 'vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import { hapticTap } from '@/lib/native'
-import { OUTCOME_DOOR_LEVEL, OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, OUTCOME_SHORT, PIN_DEFAULT_HEX } from '@/lib/outcomes'
+import { OUTCOME_DOOR_LEVEL, OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, OUTCOME_SHORT, PIN_DEFAULT_HEX, outcomeRowTint } from '@/lib/outcomes'
+import OutcomeSquare from './OutcomeSquare.vue'
 import { appointmentLabel } from '@/lib/appointments'
 import { houseNumber } from '@/lib/streetWalk'
 import { useTalkStore, type KnockHistoryEntry } from '@/stores/talk'
@@ -154,8 +155,13 @@ const PARTLY_SIGNED_OPTIONS = [
           <span class="muted history-count">{{ talk.history.length }} visit{{ talk.history.length === 1 ? '' : 's' }}</span>
         </h4>
         <ul class="history-list">
-          <li v-for="h in talk.history" :key="h.client_id" class="history-row">
-            <span class="history-dot" :style="{ background: OUTCOME_HEX[h.outcome] }" aria-hidden="true"></span>
+          <li
+            v-for="h in talk.history"
+            :key="h.client_id"
+            class="history-row"
+            :style="outcomeRowTint(OUTCOME_HEX[h.outcome])"
+          >
+            <OutcomeSquare :fill="OUTCOME_HEX[h.outcome]" />
             <span class="history-main">
               <span class="history-what">
                 <strong>{{ OUTCOME_LABELS[h.outcome] }}</strong>
@@ -379,20 +385,16 @@ const PARTLY_SIGNED_OPTIONS = [
   overflow-y: auto;
 }
 
+/* Square, and the visit's color across the whole line (2026-07-26, user
+ * call) — the door's story reads as a stack of colors before you read a
+ * word of it. */
 .history-row {
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
-}
-
-.history-dot {
-  flex-shrink: 0;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  margin-top: 0.25rem;
-  border: 1.5px solid #fff;
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
+  padding: 0.4rem 0.5rem;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--row-tint, transparent);
 }
 
 .history-main {

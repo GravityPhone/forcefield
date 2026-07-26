@@ -6,7 +6,8 @@ import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { useTalkStore } from '@/stores/talk'
 import KnockEditSheet, { type EditableKnock } from '@/components/knocks/KnockEditSheet.vue'
-import { OUTCOMES, OUTCOME_HEX, OUTCOME_LABELS } from '@/lib/outcomes'
+import { OUTCOMES, OUTCOME_HEX, OUTCOME_LABELS, outcomeRowTint } from '@/lib/outcomes'
+import OutcomeSquare from '@/components/canvass/OutcomeSquare.vue'
 import type { KnockOutcome } from '@/types'
 
 /** Your own knock history — the "where did I already look?" page. The roster
@@ -231,9 +232,10 @@ function onDeleted(id: string) {
               :is="v.household_id ? 'button' : 'div'"
               class="visit-row"
               :class="{ tappable: !!v.household_id }"
+              :style="outcomeRowTint(OUTCOME_HEX[v.outcome])"
               @click="openDoor(v)"
             >
-              <span class="visit-dot" :style="{ background: OUTCOME_HEX[v.outcome] }" aria-hidden="true"></span>
+              <OutcomeSquare :fill="OUTCOME_HEX[v.outcome]" />
               <span class="visit-main">
                 <span class="visit-what">
                   <strong>{{ doorLine(v) }}</strong>
@@ -377,7 +379,7 @@ function onDeleted(id: string) {
   padding: 0.55rem 0.6rem;
   border: none;
   border-radius: calc(var(--radius) - 2px);
-  background: transparent;
+  background: var(--row-tint, transparent);
   font: inherit;
   color: inherit;
   text-align: left;
@@ -389,7 +391,7 @@ function onDeleted(id: string) {
 }
 
 .visit-row.tappable:hover {
-  background: var(--surface-2);
+  background: var(--row-tint-hover, var(--surface-2));
 }
 
 /* The row and its Fix button share a line; the divider moved out to the
@@ -427,15 +429,10 @@ function onDeleted(id: string) {
   background: var(--surface-2);
 }
 
-.visit-dot {
-  flex-shrink: 0;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  margin-top: 0.25rem;
-  border: 1.5px solid #fff;
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
-}
+/* The dot became a square and the whole line took the color (2026-07-26,
+ * user call) — a row you can read at a glance instead of one you have to
+ * squint at. --row-tint comes in inline per row; the fallback keeps the
+ * hover and the transparent resting state working as before. */
 
 .visit-main {
   display: flex;

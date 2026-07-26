@@ -32,15 +32,17 @@ import { startOfLocalDayISO } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
 import { useTalkStore } from '@/stores/talk'
 import {
-  OUTCOME_HEX,
+  OUTCOME_LABELS,
   PIN_DEFAULT_HEX,
+  doorPaint,
   doorPartlySigned,
   doorStatusOutcome,
   knockButtonHex,
+  outcomeRowTint,
 } from '@/lib/outcomes'
 import { inkOn, memberColor } from '@/lib/memberColors'
 import { houseNumber, streetNameOf, titleCase } from '@/lib/streetWalk'
-import OutcomeIndicatorGrid from './OutcomeIndicatorGrid.vue'
+import OutcomeSquare from './OutcomeSquare.vue'
 import { fadeUp } from '@/lib/motion'
 import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockLog, KnockOutcome, Person } from '@/types'
 
@@ -452,12 +454,11 @@ function paintForDoor(id: string): DoorPaintState | null {
       badge,
     }
   }
-  const row = statusByHousehold.value.get(id)
-  const outcome = doorOutcomeFor(id)
-  const partly = doorPartlySigned(row?.outcome, row?.signed_count, row?.person_count)
+  // Same call the list rows make, so a pin and its row can never disagree.
+  const { fill, band } = paintFor(id)
   return {
-    fill: partly ? OUTCOME_HEX.signed : outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX,
-    innerRing: partly ? OUTCOME_HEX.maybe : null,
+    fill,
+    innerRing: band,
     ring: isLocated ? LOCATED_RING : null,
     halo,
     // A door somebody covered today draws bigger and above its neighbors —
@@ -1202,6 +1203,23 @@ function householdSize(address: Partial<RosterCount> | null | undefined): number
   return address?.persons?.[0]?.count ?? null
 }
 
+/** "2/4 signed" — the one thing the square genuinely can't say. A green
+ * square means everybody signed and a banded one means somebody did, but
+ * neither says how many names are left, and that's what decides whether the
+ * door is worth another trip. Lived inside the old indicator grid; it
+ * outlived it. Null when there's nothing yet to count. */
+function ratioFor(
+  address: (Partial<RosterCount> & { id?: string | null }) | null | undefined,
+  householdId?: string | null,
+): string | null {
+  const summary = summaryFor(householdId ?? address?.id ?? null)
+  const size = householdSize(address)
+  const signed = summary?.signed_count ?? 0
+  if (size && size > 0) return `${signed}/${size} signed`
+  if (summary && summary.total_knocks > 0) return `${signed}/${summary.total_knocks} signed`
+  return null
+}
+
 /** Effective status outcome for a door — latest knock re-read through the
  * all/partly-signed rules (green only when the whole roster signed, yellow
  * while partly signed; see doorStatusOutcome). Drives pins AND the knock
@@ -1233,17 +1251,34 @@ function wasKnockedToday(addressId: string | null | undefined): boolean {
  *
  * Same source as paintForDoor, same rules, including the partly-signed
  * green-with-a-yellow-band. */
-const locatedStripe = computed<{ color: string; band: string | null }>(() => {
-  const id = locatedAddress.value?.id
-  if (!id) return { color: PIN_DEFAULT_HEX, band: null }
-  const row = statusByHousehold.value.get(id)
-  const partly = doorPartlySigned(row?.outcome, row?.signed_count, row?.person_count)
-  const outcome = doorOutcomeFor(id)
-  return {
-    color: partly ? OUTCOME_HEX.signed : outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX,
-    band: partly ? OUTCOME_HEX.maybe : null,
+/** A door's status as the list draws it: the square's fill, its partly-signed
+ * band, and the wash over the whole row. Identical colors to the pin — one
+ * door, one answer, wherever you're looking at it. */
+function paintFor(addressId: string | null | undefined): { fill: string; band: string | null } {
+  if (!addressId) return { fill: PIN_DEFAULT_HEX, band: null }
+  const row = statusByHousehold.value.get(addressId)
+  return doorPaint(row?.outcome, row?.signed_count, row?.person_count)
+}
+
+/** Subdued wash for a house row, so the whole line carries the status and not
+ * just the square at the end of it. */
+function rowTintFor(addressId: string | null | undefined): Record<string, string> {
+  return outcomeRowTint(paintFor(addressId).fill)
+}
+
+/** What the square means, said in words for screen readers and long-press.
+ * A square is only obvious if you already know the code. */
+function statusLabelFor(addressId: string | null | undefined): string {
+  if (!addressId) return 'Not knocked'
+  const row = statusByHousehold.value.get(addressId)
+  if (doorPartlySigned(row?.outcome, row?.signed_count, row?.person_count)) {
+    return 'Some signed, names left'
   }
-})
+  const outcome = doorOutcomeFor(addressId)
+  return outcome ? OUTCOME_LABELS[outcome] : 'Not knocked'
+}
+
+const locatedStripe = computed(() => paintFor(locatedAddress.value?.id))
 
 // --- Locate: pan/zoom the map, highlight the pin, fill in every house on
 // the same street (capped at 50 — geocoding only happens on this explicit
@@ -1678,8 +1713,9 @@ onUnmounted(() => {
       v-motion="fadeUp()"
       class="card located-card"
       :style="{
-        borderLeftColor: locatedStripe.color,
+        borderLeftColor: locatedStripe.fill,
         boxShadow: locatedStripe.band ? `inset 3px 0 0 0 ${locatedStripe.band}` : undefined,
+        ...rowTintFor(locatedAddress.id),
       }"
     >
       <span class="result-left">
@@ -1710,9 +1746,11 @@ onUnmounted(() => {
         <!-- Whose ground this is, while the All-turf layer is on. -->
         <span v-if="locatedTurfLabel" class="turf-tag">{{ locatedTurfLabel }}</span>
       </span>
-      <OutcomeIndicatorGrid
-        :summary="summaryFor(locatedAddress.id)"
-        :household-size="householdSize(locatedAddress)"
+      <span v-if="ratioFor(locatedAddress)" class="ratio-text">{{ ratioFor(locatedAddress) }}</span>
+      <OutcomeSquare
+        :fill="locatedStripe.fill"
+        :band="locatedStripe.band"
+        :label="statusLabelFor(locatedAddress.id)"
       />
       <button
         class="btn btn-sm knock-btn"
@@ -1905,13 +1943,19 @@ onUnmounted(() => {
             :key="'h-' + a.id"
             class="result-row"
             :class="{ 'result-active': a.id === locatedAddressId }"
+            :style="rowTintFor(a.id)"
             @click="onDoorRowTap(a)"
           >
             <span class="result-left">
               <span class="result-name">{{ a.street }}{{ a.unit ? ' ' + a.unit : '' }}</span>
               <span v-if="wasKnockedToday(a.id)" class="today-badge">Knocked today</span>
             </span>
-            <OutcomeIndicatorGrid :summary="summaryFor(a.id)" :household-size="householdSize(a)" />
+            <span v-if="ratioFor(a)" class="ratio-text">{{ ratioFor(a) }}</span>
+            <OutcomeSquare
+              :fill="paintFor(a.id).fill"
+              :band="paintFor(a.id).band"
+              :label="statusLabelFor(a.id)"
+            />
             <button
               class="btn btn-sm knock-btn"
               :style="{ background: knockColorFor(a.id), color: '#fff' }"
@@ -1956,6 +2000,7 @@ onUnmounted(() => {
                 :key="'p-' + p.id"
                 class="result-row"
                 :class="{ 'result-active': p.household_id === locatedAddressId }"
+                :style="rowTintFor(p.household_id)"
                 @click="onPersonRowTap(p)"
               >
                 <span class="result-left">
@@ -1965,9 +2010,13 @@ onUnmounted(() => {
                   </span>
                   <span v-if="wasKnockedToday(p.household_id)" class="today-badge">Knocked today</span>
                 </span>
-                <OutcomeIndicatorGrid
-                  :summary="summaryFor(p.household_id)"
-                  :household-size="householdSize(p.addresses)"
+                <span v-if="ratioFor(p.addresses, p.household_id)" class="ratio-text">{{
+                  ratioFor(p.addresses, p.household_id)
+                }}</span>
+                <OutcomeSquare
+                  :fill="paintFor(p.household_id).fill"
+                  :band="paintFor(p.household_id).band"
+                  :label="statusLabelFor(p.household_id)"
                 />
                 <button
                   v-if="p.household_id"
@@ -2231,7 +2280,11 @@ onUnmounted(() => {
   padding: 0.75rem;
   border: 2px solid var(--located-accent);
   border-left-width: 6px;
-  background: color-mix(in srgb, var(--located-accent) 6%, var(--surface));
+  /* The fill is the door's STATUS wash now, not a violet tint — the violet
+   * frame and heading already say "this is the door you're looking at", and
+   * the card is the one place you want the status readable across the room.
+   * Falls back to the old violet if the door has no status row yet. */
+  background: var(--row-tint, color-mix(in srgb, var(--located-accent) 6%, var(--surface)));
 }
 
 /* Left stripe carries knock status, painted inline from locatedStripe with
@@ -2395,6 +2448,11 @@ onUnmounted(() => {
   color: var(--text-muted);
 }
 
+/* The whole line carries the door's status, not just the square at the end
+ * (2026-07-26, user call). --row-tint is set inline per row by rowTintFor();
+ * the fallback keeps every row that has no status looking exactly as before,
+ * and leaving `background` to the stylesheet is what lets :hover and
+ * .result-active still win. */
 .result-row {
   display: flex;
   align-items: center;
@@ -2405,7 +2463,7 @@ onUnmounted(() => {
   padding: 0.55rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: var(--row-tint, var(--surface));
   cursor: pointer;
   font: inherit;
   color: inherit;
@@ -2413,7 +2471,17 @@ onUnmounted(() => {
 }
 
 .result-row:hover {
-  background: var(--surface-2);
+  background: var(--row-tint-hover, var(--surface-2));
+}
+
+/* "2/4 signed" beside the square — a value, and the only part of the old
+ * indicator grid worth keeping. */
+.ratio-text {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .result-row.result-active {
