@@ -70,7 +70,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Outcomes',
         target: 'talk-outcomes',
-        body: 'Signed, Not Interested, Maybe: pick a person first.\nNot Home, Skip, Hostile: household only.',
+        body: 'Signed: pick a person first.\nAll others: the person picked, or the household if none.',
       },
       {
         heading: 'Next and Back',

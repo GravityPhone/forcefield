@@ -27,10 +27,11 @@ function confirmPrevious() {
   void talk.confirmPrevious()
 }
 
-// Not Home / Skip / Hostile describe the door interaction, so they only need
-// a household loaded. Signed / Didn't Sign / Maybe are a real answer from a
-// real person — those stay disabled until someone's actually picked from
-// the roster, even once an address is loaded.
+// Only Signed needs a name on it (see requiresPerson in lib/outcomes.ts) —
+// every other button goes live the moment a door is loaded, and logs against
+// whoever's picked from the roster or against the household when nobody is.
+// Not Interested and Maybe joined that group 2026-07-25: you're talking to
+// someone at the door without knowing which resident they are.
 // Whether to offer the "My turf" switch at all — it needs turf to filter to.
 // (Labeled "My turf", not "My doors": it filters to the CREW's assignment,
 // which is what myTurfIds means. "My doors" is Scout's narrower filter — the
@@ -59,6 +60,12 @@ const hasPerson = computed(() => talk.selectedPerson !== null)
 function disabledFor(requiresPerson: boolean): boolean {
   return requiresPerson ? !hasPerson.value : !hasHousehold.value
 }
+
+/** Signed is the only button that greys out on its own now, so it says why —
+ * three buttons dimming together used to read as a rule, one reads as broken. */
+function disabledReason(requiresPerson: boolean): string {
+  return requiresPerson && hasHousehold.value ? 'Pick who signed from the list above' : 'Open a door first'
+}
 </script>
 
 <template>
@@ -71,6 +78,7 @@ function disabledFor(requiresPerson: boolean): boolean {
         :class="{ active: talk.pendingOutcome === o.value }"
         :style="{ '--outcome-color': o.hex }"
         :disabled="disabledFor(o.requiresPerson)"
+        :title="disabledFor(o.requiresPerson) ? disabledReason(o.requiresPerson) : undefined"
         @click="logOutcome(o.value)"
       >
         {{ o.label }}

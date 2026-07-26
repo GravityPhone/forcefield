@@ -6,30 +6,53 @@ import type { KnockOutcome } from '@/types'
  * of the user's chosen color scheme, so the outcome<->color mapping stays
  * fixed while everything else in the app is themable.
  *
- * `requiresPerson`: a real outcome (signed/didn't sign/maybe) must be tied to
- * an actual person on the roster — you can't credit or reject a signature
- * for "the household" in the abstract. Not Home / Skip / Hostile describe
- * the door interaction itself, not any one resident, so those only need a
- * household loaded, same as before.
+ * Two flags, and they answer DIFFERENT questions (2026-07-25) — keep them
+ * apart:
+ *
+ * `requiresPerson`: this outcome can't be logged without a name, so its
+ * button stays disabled until someone's picked from the roster. Only
+ * 'signed'. A petition signature is a particular person's; there's no such
+ * thing as one belonging to "the household" in the abstract.
+ *   Not Interested and Maybe USED to require a person too, and stopped on
+ *   2026-07-25 (user call): you're standing at the door talking to somebody
+ *   and often have no idea which of the roster names they are — or they're
+ *   not on the roster at all. Forcing a guess to record what you were
+ *   plainly told meant the answer went unlogged. With a person picked they
+ *   still log against that person exactly as before; with nobody picked
+ *   they log against the door.
+ *
+ * `doorLevel`: this outcome is about the VISIT, not any one resident (Not
+ * Home / Skip / Hostile), so it speaks for the whole door even when a
+ * person happened to be selected as it was logged. Separate from the above
+ * because a Not Interested can now go either way: with no person_id it
+ * speaks for the door (floods TalkTab's address banner); with one it's that
+ * person's answer and stays on their roster bubble.
  *
  * `ink`: legible text color OVER a surface filled with `hex` (Talk-mode
  * roster bubbles, the household banner). Fixed literals like the fills
  * themselves — picked per hex by contrast, not by theme. */
-export const OUTCOMES: { value: KnockOutcome; label: string; hex: string; ink: string; requiresPerson: boolean }[] = [
-  { value: 'signed', label: 'Signed', hex: '#2e9e5b', ink: '#181c26', requiresPerson: true },
+export const OUTCOMES: {
+  value: KnockOutcome
+  label: string
+  hex: string
+  ink: string
+  requiresPerson: boolean
+  doorLevel: boolean
+}[] = [
+  { value: 'signed', label: 'Signed', hex: '#2e9e5b', ink: '#181c26', requiresPerson: true, doorLevel: false },
   // The stored value stays `didnt_sign` — only the label changed (2026-07-25,
   // user call): "Not Interested" is what the canvasser actually heard, and it
   // reads as "don't come back here" rather than as a scorekeeping loss. No
   // behavior moved with it; this outcome closes a door for the walk exactly as
   // it always did (CLOSED_OUTCOMES in streetWalk.ts).
-  { value: 'didnt_sign', label: 'Not Interested', hex: '#d64545', ink: '#ffffff', requiresPerson: true },
-  { value: 'maybe', label: 'Maybe', hex: '#e0a02e', ink: '#181c26', requiresPerson: true },
-  { value: 'not_home', label: 'Not Home', hex: '#8a90a5', ink: '#181c26', requiresPerson: false },
+  { value: 'didnt_sign', label: 'Not Interested', hex: '#d64545', ink: '#ffffff', requiresPerson: false, doorLevel: false },
+  { value: 'maybe', label: 'Maybe', hex: '#e0a02e', ink: '#181c26', requiresPerson: false, doorLevel: false },
+  { value: 'not_home', label: 'Not Home', hex: '#8a90a5', ink: '#181c26', requiresPerson: false, doorLevel: true },
   // Skip and Hostile share Not Interested's red ON PURPOSE (2026-07-14): to a
   // canvasser all three mean the same thing — "this door is a no, don't come
   // back". The labels/positions tell them apart where it matters.
-  { value: 'skip', label: 'Skip', hex: '#d64545', ink: '#ffffff', requiresPerson: false },
-  { value: 'hostile', label: 'Hostile', hex: '#d64545', ink: '#ffffff', requiresPerson: false },
+  { value: 'skip', label: 'Skip', hex: '#d64545', ink: '#ffffff', requiresPerson: false, doorLevel: true },
+  { value: 'hostile', label: 'Hostile', hex: '#d64545', ink: '#ffffff', requiresPerson: false, doorLevel: true },
 ]
 
 export const OUTCOME_LABELS: Record<KnockOutcome, string> = Object.fromEntries(
@@ -47,6 +70,14 @@ export const OUTCOME_INK: Record<KnockOutcome, string> = Object.fromEntries(
 
 export const OUTCOME_REQUIRES_PERSON: Record<KnockOutcome, boolean> = Object.fromEntries(
   OUTCOMES.map((o) => [o.value, o.requiresPerson]),
+) as Record<KnockOutcome, boolean>
+
+/** Outcomes that describe the visit rather than a resident — true for a door
+ * whoever answered it. Ask this (not requiresPerson) when the question is
+ * "does this knock speak for the whole household?", and pair it with the
+ * knock's own person_id: `doorLevel || !person_id`. */
+export const OUTCOME_DOOR_LEVEL: Record<KnockOutcome, boolean> = Object.fromEntries(
+  OUTCOMES.map((o) => [o.value, o.doorLevel]),
 ) as Record<KnockOutcome, boolean>
 
 /** Pin color for addresses with no knock logged yet. */

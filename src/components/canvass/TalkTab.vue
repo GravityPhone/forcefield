@@ -5,7 +5,7 @@ import OutcomeButtons from './OutcomeButtons.vue'
 import { computed } from 'vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import { hapticTap } from '@/lib/native'
-import { OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, OUTCOME_REQUIRES_PERSON, PIN_DEFAULT_HEX } from '@/lib/outcomes'
+import { OUTCOME_DOOR_LEVEL, OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, PIN_DEFAULT_HEX } from '@/lib/outcomes'
 import { houseNumber } from '@/lib/streetWalk'
 import { useTalkStore, type KnockHistoryEntry } from '@/stores/talk'
 import type { Address, KnockOutcome } from '@/types'
@@ -30,11 +30,14 @@ function jumpChip(addressId: string) {
 // in lib/outcomes.ts), with labels: green "Everyone signed" once the whole
 // roster has signed, red while a door-level Skip/Hostile is the latest word
 // (that's how a partly-signed door gets retired), yellow "1/3 signed" while
-// somebody-but-not-everybody signed, and otherwise a household-level latest
-// outcome (Not Home / Skip / Hostile) floods as before — person-level
-// outcomes stay on their roster bubbles. history is newest-first and
-// optimistically updated, so this recolors the moment an outcome is logged
-// (and reverts on undo).
+// somebody-but-not-everybody signed, and otherwise the latest HOUSEHOLD-level
+// outcome floods — person-level outcomes stay on their roster bubbles.
+// "Household-level" is two cases since 2026-07-25, when Not Interested and
+// Maybe stopped requiring a person: an outcome that's inherently about the
+// door (Not Home / Skip / Hostile, true even if a person was selected), or
+// any knock logged with nobody picked — the answer of whoever opened the
+// door. history is newest-first and optimistically updated, so this recolors
+// the moment an outcome is logged (and reverts on undo).
 const banner = computed<{ outcome: KnockOutcome; label: string } | null>(() => {
   const signedIds = new Set(
     talk.history.filter((h) => h.outcome === 'signed' && h.person_id).map((h) => h.person_id),
@@ -42,7 +45,8 @@ const banner = computed<{ outcome: KnockOutcome; label: string } | null>(() => {
   const total = talk.roster.length
   if (total > 0 && signedIds.size >= total) return { outcome: 'signed', label: 'Everyone signed' }
   const latest = talk.history[0]
-  const householdLatest = latest && !OUTCOME_REQUIRES_PERSON[latest.outcome] ? latest.outcome : null
+  const householdLatest =
+    latest && (OUTCOME_DOOR_LEVEL[latest.outcome] || !latest.person_id) ? latest.outcome : null
   if (householdLatest === 'skip' || householdLatest === 'hostile') {
     return { outcome: householdLatest, label: OUTCOME_LABELS[householdLatest] }
   }
