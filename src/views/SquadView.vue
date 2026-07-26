@@ -30,6 +30,7 @@ import {
   OUTCOME_HEX,
   OUTCOME_SHORT,
   PIN_DEFAULT_HEX,
+  doorPaint,
   doorPartlySigned,
   doorStatusOutcome,
   outcomeRowTint,
@@ -789,7 +790,7 @@ const { badgeFor } = createBadgeFactory(() => doorLayer?.requestRepaint())
  * so no switch can cost you the progress reading (2026-07-25, user call).
  *
  * fill  = the door's knock STATUS, the exact colors Scout and the cutter use
- *         (doorStatusOutcome: green only when everyone signed, green+yellow
+ *         (doorPaint: green only when everyone signed, green+yellow
  *         band partly signed, red closed-no, blue untouched).
  * ring  = whose it is. "Our doors" wins it when the door belongs to somebody
  *         on the crew (their own accent, the same color as their card and
@@ -814,13 +815,16 @@ function paintForDoor(id: string): DoorPaintState | null {
   if (!door && turfShade.value === 'mine') return null
   const turfId = door ? door.turf_id : foreign!.turf_id
   const status = statusByDoor.value.get(id) ?? orgStatusByDoor.value.get(id)
-  const outcome = doorStatusOutcome(status?.outcome, status?.signed_count, status?.person_count)
-  // Partly signed draws GREEN with a YELLOW band rather than plain yellow —
-  // "one of the three signed" is progress with work left, and shouldn't look
-  // identical to a door where nobody has signed at all.
-  const partly = doorPartlySigned(status?.outcome, status?.signed_count, status?.person_count)
-  const fill = partly ? OUTCOME_HEX.signed : outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX
-  const innerRing = partly ? OUTCOME_HEX.maybe : null
+  // The shared reading, so a pin can never disagree with the same door's row
+  // or its Knock button. doorPaint owns the partly-signed rule: GREEN with a
+  // YELLOW band rather than plain yellow — "one of the three signed" is
+  // progress with work left, and shouldn't look identical to a door where
+  // nobody has signed at all.
+  const { fill, band: innerRing } = doorPaint(
+    status?.outcome,
+    status?.signed_count,
+    status?.person_count,
+  )
   // "All turf" is the only mode that rings by TURF — the crew's own ground
   // doesn't need coloring to be found once the map is filtered to it.
   const turfColor =
