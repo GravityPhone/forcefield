@@ -623,17 +623,16 @@ const stealIds = ref(new Set<string>())
  * mode you arm for one cut, not a setting you forget is on. */
 const takeMode = ref(false)
 
-/** Doors that landed in stealIds because Take was on, so switching it back
- * off can hand them back. A door taken by an explicit "Take them too" tap
- * is NOT in here and survives the toggle, because you asked for that one. */
-let autoStolenIds = new Set<string>()
-
+/** Turning Take OFF keeps every door already taken (2026-07-25, user call:
+ * "all Take does is make it so you can instantly take over and add it to the
+ * turf that you're editing — and then when you click save, it actually saves
+ * it to the database"). It used to hand back everything the mode had swept
+ * in, which meant disarming the lasso reverted the doors you'd just taken
+ * back to their old turf's color — the sweep looked like it had come undone.
+ * The switch governs the NEXT sweep, nothing retroactive; Undo is how you
+ * take a sweep back. */
 function toggleTakeMode() {
   takeMode.value = !takeMode.value
-  if (!takeMode.value) {
-    for (const id of autoStolenIds) stealIds.value.delete(id)
-    autoStolenIds = new Set()
-  }
   for (const seg of segments.value) computeSegment(seg)
   doorLayer?.requestRepaint()
 }
@@ -1450,7 +1449,6 @@ function computeSegment(seg: DraftSegment) {
     for (const a of free) {
       if (!claimableWithoutSteal(a) && !stealIds.value.has(a.id) && autoStealable(a)) {
         stealIds.value.add(a.id)
-        autoStolenIds.add(a.id)
       }
     }
   }
@@ -1601,7 +1599,6 @@ function startOverDraft() {
   if (segments.value.length) snapshotDraft()
   segments.value = []
   stealIds.value = new Set()
-  autoStolenIds = new Set()
   takeMode.value = false
   expandedSegKey.value = null
   saveError.value = ''
@@ -1626,7 +1623,6 @@ function clearDraft() {
   doorInfo.value = null
   segments.value = []
   stealIds.value = new Set()
-  autoStolenIds = new Set()
   takeMode.value = false
   expandedSegKey.value = null
   editingTurfId.value = null
@@ -2033,17 +2029,19 @@ function toggleStreetTap() {
 }
 
 /** Take rides with the sweep tools: it only changes what an ADD sweep does
- * (take the doors it lands on instead of skipping and asking), so it shows
- * only while one is armed to add — 2026-07-25, user call. Declared down here
- * with the tool refs, and disarmed the moment its row leaves: a destructive
- * mode you can't see is a mode you've forgotten is on. */
+ * (take the doors it lands on instead of skipping and asking), so the BUTTON
+ * shows only while one is armed to add — 2026-07-25, user call.
+ *
+ * The MODE is not disarmed when that row leaves, and this is the fix for
+ * "when I unselect Lasso the new highlights go away and I see the old color
+ * from the old turf": disarming used to flip Take off, and flipping it off
+ * used to hand back every door the mode had swept in, so a sweep you'd just
+ * made silently came undone. The "you've forgotten it's on" worry is covered
+ * where it belongs — the sticky editing bar wears a Take chip the whole time
+ * it's armed. */
 const canTake = computed(
   () => draftOpen.value && (lassoActive.value || streetTapActive.value) && selectMode.value === 'add',
 )
-
-watch(canTake, (can) => {
-  if (!can && takeMode.value) toggleTakeMode()
-})
 
 /** Match reverse-geocoded route names to a voter-file street. Exact
  * normalized match first, then directional-stripped; ties break by Google's
@@ -3176,7 +3174,17 @@ onUnmounted(() => {
         }}</span>
         <strong class="editing-name">{{ draftName.trim() || defaultDraftName }}</strong>
         <span class="editing-count">{{ draftDoorCount }} door{{ draftDoorCount === 1 ? '' : 's' }}</span>
-        <span v-if="takeMode" class="editing-take">Take</span>
+        <!-- Take stays armed after its map button hides with the tool, so
+             this chip is both the reminder and the way off. -->
+        <button
+          v-if="takeMode"
+          type="button"
+          class="editing-take"
+          title="Take is on — sweeps pull doors out of whoever holds them. Tap to turn it off."
+          @click="toggleTakeMode"
+        >
+          Take ✕
+        </button>
       </div>
 
       <!-- Turf is for today: a previous day's turfs still holding doors get
@@ -4245,13 +4253,17 @@ onUnmounted(() => {
 }
 
 .editing-take {
-  padding: 0.05rem 0.4rem;
+  flex-shrink: 0;
+  padding: 0.15rem 0.5rem;
+  border: none;
   border-radius: 999px;
   background: #d64545;
   color: #fff;
   font-size: 0.72rem;
   font-weight: 700;
   letter-spacing: 0.04em;
+  line-height: 1;
+  cursor: pointer;
 }
 
 /* Lasso toggle, top-right under the fullscreen button — same chrome as the

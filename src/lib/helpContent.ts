@@ -304,7 +304,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Map tools',
         target: 'turf-tools',
-        body: 'A turf only changes through a tool. Arm one first.\n◯ Lasso: drag a loop — catches dots inside it or under the line. Tap a single dot for that one door.\n☝ Streets: tap a road to take or drop the whole street.\nAdd and Erase set direction, on the row underneath.\nTake shows while a tool is set to Add: sweeps pull doors out of whoever holds them, with no prompt. The old turf gives them up when you save.\nUndo steps back one gesture.',
+        body: 'A turf only changes through a tool. Arm one first.\n◯ Lasso: drag a loop — catches dots inside it or under the line. Tap a single dot for that one door.\n☝ Streets: tap a road to take or drop the whole street.\nAdd and Erase set direction, on the row underneath.\nTake shows while a tool is set to Add: sweeps pull doors out of whoever holds them, with no prompt. The old turf gives them up when you save.\nTake stays on until you turn it off, from its button or the red chip at the top. Doors already taken stay taken.\nUndo steps back one gesture.',
       },
       {
         heading: 'Streets table',
