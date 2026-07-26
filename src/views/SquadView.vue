@@ -25,7 +25,7 @@ import type { CanvasDoor, DoorBadge, DoorPaintState } from '@/lib/doorCanvas'
 import { createBadgeFactory } from '@/lib/doorBadges'
 import { attachMapScrollGuard } from '@/lib/mapScroll'
 import type { MapScrollGuard } from '@/lib/mapScroll'
-import { afterScrollUnlock } from '@/lib/appChrome'
+import { afterScrollUnlock, keepInSafeView } from '@/lib/appChrome'
 import {
   OUTCOME_HEX,
   OUTCOME_SHORT,
@@ -1137,24 +1137,35 @@ function fitToSquad() {
 }
 
 /**
- * Bring the map card up under the header.
+ * Put the whole map card in view — the map, and the assign bar above it that
+ * carries Save.
  *
- * Held back until the scroll lock is off, and that's the whole point
- * (2026-07-26): every caller is reached from a member sheet that has just
- * closed, and Reka releases its body scroll lock only when the dialog
- * UNMOUNTS — 0.2s later, once the slide-down animation has run. A scroll
- * fired before then is a silent no-op and is simply lost (see
- * afterScrollUnlock), so the page stays down among the crew cards where you
- * tapped. That was "I click assign and the viewport is snapped to the bottom
- * of the screen". An earlier fix deferred a single frame, which is inside the
- * dead window and changed nothing. `scroll-padding-top` in style.css
- * (lib/appChrome.ts publishes it) keeps the landing clear of the sticky
- * header.
+ * Held back until the scroll lock is off, because every caller is reached from
+ * a member sheet that has just closed and Reka releases its body scroll lock
+ * only when the dialog UNMOUNTS — 0.2s later, once the slide-down animation has
+ * run. A scroll fired before then is a silent no-op and is simply lost (see
+ * afterScrollUnlock).
+ *
+ * That alone wasn't enough, and this is the second pass at it (2026-07-26,
+ * reported: assigning one member lands at the top as it should, the next one
+ * "snapped to the bottom", the same member sometimes either way). Two reasons,
+ * both now handled by keepInSafeView rather than guessed at:
+ *
+ *  - `scrollIntoView({ block: 'start' })` scrolls unconditionally to a fixed
+ *    landing. The lock has already clamped the page offset to 0 by then and
+ *    doesn't restore it, so where the page IS when we get to move it isn't
+ *    where the tap left it — which makes "scroll to a fixed place" the wrong
+ *    instruction. What the request actually is, is "have the map fully on
+ *    screen", so that's what's asked for now: the minimum delta that puts the
+ *    card inside the chrome band, and nothing at all when it's already there.
+ *  - The landing is verified for a moment afterwards. Assign mode inserts the
+ *    assign bar INSIDE this card, above the map, so the target moves after the
+ *    scroll starts; and a smooth scroll dies to any stray touch.
  */
 function scrollMapIntoView() {
   void nextTick(() => {
     afterScrollUnlock(() => {
-      mapCardEl.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      if (mapCardEl.value) keepInSafeView(mapCardEl.value)
     })
   })
 }

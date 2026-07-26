@@ -80,6 +80,76 @@ export function scrollIntoSafeView(el: HTMLElement, behavior: ScrollBehavior = '
   window.scrollBy({ top: delta, behavior })
 }
 
+/** How long to let a smooth scroll run before judging where it landed. Chrome
+ * and Safari both finish well inside this for a screenful or two; measuring
+ * earlier just reads "not there yet" and cuts the animation off. */
+const SMOOTH_SETTLE_MS = 600
+/** Gap between verification passes. */
+const VERIFY_EVERY_MS = 120
+/** How long a still-locked page is waited out before giving up entirely. */
+const LOCK_GRACE_MS = 1500
+
+/**
+ * True while a modal has the page scroll-locked, which makes every
+ * programmatic scroll a silent no-op. The one place that knows which style
+ * Reka writes — see afterScrollUnlock for the measurements.
+ */
+export function isScrollLocked(): boolean {
+  return document.body.style.overflow === 'hidden'
+}
+
+/**
+ * Put `el` in the safe band and CHECK that it stayed — correcting instantly if
+ * it didn't, for a short window.
+ *
+ * One scroll is not enough when the thing that moved the page was a modal
+ * closing (2026-07-26, second pass at the /squad assign landing). Measured on
+ * /squad at 375×812: while a sheet is up, Reka's `body { overflow: hidden }`
+ * collapses the document to the viewport and the page offset is CLAMPED TO 0 —
+ * and it is **not** put back on unlock, so where the page IS by the time we get
+ * to move it is not where the tap left it. Three more things can undo a single
+ * scroll: the layout behind the sheet is often still settling (assign mode
+ * inserts a bar INSIDE its target card, above the map, which shifts the target
+ * down after the scroll has started), a smooth scroll is an animation any stray
+ * touch cancels, and the unlock can simply be detected late.
+ *
+ * So the landing is verified rather than assumed, and a locked page is waited
+ * out instead of scrolled at — an attempt made under the lock is not slow, it
+ * is lost. The first real move animates (the page is usually a long way off and
+ * a jump loses the reader) and every correction after it is instant, because a
+ * second smooth scroll would only race the first. Corrections fire only when
+ * the element is genuinely outside the band — `scrollDeltaInto` returns 0
+ * otherwise — so a page that landed right the first time never moves twice.
+ */
+export function keepInSafeView(el: HTMLElement, holdMs = 700): void {
+  let animated = false
+  const move = (): void => {
+    // Re-read the rect every time: the element may have moved rather than the
+    // page, which is exactly the assign-bar case.
+    const delta = scrollDeltaInto(el.getBoundingClientRect())
+    if (delta === 0) return
+    window.scrollBy({ top: delta, behavior: animated ? 'auto' : 'smooth' })
+    animated = true
+  }
+  if (!isScrollLocked()) move()
+  // The settle window opens on the first tick that can actually scroll, so a
+  // slow or stalled sheet close spends the grace period, not the window.
+  let deadline = 0
+  const hardStop = performance.now() + SMOOTH_SETTLE_MS + holdMs + LOCK_GRACE_MS
+  const tick = (): void => {
+    const now = performance.now()
+    if (now > hardStop) return
+    if (isScrollLocked()) {
+      setTimeout(tick, VERIFY_EVERY_MS)
+      return
+    }
+    if (!deadline) deadline = now + holdMs
+    move()
+    if (now < deadline) setTimeout(tick, VERIFY_EVERY_MS)
+  }
+  setTimeout(tick, SMOOTH_SETTLE_MS)
+}
+
 /**
  * Run `cb` once the modal scroll lock is off — i.e. once the last BottomSheet
  * is really gone, not merely closing.
@@ -112,7 +182,7 @@ export function afterScrollUnlock(cb: () => void, timeoutMs = 900): void {
     // The style Reka actually writes — the thing blocking the scroll — rather
     // than a guess at which element is a sheet. A second sheet still up keeps
     // it set, which is correct: we'd only no-op again.
-    if (document.body.style.overflow !== 'hidden' || performance.now() >= deadline) {
+    if (!isScrollLocked() || performance.now() >= deadline) {
       cb()
       return
     }

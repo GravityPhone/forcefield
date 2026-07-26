@@ -78,11 +78,6 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'Marks the picked person as willing to knock doors. Press again to remove.\nNeeds a person picked, like Signed.\nYes only — nothing is recorded for a no.\nThe list is under More → Volunteers, for managers.',
       },
       {
-        heading: 'Someone else',
-        target: 'talk-roll',
-        body: 'Searches the whole county roll, not just this door.\nFor the spouse, the adult kid, the new tenant — anyone the roster missed.\nRegistered at another address: their signature counts for that address, and this door still records the visit.\nNobody can be added to the roll from here.',
-      },
-      {
         heading: 'Come back',
         target: 'talk-appointment',
         body: 'Somebody promised to be back at this door. Whoever is on the street can take it.\nThe whole list is under More → Appointments.',
