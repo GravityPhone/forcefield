@@ -883,19 +883,32 @@ function paintForDoor(id: string): DoorPaintState | null {
   // there. Never on a taken symbol above: that door is already carrying a
   // different person's face for a different reason.
   const badge = todayBadge(id)
+  // The SELECTED turf lights up: every door of it (sub-turfs included) wears
+  // a halo in the turf's own color and draws big and last. This is what tells
+  // you which ground you picked — the job the outline polygon was doing, done
+  // on the doors, which is the only place turf membership is ever drawn now.
+  // Independent of the Turf layer on purpose: you asked for this turf.
+  const picked =
+    !draftOpen.value && !!(a.turf_id && selectedFamilyIds.value?.has(a.turf_id))
+  const pickedColor = picked && selectedTurf.value ? turfDisplayColor(selectedTurf.value) : null
   return {
     fill,
     badge,
+    halo: pickedColor,
     // The outer ring says WHOSE this door is: the uniform dark ring while
     // it's joining the draft you're building, or (overview) the owning
     // turf's identity color.
-    ring: inDraft ? DRAFT_RING : owner && showTakenDoors.value ? turfDisplayColor(owner) : null,
+    ring: inDraft
+      ? DRAFT_RING
+      : owner && showTakenDoors.value
+        ? turfDisplayColor(owner)
+        : pickedColor,
     innerRing,
     outline: fill === FILL_OPEN ? OPEN_OUTLINE : null,
     ink: fill === FILL_OPEN ? OPEN_INK : '#fff',
     // Draft members draw bigger and above their neighbors — so does a door
-    // somebody covered today.
-    emphasis: inDraft || !!badge,
+    // somebody covered today, and every door of the selected turf.
+    emphasis: inDraft || !!badge || picked,
   }
 }
 
@@ -1306,6 +1319,9 @@ let doorInfoSeq = 0
 async function showDoorInfo(addressId: string) {
   const a = addressById.get(addressId)
   if (!a) return
+  // A tapped door also picks its turf — the bar along the map's bottom edge
+  // takes it from there (name, Edit, details).
+  selectTurfOfDoor(a)
   const seq = ++doorInfoSeq
   doorInfo.value = { address: a, loading: true, knocks: [], roster: [] }
   const [knocksRes, personsRes, signedRes] = await Promise.all([
@@ -2727,15 +2743,21 @@ const selectedTurf = computed(
  *
  * Sub-cutters are the exception: their whole job IS sub-turfs, so they still
  * get theirs. */
-const turfPickOptions = computed<SelectOption[]>(() => [
-  { value: 'none', label: 'Look at a turf…' },
-  ...listTurfs.value
-    .filter((t) => isSubcutter.value || !t.parent_turf_id)
-    .map((t) => ({
+const turfPickOptions = computed<SelectOption[]>(() => {
+  const shown = listTurfs.value.filter((t) => isSubcutter.value || !t.parent_turf_id)
+  // Selecting a door on the map can land on a sub-turf a manager's dropdown
+  // doesn't list. Carry it as a row while it's selected, or the trigger sits
+  // blank on a turf the map is plainly highlighting.
+  const sel = selectedTurf.value
+  if (sel && !shown.some((t) => t.id === sel.id)) shown.push(sel)
+  return [
+    { value: 'none', label: 'Look at a turf…' },
+    ...shown.map((t) => ({
       value: t.id,
       label: `${t.parent_turf_id ? '↳ ' : ''}${t.name}`,
     })),
-])
+  ]
+})
 
 function onPickTurf(value: string) {
   selectedTurfId.value = value === 'none' ? null : value
@@ -2760,6 +2782,56 @@ function tapTurfRow(id: string) {
   onPickTurf(id)
   if (again) scrollMapIntoView()
 }
+
+// --- The selected turf, ON the map (2026-07-25, user call: "when we're not
+// editing any turf, if you select it, something pops up on the map to
+// indicate that we've selected a particular turf — and a button to edit
+// it"). ---
+//
+// Selecting is now a real state with three parts: every door of that turf
+// lights up (halo in the turf's color, drawn big and last), a bar names it
+// along the map's bottom edge, and that bar carries Edit and a ? that opens
+// the turf's details without a trip down the page. Selection comes from the
+// dropdown, the dispatch rows, or tapping any door on the map.
+
+/** The selected turf plus its sub-turfs — a crew's ground is one shape
+ * however it's split up inside, so picking the parent lights all of it. */
+const selectedFamilyIds = computed(() => {
+  const sel = selectedTurf.value
+  if (!sel) return null
+  const ids = new Set<string>([sel.id])
+  for (const t of turfs.value) if (t.parent_turf_id === sel.id) ids.add(t.id)
+  return ids
+})
+
+/** Only in overview: while a draft is open the map is about the draft. */
+const turfBar = computed(() => (draftOpen.value ? null : selectedTurf.value))
+const turfDetailsOpen = ref(false)
+
+function toggleTurfDetails() {
+  turfDetailsOpen.value = !turfDetailsOpen.value
+}
+
+function clearTurfSelection() {
+  selectedTurfId.value = null
+}
+
+/** Tapping a door selects the turf that owns it — the map is the fastest way
+ * to ask "whose is this, and let me at it". The exact owner, sub-turf
+ * included: that's the honest answer to what the dot belongs to. */
+function selectTurfOfDoor(a: AddressLite) {
+  if (draftOpen.value || !a.turf_id) return
+  selectedTurfId.value = a.turf_id
+}
+
+// Repaint on selection (the highlight is paint state), and close the details
+// popover — it describes whichever turf was selected when it opened. Its own
+// watcher, not the big paint one up the file: selectedTurfId is declared down
+// here, and that array is evaluated where it's written.
+watch(selectedTurfId, () => {
+  turfDetailsOpen.value = false
+  doorLayer?.requestRepaint()
+})
 
 function editTurf(t: TurfWithMeta) {
   clearDraft()
@@ -3334,6 +3406,10 @@ onUnmounted(() => {
             Take
           </button>
         </div>
+        <!-- The map's bottom edge: the house you tapped, and under it the
+             turf that's selected. Stacked so the two never cover each
+             other. -->
+        <div class="map-bottom">
         <!-- Compact house history: tap a dot (no tool armed) to see the
              door's last knocks. -->
         <div v-if="doorInfo" class="door-card">
@@ -3342,15 +3418,16 @@ onUnmounted(() => {
             <span class="muted">{{ doorInfo.address.city }}</span>
             <button class="door-card-x" aria-label="Close house history" @click="doorInfo = null">✕</button>
           </div>
-          <!-- Which turf owns this door + the deliberate hop into editing
-               it — a taken symbol on the map should always explain itself. -->
+          <!-- Which turf owns this door. Editing it lives one row down, on
+               the selection bar — the tap that opened this card selected
+               that turf, so the button is already on screen. -->
           <div v-if="doorOwner" class="door-card-owner">
             <span class="door-card-owner-text">
               In <strong>{{ doorOwner.name }}</strong>
               <span class="muted"> — {{ ownerAssignment(doorOwner) }}</span>
             </span>
             <button
-              v-if="canManage(doorOwner) && isTodayTurf(doorOwner)"
+              v-if="!turfBar && canManage(doorOwner) && isTodayTurf(doorOwner)"
               class="btn btn-ghost btn-sm door-card-owner-edit"
               @click="editOwnerTurf(doorOwner)"
             >
@@ -3377,6 +3454,66 @@ onUnmounted(() => {
               <span class="muted door-card-when">{{ knockWhen(k.occurred_at) }}</span>
             </li>
           </ul>
+        </div>
+        <!-- The selected turf. Its doors are lit up behind this; the bar
+             says which one, and carries the two things you'd want next. -->
+        <div v-if="turfBar" class="turf-bar" data-help="turf-selected">
+          <div v-if="turfDetailsOpen" class="turf-bar-details">
+            <p class="turf-bar-detail">
+              <span class="muted">Out with</span> {{ ownerAssignment(turfBar) }}
+            </p>
+            <p class="turf-bar-detail">
+              <span class="muted">Doors</span> {{ turfDoorCount(turfBar.id) }}
+            </p>
+            <p v-if="turfBar.parent_turf_id" class="turf-bar-detail">
+              <span class="muted">Inside</span> {{ parentName(turfBar) }}
+            </p>
+            <p class="turf-bar-detail">
+              <span class="muted">Streets</span>
+              {{ turfBar.turf_segments.map(segmentLabel).join(' · ') || 'None' }}
+            </p>
+            <p v-if="crewHistory(turfBar)" class="turf-bar-detail">
+              <span class="muted">Crews</span> {{ crewHistory(turfBar) }}
+            </p>
+            <p v-if="staleDispatchLabel(turfBar)" class="turf-bar-detail turf-bar-stale">
+              ⚠ {{ staleDispatchLabel(turfBar) }}
+            </p>
+          </div>
+          <div class="turf-bar-main">
+            <span
+              class="turf-swatch"
+              :style="{ background: turfDisplayColor(turfBar) }"
+              aria-hidden="true"
+            ></span>
+            <span class="turf-bar-name">{{ turfBar.name }}</span>
+            <button
+              v-if="canManage(turfBar) && isTodayTurf(turfBar)"
+              type="button"
+              class="turf-bar-btn"
+              @click="editOwnerTurf(turfBar)"
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              class="turf-bar-btn turf-bar-q"
+              :class="{ active: turfDetailsOpen }"
+              :aria-pressed="turfDetailsOpen"
+              aria-label="Turf details"
+              @click="toggleTurfDetails"
+            >
+              ?
+            </button>
+            <button
+              type="button"
+              class="turf-bar-x"
+              aria-label="Clear turf selection"
+              @click="clearTurfSelection"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
         </div>
       </div>
       <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
@@ -4137,19 +4274,121 @@ onUnmounted(() => {
 }
 
 /* Compact house-history card, pinned to the map's bottom edge. */
-.door-card {
+/* Bottom-edge stack: the tapped house's card, and under it the selected
+   turf's bar. A column so the two can never cover each other, and no taller
+   than the map — the house card shrinks and scrolls first. */
+.map-bottom {
   position: absolute;
   left: 0.6rem;
   right: 0.6rem;
   bottom: 0.6rem;
   z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: calc(100% - 1.2rem);
+  pointer-events: none;
+}
+
+.map-bottom > * {
+  pointer-events: auto;
+}
+
+.door-card {
+  min-height: 0;
   padding: 0.5rem 0.65rem;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-  max-height: 45%;
   overflow-y: auto;
+}
+
+/* --- The selected turf, on the map ---
+   Which turf the lit-up doors belong to, plus the two things you reach for
+   next: Edit, and ? for its details. */
+
+.turf-bar {
+  flex-shrink: 0;
+  padding: 0.45rem 0.55rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+.turf-bar-main {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.turf-bar-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turf-bar-btn {
+  flex-shrink: 0;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: calc(0.82rem * var(--ui-scale));
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.turf-bar-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.turf-bar-q {
+  width: 2rem;
+  text-align: center;
+}
+
+.turf-bar-x {
+  flex-shrink: 0;
+  padding: 0.3rem 0.35rem;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.turf-bar-details {
+  margin-bottom: 0.45rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid var(--border);
+  max-height: 9rem;
+  overflow-y: auto;
+}
+
+.turf-bar-detail {
+  margin: 0 0 0.2rem;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.turf-bar-detail .muted {
+  margin-right: 0.35rem;
+}
+
+.turf-bar-stale {
+  color: #b45309;
+  font-weight: 600;
 }
 
 .door-card-head {
