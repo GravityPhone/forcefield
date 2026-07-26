@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
+import AddMembersSheet from '@/components/squads/AddMembersSheet.vue'
 import { fadeUp } from '@/lib/motion'
 import { useSquadsStore, type SquadListItem } from '@/stores/squads'
 import { useChatStore } from '@/stores/chat'
@@ -51,6 +52,17 @@ async function createSquad() {
     // You just made today's crew — land on its squad page, not just a chat.
     void router.push('/squad')
   }
+}
+
+// Only campaign managers and admins reach this page (the router sends
+// everyone else to their own /squad), so "assign anyone, moving them off
+// another crew if that's where they are" is the right mode for every row.
+const addTo = ref<SquadListItem | null>(null)
+const addMembersOpen = ref(false)
+
+function openAddMembers(squad: SquadListItem) {
+  addTo.value = squad
+  addMembersOpen.value = true
 }
 
 function openSquadChat(squad: SquadListItem) {
@@ -102,12 +114,20 @@ function memberNames(squad: SquadListItem): string {
           <button v-if="s.isMember" class="btn btn-sm btn-ghost" @click="openSquadChat(s)">
             Chat
           </button>
-          <button v-else class="btn btn-sm btn-primary" @click="squads.joinSquad(s.id)">
+          <!-- This page is the manager's view of every crew out today, so it's
+               where assigning people to them belongs (2026-07-25, user ask).
+               The same sheet the squad page uses. -->
+          <button class="btn btn-sm btn-ghost" data-help="squads-add" @click="openAddMembers(s)">
+            Add people
+          </button>
+          <button v-if="!s.isMember" class="btn btn-sm btn-primary" @click="squads.joinSquad(s.id)">
             Join
           </button>
         </div>
       </div>
     </div>
+
+    <AddMembersSheet v-model:open="addMembersOpen" :squad="addTo" can-move />
 
     <!-- New squad sheet -->
     <BottomSheet v-model:open="composing" title="New squad" aria-label="New squad">

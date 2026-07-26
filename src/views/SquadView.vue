@@ -5,6 +5,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js'
 import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
+import AddMembersSheet from '@/components/squads/AddMembersSheet.vue'
 import { fadeUp } from '@/lib/motion'
 import { startOfLocalDayISO } from '@/lib/day'
 import { fetchAllRows, supabase } from '@/lib/supabase'
@@ -181,6 +182,37 @@ const canToggleClaim = computed(() => {
   return squad.created_by === auth.profile?.id
 })
 const claimSaving = ref(false)
+
+// --- Who's on the crew (2026-07-25, user asks): a campaign manager assigns
+// people to squads from here, and a squad leader adds someone to their own
+// crew as long as that person isn't already out with another one. Same gate as
+// the claim switch and as the add_squad_member RPC — manager, a squad leader
+// on this crew, or whoever started it. ---
+const isManagerRole = computed(
+  () => auth.profile?.role === 'admin' || auth.profile?.role === 'campaign_manager',
+)
+const canManageRoster = computed(() => {
+  const squad = mySquad.value
+  if (!squad) return false
+  if (isManagerRole.value) return true
+  if (squad.created_by === auth.profile?.id) return true
+  return auth.profile?.role === 'team_lead' && memberIdSet.value.has(auth.profile.id)
+})
+const addMembersOpen = ref(false)
+const removingMemberId = ref<string | null>(null)
+
+async function removeFromSquad(memberId: string) {
+  const squad = mySquad.value
+  if (!squad || removingMemberId.value) return
+  removingMemberId.value = memberId
+  const reason = await squads.removeMember(squad.id, memberId)
+  removingMemberId.value = null
+  if (reason) {
+    squads.actionError = reason
+    return
+  }
+  sheetMemberId.value = null
+}
 
 async function toggleMemberClaim() {
   const squad = mySquad.value
@@ -2393,6 +2425,20 @@ watch(
 
           <span v-if="assigningMemberId === m.id" class="picking-tag">Picking doors…</span>
         </button>
+
+        <!-- Same size and shape as a person, because it's the same question:
+             who's out with us. Managers can pull someone off another crew;
+             everyone else adds people who aren't out yet. -->
+        <button
+          v-if="canManageRoster"
+          type="button"
+          class="member-card add-card"
+          data-help="squad-add"
+          @click="addMembersOpen = true"
+        >
+          <span class="add-mark" aria-hidden="true">+</span>
+          <span class="add-label">Add someone</span>
+        </button>
       </div>
 
       <!-- The day switch, last thing on the page (2026-07-24, user call):
@@ -2465,6 +2511,16 @@ watch(
           >
             Call
           </a>
+          <!-- The undo for adding someone. Your own way off the crew is the
+               Leave button up top, so this never points at you. -->
+          <button
+            v-if="canManageRoster && sheetMember.id !== auth.profile?.id"
+            class="btn btn-sm ghost-btn remove-btn"
+            :disabled="removingMemberId === sheetMember.id"
+            @click="removeFromSquad(sheetMember.id)"
+          >
+            {{ removingMemberId === sheetMember.id ? 'Removing…' : 'Remove from squad' }}
+          </button>
         </div>
 
         <p v-if="sheetLoading" class="muted">Loading their knocks…</p>
@@ -2521,6 +2577,9 @@ watch(
         </li>
       </ul>
     </BottomSheet>
+
+    <!-- Adding people to this crew (leaders, the crew's creator, managers). -->
+    <AddMembersSheet v-model:open="addMembersOpen" :squad="mySquad" :can-move="isManagerRole" />
 
     <BottomSheet v-model:open="composing" title="New squad" aria-label="New squad">
       <div class="field">
@@ -3248,6 +3307,39 @@ watch(
 
 .member-card:hover .member-name {
   text-decoration: underline;
+}
+
+/* A person-shaped hole in the grid: same tile, no accent, dashed so it reads
+   as a slot rather than as somebody who's already here. */
+.add-card {
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  background: transparent;
+  border: 2px dashed var(--border);
+  border-left: 2px dashed var(--border);
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.add-card:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.add-mark {
+  font-size: 1.8rem;
+  line-height: 1;
+}
+
+.add-label {
+  font-size: 0.9rem;
+}
+
+/* Taking someone off the crew is a real edit — flag it, don't hide it. */
+.remove-btn {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
 }
 
 /* The card being picked for right now says so where the button used to be. */

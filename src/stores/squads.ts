@@ -94,6 +94,31 @@ export const useSquadsStore = defineStore('squads', {
       return this.squads.find((s) => s.id === data) ?? null
     },
 
+    /** Put somebody ELSE on the crew — squad roster and squad chat together,
+     * the way joining does for yourself (2026-07-25). The RPC is the gate:
+     * managers dispatch anyone (moving them off another crew if that's where
+     * they are), a squad leader or the crew's creator adds people who aren't
+     * out with anyone else today. Returns the reason it didn't work, or null
+     * — callers add several at a time and report per person. */
+    async addMember(squadId: string, userId: string): Promise<string | null> {
+      const { error } = await supabase.rpc('add_squad_member', {
+        target_squad_id: squadId,
+        member_id: userId,
+      })
+      return error ? error.message || 'Could not add them to the squad.' : null
+    },
+
+    /** The undo for the above — off the roster and out of the squad chat. */
+    async removeMember(squadId: string, userId: string): Promise<string | null> {
+      const { error } = await supabase.rpc('remove_squad_member', {
+        target_squad_id: squadId,
+        member_id: userId,
+      })
+      if (error) return error.message || 'Could not take them off the squad.'
+      await this.loadToday()
+      return null
+    },
+
     /** Join puts you in the squad AND its chat (one RPC keeps them in sync). */
     async joinSquad(squadId: string) {
       this.actionError = ''

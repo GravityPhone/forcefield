@@ -139,6 +139,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'One tile per member: emoji, color, doors knocked, today’s doors.\nTap a tile for the sheet: assign, profile, show on map, call.',
       },
       {
+        heading: 'Adding people',
+        target: 'squad-add',
+        body: 'Squad leaders and managers only.\nLeaders add people who aren’t out with another crew today. Managers can move anyone.\nRemove is in the member’s sheet.',
+      },
+      {
         heading: 'Assign doors',
         target: 'squad-assign',
         body: 'Pick a person, then pick doors:\n• tap pins one at a time\n• ◯ Lasso: drag a loop\n• ☝ Streets: tap a door for its whole street\nAdd and Erase set direction. Undo reverts one sweep. Save.',
@@ -162,6 +167,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         target: 'squads-card',
         body: 'Every crew out today. They reset at midnight.\nYour own sorts to the top. Open goes to the full squad page.',
+      },
+      {
+        heading: 'Assigning people',
+        target: 'squads-add',
+        body: 'Add people puts them on that crew and in its chat.\nAlready out with another crew: they move.\nRemove is on the squad page, in the member’s sheet.',
       },
       {
         heading: 'Starting one',
