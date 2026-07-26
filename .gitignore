@@ -49,3 +49,7 @@ research/
 # one-time Supabase magic link, and public/ ships to the live site, so this
 # must never be committed or deployed.
 public/dev-login.html
+
+# Local-only sign-in bootstrap written by scripts/dev-login.mjs (holds a live
+# session; never commit, never ship).
+public/__dev-login.html
