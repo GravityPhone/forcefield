@@ -104,6 +104,12 @@ export const OUTCOME_DOOR_LEVEL: Record<KnockOutcome, boolean> = Object.fromEntr
 /** Pin color for addresses with no knock logged yet. */
 export const PIN_DEFAULT_HEX = '#2f6fed'
 
+/** OUTCOME_INK's missing seventh entry: legible text over PIN_DEFAULT_HEX.
+ * A never-knocked door has no outcome, so it has no row in that table — but
+ * anything that FILLS a surface with a door's status (doorPaint) can land on
+ * this blue and still need a label on top of it. */
+export const PIN_DEFAULT_INK = '#ffffff'
+
 /** Effective door status for map pins / status coloring (2026-07-14), from
  * the door's latest outcome plus how many of its residents have signed
  * (household_latest_knock's signed_count/person_count). The rules, in
@@ -156,21 +162,27 @@ export function doorPartlySigned(
   return latest !== 'skip' && latest !== 'hostile'
 }
 
-/** The two colors a door is painted with, from one call: the fill every
- * surface uses, plus the yellow inset band a partly-signed door wears over
- * its green. Same pair the map pins draw (doorCanvas's fill + innerRing) and
- * the same pair the list rows show as a square — HuntTab had two copies of
- * this three-line dance before it lived here. */
+/** The colors a door is painted with, from one call: the fill every surface
+ * uses, plus the yellow inset band a partly-signed door wears over its green.
+ * Same pair the map pins draw (doorCanvas's fill + innerRing) and the same
+ * pair the list rows show as a square — HuntTab had two copies of this
+ * three-line dance before it lived here.
+ *
+ * `ink` is the third, for surfaces that put a LABEL on the fill rather than
+ * just showing it (Scout's Knock button). It's resolved from the same branch
+ * as the fill, so the two can't drift: pick a fill by hand and you have to
+ * remember which of the six needs dark text; take the pair and you don't. */
 export function doorPaint(
   latest: KnockOutcome | null | undefined,
   signedCount: number | null | undefined,
   personCount: number | null | undefined,
-): { fill: string; band: string | null } {
+): { fill: string; band: string | null; ink: string } {
   const partly = doorPartlySigned(latest, signedCount, personCount)
   const outcome = doorStatusOutcome(latest, signedCount, personCount)
   return {
     fill: partly ? OUTCOME_HEX.signed : outcome ? OUTCOME_HEX[outcome] : PIN_DEFAULT_HEX,
     band: partly ? OUTCOME_HEX.maybe : null,
+    ink: partly ? OUTCOME_INK.signed : outcome ? OUTCOME_INK[outcome] : PIN_DEFAULT_INK,
   }
 }
 
@@ -196,23 +208,19 @@ export function outcomeRowTint(hex: string | null | undefined): Record<string, s
   }
 }
 
-/** Coarse 4-bucket status color for the Hunt "Knock" button — green once
- * signed, yellow while still a maybe, red once it's a closed no (didn't
- * sign / skip / hostile), blue for not-home or never-visited (nothing
- * useful learned yet). Distinct from OUTCOME_HEX, which gives each of the
- * six outcomes its own color for the pins/indicator grid. */
-export function knockButtonHex(outcome: KnockOutcome | null | undefined): string {
-  switch (outcome) {
-    case 'signed':
-      return '#2e9e5b'
-    case 'maybe':
-      return '#e0a02e'
-    case 'didnt_sign':
-    case 'skip':
-    case 'hostile':
-      return '#d64545'
-    case 'not_home':
-    default:
-      return '#2f6fed'
-  }
-}
+/* knockButtonHex() lived here until 2026-07-26 and is deliberately gone.
+ *
+ * It was a private 4-bucket copy of the color table for Scout's Knock button,
+ * and it disagreed with OUTCOME_HEX on exactly one outcome: it painted
+ * `not_home` BLUE, reasoning that not-home and never-visited both mean
+ * "nothing useful learned yet". On screen that read as a gray pin with a blue
+ * Knock button beside it — two things on one screen disagreeing about one
+ * door, the same class of bug as the located card's stripe (2026-07-25).
+ *
+ * Not-home is not the same as never-knocked to the person deciding whether to
+ * walk up: somebody has already been here and got no answer. The map has
+ * always said so in gray, so the button says gray too.
+ *
+ * Everything that fills a surface with a door's status now calls doorPaint().
+ * Don't reintroduce a per-surface table — resolve the fill from the shared
+ * helper and take its ink with it. */

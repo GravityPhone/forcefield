@@ -34,10 +34,10 @@ import { useTalkStore } from '@/stores/talk'
 import {
   OUTCOME_LABELS,
   PIN_DEFAULT_HEX,
+  PIN_DEFAULT_INK,
   doorPaint,
   doorPartlySigned,
   doorStatusOutcome,
-  knockButtonHex,
   outcomeRowTint,
 } from '@/lib/outcomes'
 import { inkOn, memberColor } from '@/lib/memberColors'
@@ -1230,12 +1230,23 @@ function doorOutcomeFor(addressId: string): KnockOutcome | null {
   return doorStatusOutcome(row.outcome, row.signed_count, row.person_count)
 }
 
-/** Knock button color reflects the door's effective status — same data
- * already driving the map pins (household_latest_knock), just re-bucketed
- * into 4 colors instead of the pins' 6. */
-function knockColorFor(addressId: string | null | undefined): string {
-  if (!addressId) return knockButtonHex(null)
-  return knockButtonHex(doorOutcomeFor(addressId))
+/** The Knock button wears the door's status — the SAME paint as its pin and
+ * its square, from the same doorPaint() call (2026-07-26 bug fix). It used to
+ * go through knockButtonHex(), a private 4-bucket table that painted Not Home
+ * blue like a never-knocked door, so a gray pin sat next to a blue button.
+ *
+ * Partly signed takes the pin's GREEN fill with the yellow as an inset RING
+ * rather than the band a square draws: the label owns the middle of a button.
+ * Same move the Squad map makes when a today-knocker avatar owns a pin's
+ * middle — the yellow strokes the rim instead.
+ *
+ * Ink rides along from doorPaint so the label stays legible on every fill —
+ * white on blue and red, near-black on green, yellow and gray. */
+function knockStyleFor(addressId: string | null | undefined): Record<string, string> {
+  const { fill, band, ink } = paintFor(addressId)
+  const style: Record<string, string> = { background: fill, color: ink }
+  if (band) style.boxShadow = `inset 0 0 0 2px ${band}`
+  return style
 }
 
 function wasKnockedToday(addressId: string | null | undefined): boolean {
@@ -1254,8 +1265,10 @@ function wasKnockedToday(addressId: string | null | undefined): boolean {
 /** A door's status as the list draws it: the square's fill, its partly-signed
  * band, and the wash over the whole row. Identical colors to the pin — one
  * door, one answer, wherever you're looking at it. */
-function paintFor(addressId: string | null | undefined): { fill: string; band: string | null } {
-  if (!addressId) return { fill: PIN_DEFAULT_HEX, band: null }
+function paintFor(
+  addressId: string | null | undefined,
+): { fill: string; band: string | null; ink: string } {
+  if (!addressId) return { fill: PIN_DEFAULT_HEX, band: null, ink: PIN_DEFAULT_INK }
   const row = statusByHousehold.value.get(addressId)
   return doorPaint(row?.outcome, row?.signed_count, row?.person_count)
 }
@@ -1754,7 +1767,7 @@ onUnmounted(() => {
       <span v-if="ratioFor(locatedAddress)" class="ratio-text">{{ ratioFor(locatedAddress) }}</span>
       <button
         class="btn btn-sm knock-btn"
-        :style="{ background: knockColorFor(locatedAddress.id), color: '#fff' }"
+        :style="knockStyleFor(locatedAddress.id)"
         @click="knock(locatedAddress.id)"
       >
         Knock
@@ -1959,7 +1972,7 @@ onUnmounted(() => {
             <span v-if="ratioFor(a)" class="ratio-text">{{ ratioFor(a) }}</span>
             <button
               class="btn btn-sm knock-btn"
-              :style="{ background: knockColorFor(a.id), color: '#fff' }"
+              :style="knockStyleFor(a.id)"
               @click.stop="knock(a.id)"
             >
               Knock
@@ -2023,7 +2036,7 @@ onUnmounted(() => {
                 <button
                   v-if="p.household_id"
                   class="btn btn-sm knock-btn"
-                  :style="{ background: knockColorFor(p.household_id), color: '#fff' }"
+                  :style="knockStyleFor(p.household_id)"
                   @click.stop="knock(p.household_id!, p.id)"
                 >
                   Knock
