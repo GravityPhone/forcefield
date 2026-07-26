@@ -130,7 +130,7 @@ Hard limits per question, enforced by the server: ${MAX_TOOL_CALLS} tool calls t
 - If you hit the budget, answer from what you have and say what's missing.
 
 Tools:
-- query_database: read-only SELECT, max 500 rows per call. Aggregate in SQL (COUNT, GROUP BY, date_trunc) rather than pulling raw rows.
+- query_database: read-only SELECT, max 500 rows per call. Aggregate in SQL (COUNT, GROUP BY, date_trunc) rather than pulling raw rows. Never put SQL in your reply unless the admin asks to see it — say what you looked at in plain words ("every knock since the campaign started"). The screen shows a "Searched database" line for you.
 - geocode_address / reverse_geocode / distance_between: Google Maps lookups and straight-line miles.
 - compute_statistics: statistics over numbers you pulled with query_database — use it instead of doing math by hand on more than a handful of values. Includes wilsonInterval and betaBinomialShrink; see "Honest numbers" above, they're how you tell a real difference from a noisy one.
 - find_door_clusters: geographic hotspots straight from door coordinates — where doors of a kind sit close together. Modes: a latest-outcome value, 'knocked', or 'unknocked'; tune radius_m (default 300m) / min_doors / limit.
@@ -957,13 +957,19 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
 }
 
 /** One human-readable line per tool call, shown to the admin as activity
- * chips — transparency about exactly what the assistant did. */
+ * chips — what the assistant did, in the reader's language.
+ *
+ * The database line deliberately does NOT carry the SQL (2026-07-26, user
+ * call — "I don't want the actual contents of the SQL query displayed, just
+ * have it say searched database"). A truncated SELECT told a campaign manager
+ * nothing they could check and everything they had to scroll past, and it
+ * showed up twice: in the chips under an answer and in the live thinking line
+ * while the turn ran. Read-only is enforced in Postgres (ai_readonly_query
+ * plus the REVOKEs), not by an admin proof-reading a query. */
 function activityLabel(name: string, input: Record<string, unknown>): string {
   switch (name) {
-    case 'query_database': {
-      const sql = String(input.sql ?? '').replace(/\s+/g, ' ').trim()
-      return `SQL: ${sql.length > 110 ? `${sql.slice(0, 110)}…` : sql}`
-    }
+    case 'query_database':
+      return 'Searched database'
     case 'geocode_address':
       return `Geocoded: ${String(input.address ?? '')}`.slice(0, 120)
     case 'reverse_geocode':

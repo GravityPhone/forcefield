@@ -97,6 +97,22 @@ async function scrollToBottom() {
   listEl.value?.scrollTo({ top: listEl.value.scrollHeight, behavior: 'smooth' })
 }
 
+/** Collapse runs of the same activity label into one chip with a count.
+ * Every database lookup reads "Searched database" now — the SQL itself isn't
+ * something a campaign manager can check (read-only is enforced in Postgres)
+ * — so a turn that ran three queries would otherwise print the same chip
+ * three times. Only CONSECUTIVE repeats fold: search, geocode, search really
+ * did happen in that order. */
+function activityChips(activity: string[]): { label: string; count: number }[] {
+  const out: { label: string; count: number }[] = []
+  for (const a of activity) {
+    const last = out[out.length - 1]
+    if (last && last.label === a) last.count++
+    else out.push({ label: a, count: 1 })
+  }
+  return out
+}
+
 /** Assistant replies render as markdown-lite text plus inline infographic
  * cards; recomputed per render, which is fine at chat-history scale. */
 function segmentsFor(text: string): RenderSegment[] {
@@ -286,7 +302,12 @@ async function send() {
                 <InfographicCard v-else :spec="seg.spec" />
               </template>
               <div v-if="m.activity?.length" class="activity">
-                <span v-for="(a, i) in m.activity" :key="i" class="chip" :title="a">{{ a }}</span>
+                <span
+                  v-for="(c, i) in activityChips(m.activity)"
+                  :key="i"
+                  class="chip"
+                  :title="c.label"
+                >{{ c.count > 1 ? `${c.label} ×${c.count}` : c.label }}</span>
               </div>
             </template>
             <template v-else>{{ m.text }}</template>
