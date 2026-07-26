@@ -10,7 +10,25 @@
       "Bash(netlify api listSiteDeploys *)",
       "mcp__Claude_Preview__preview_list",
       "Bash(netlify status)",
-      "mcp__Claude_Preview__preview_inspect"
+      "mcp__Claude_Preview__preview_inspect",
+      "Bash(node scripts/agent-setup.mjs *)"
+    ]
+  },
+  "worktree": {
+    "baseRef": "head"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/agent-setup.mjs --hook 2>/dev/null || true",
+            "timeout": 20,
+            "statusMessage": "Checking agent lanes"
+          }
+        ]
+      }
     ]
   }
 }

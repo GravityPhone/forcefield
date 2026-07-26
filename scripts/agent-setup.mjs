@@ -26,6 +26,15 @@
  *   node scripts/agent-setup.mjs --claim "squad map"   # link files + take a lane
  *   node scripts/agent-setup.mjs --claim "x" --migrations
  *   node scripts/agent-setup.mjs --done                # release the lane
+ *   node scripts/agent-setup.mjs --hook                # SessionStart hook (JSON out)
+ *
+ * `--hook` is wired into SessionStart in .claude/settings.json, which IS a
+ * tracked file — so it lands in every worktree and every new agent runs this
+ * without anyone remembering to. That is the whole point: an agent that has
+ * never heard of this script still gets the rules, a reserved port, and the
+ * other lanes. It auto-registers a placeholder lane so the port is held
+ * immediately, and NEVER fails the session — a broken setup script must not be
+ * able to stop somebody from working.
  */
 
 import { execFileSync } from 'node:child_process'
@@ -61,13 +70,24 @@ function portFor(name, board = {}) {
   return port
 }
 
+/** A lane older than this is treated as gone. SessionStart auto-registers, so
+ * without an expiry the board would fill with ghosts from every session that
+ * ended without --done — and a ghost holding a port is worse than no board at
+ * all. Any live session refreshes its own row every time it starts or claims. */
+const LANE_TTL_MS = 12 * 60 * 60 * 1000
+
 function readBoard() {
   if (!existsSync(BOARD)) return {}
+  let raw
   try {
-    return JSON.parse(readFileSync(BOARD, 'utf8'))
+    raw = JSON.parse(readFileSync(BOARD, 'utf8'))
   } catch {
     return {} // a half-written board is not worth failing a setup over
   }
+  const now = Date.now()
+  return Object.fromEntries(
+    Object.entries(raw).filter(([, r]) => !r?.updated_at || now - r.updated_at < LANE_TTL_MS),
+  )
 }
 
 /** Write via temp + rename so a second agent saving at the same instant reads
@@ -199,6 +219,48 @@ const valueOf = (name) => {
 
 const board = readBoard()
 
+/** SessionStart. Prints ONE JSON object and nothing else — anything on stdout
+ * that isn't the envelope is not injected, so keep every report inside it. */
+if (flag('--hook')) {
+  let context
+  try {
+    const report = []
+    repairEnvironment(report)
+    // Hold the port and show up on the board straight away, so this agent is
+    // visible to the others even if it never gets around to --claim.
+    const existing = board[NAME]
+    board[NAME] = {
+      path: HERE,
+      branch: git('rev-parse', '--abbrev-ref', 'HEAD'),
+      port: existing?.port ?? portFor(NAME, board),
+      working_on: existing?.working_on ?? '(just started — not stated yet)',
+      migrations: existing?.migrations ?? false,
+      updated: stamp(),
+      updated_at: Date.now(),
+    }
+    writeBoard(board)
+    context = [
+      report.join('\n'),
+      render(board),
+      `  Say what you're working on so the other agents can see it:\n` +
+        `    node scripts/agent-setup.mjs --claim "<one line>"\n` +
+        `  Add --migrations to that if you need to write one. Release with --done.`,
+    ].filter(Boolean).join('\n')
+  } catch (err) {
+    // Never let this stop somebody working — degrade to the rules that matter.
+    context =
+      `Could not read the agent board (${err.message}). Working blind, so: do NOT push or run ` +
+      `netlify deploy, do NOT write a migration without checking with the user first, and read ` +
+      `CLAUDE.md in the main checkout before touching anything.`
+  }
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: context },
+    }),
+  )
+  process.exit(0)
+}
+
 if (flag('--done')) {
   delete board[NAME]
   writeBoard(board)
@@ -234,6 +296,7 @@ if (flag('--claim')) {
     working_on: working,
     migrations: wantsMigrations,
     updated: stamp(),
+    updated_at: Date.now(),
   }
   writeBoard(board)
 
