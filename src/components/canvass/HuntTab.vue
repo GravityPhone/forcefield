@@ -1471,6 +1471,9 @@ function onDoorRowTap(a: AddressWithRoster) {
     showTopOfPage()
     return
   }
+  // You're reading the list and you tapped a row in it — the house is under
+  // your finger, so the list must not move out from under it.
+  listFollow = 'stay'
   void locateAddress(a, { openStreet: false })
 }
 
@@ -1482,19 +1485,28 @@ function onPersonRowTap(p: PersonHit) {
   openPerson(p)
 }
 
-/** Rows of context to leave above the located house when it has to be brought
- * in — "it should be towards the top… maybe, like, one down". */
-const ACTIVE_ROW_LEAD = 1
+/** Whether the list should chase the located house the next time it changes.
+ * Everything that locates from somewhere ELSE — a map pin, a search hit, the
+ * Talk→Scout handoff — wants it at the top; a tap on the row itself wants the
+ * list to hold still. Consumed and reset by scrollActiveIntoView. */
+let listFollow: 'top' | 'stay' = 'top'
 
-/** Bring the located house's row into the part of the list you can actually
- * SEE (2026-07-25, user call). It used to center the row inside the list's own
- * box — but the list runs well past the bottom of the screen, so with the map
- * up and five rows showing under it, "centered in the list" was somewhere below
- * the fold. Now the target is the visible slice: if the row is already in it,
- * nothing moves at all; otherwise it lands one row down from the top of
- * whatever slice is showing. Scrolls the LIST only — never the page, which
- * would yank you off the map you were just reading. */
+/** Put the located house at the TOP of the list (2026-07-25, user call:
+ * "we want it to go to the top of the list when we click it on the map,
+ * because then it would be the shortest to scroll down from the map"). Tap a
+ * pin, look down, and the house you tapped is the first one under the search
+ * box — every time, whatever the street's length and wherever the list was
+ * sitting. It used to center the row inside the list's own box, which put it
+ * below the fold entirely whenever the map was up.
+ *
+ * "The top" is the top of the part of the list that's ON SCREEN, which is the
+ * list's own top edge in every state the sheet actually reaches. Scrolls the
+ * LIST only — never the page, which would yank you off the map you were just
+ * reading. */
 function scrollActiveIntoView() {
+  const follow = listFollow
+  listFollow = 'top'
+  if (follow === 'stay') return
   const el = resultsListEl.value
   if (!el) return
   const row = el.querySelector<HTMLElement>('.result-active')
@@ -1506,13 +1518,7 @@ function scrollActiveIntoView() {
   // None of the list is on screen — moving it now would just be a scroll
   // nobody sees, and the row would be wrong again by the time it is.
   if (winBottom - winTop < 40) return
-  const rowBox = row.getBoundingClientRect()
-  if (rowBox.top >= winTop - 1 && rowBox.bottom <= winBottom + 1) return
-  const lead = Math.min(
-    ACTIVE_ROW_LEAD * (rowBox.height + 6),
-    Math.max(0, (winBottom - winTop - rowBox.height) / 2),
-  )
-  const target = el.scrollTop + rowBox.top - winTop - lead
+  const target = el.scrollTop + row.getBoundingClientRect().top - winTop
   el.scrollTo({
     top: Math.max(0, Math.min(el.scrollHeight - el.clientHeight, target)),
     behavior: 'smooth',
