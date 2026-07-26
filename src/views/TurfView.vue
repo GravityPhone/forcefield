@@ -645,22 +645,17 @@ const flashMsg = ref('')
 const flashAction = ref<{ label: string; run: () => void } | null>(null)
 let flashTimer: ReturnType<typeof setTimeout> | undefined
 
-function flash(
-  msg: string,
-  action: { label: string; run: () => void } | null = null,
-  ms?: number,
-) {
+function flash(msg: string, action: { label: string; run: () => void } | null = null) {
   flashMsg.value = msg
   flashAction.value = action
   clearTimeout(flashTimer)
-  // Messages with a decision on them hang around longer; a caller can ask
-  // for a shorter one (naming each door as you tap it, say).
+  // Messages with a decision on them hang around longer.
   flashTimer = setTimeout(
     () => {
       flashMsg.value = ''
       flashAction.value = null
     },
-    ms ?? (action ? 8000 : 3500),
+    action ? 8000 : 3500,
   )
 }
 
@@ -1257,16 +1252,16 @@ async function geocodeTurfDoors(turfId: string) {
 }
 
 // --- Tapping (all synchronous — the draft lives entirely in memory) ---
-// ONE rule per mode, which is the whole point (2026-07-25: "we need to be
-// able to pretty easily change the dots that are in each turf"):
+// A BARE TAP NEVER CHANGES A TURF (2026-07-25, user call: "you have to use
+// either the street add-and-remove tap tool or the lasso in order to change
+// a turf"). Changing what a turf holds is always something you armed a tool
+// to do — ☝ Streets for a whole street, the lasso for a patch or a single
+// dot under its line — so a stray tap while reading the map can't quietly
+// move a door. (Tap-to-toggle lived here for one afternoon; it made
+// single-door edits easy and accidental in equal measure.)
 //
-//   cutting  → tap a door, it joins the turf; tap it again, it leaves.
-//              Any door on the map, no row to open first, no mode to find.
-//   overview → tap a door for its house history + the turf it belongs to.
-//
-// An armed sweep tool (☝ Streets) still wins over both — that's what arming
-// it means. Everything else is scale: door taps while cutting need real pins
-// to aim at, so below PINS_MIN_ZOOM they say so instead of guessing.
+// So: armed ☝ Streets takes the tap; otherwise a tap opens the door's house
+// history, cutting or not, at any zoom.
 
 function onMapClick(e: google.maps.MapMouseEvent) {
   if (!e.latLng || !map) return
@@ -1274,22 +1269,12 @@ function onMapClick(e: google.maps.MapMouseEvent) {
     void handleStreetTap(e.latLng)
     return
   }
-  if (draftOpen.value) {
-    if ((map.getZoom() ?? 14) < PINS_MIN_ZOOM) {
-      flash('Zoom in to pick doors.')
-      return
-    }
-    const id = doorLayer?.doorAt(e.latLng, TAP_RADIUS_PX)
-    if (id) toggleDoorInDraft(id)
-    return
-  }
-  // Overview's bubble works at EVERY zoom (2026-07-25, user call: "I wanna
-  // be able to tap one of the dots in one of the turfs and edit that turf").
-  // Turf colors are exactly what you read zoomed OUT — the whole county's
-  // ground at a glance — and a PINS_MIN_ZOOM floor meant that at the one zoom
-  // where you can see which turf is which, tapping it did nothing. Nearest
-  // painted door wins, so a fat-fingered tap at town zoom still lands in the
-  // right turf.
+  // Works at EVERY zoom (2026-07-25, user call: "I wanna be able to tap one
+  // of the dots in one of the turfs and edit that turf"). Turf colors are
+  // exactly what you read zoomed OUT — the whole county's ground at a glance
+  // — and a PINS_MIN_ZOOM floor meant that at the one zoom where you can see
+  // which turf is which, tapping it did nothing. Nearest painted door wins,
+  // so a fat-fingered tap at town zoom still lands in the right turf.
   const id = doorLayer?.doorAt(e.latLng, TAP_RADIUS_PX)
   if (id) void showDoorInfo(id)
   else doorInfo.value = null
@@ -1396,75 +1381,6 @@ function editOwnerTurf(t: TurfWithMeta) {
   }
   doorInfo.value = null
   editTurf(t)
-}
-
-/** The single door gesture while cutting: in the turf, or out of it. The
- * street's segments rebuild as honest runs (split only around house numbers
- * that actually exist), so toggling never leaves a phantom range behind.
- *
- * This used to be "trim mode" and only worked on the one street whose table
- * row was open — you had to find the row before you could touch the door
- * (2026-07-25: it now works on any door, anywhere, which is what makes
- * changing the dots in a turf easy). The open row still drives the
- * range/side editor; it just no longer gates the map. */
-function toggleDoorInDraft(addressId: string) {
-  const a = addressById.get(addressId)
-  if (!a) return
-  const name = streetNameOf(a.street)
-  if (!name) return
-  // Rebuild under the CITY THE SEGMENT USES, not the door's: a turf's stored
-  // segments can carry a null city (meaning "this street, any city"), and
-  // narrowing one to the tapped door's city would quietly drop the same
-  // street's houses in the next town over.
-  // (`?? a.city` would be wrong here — a segment's city is legitimately
-  // null, and nullish-coalescing would overwrite exactly that case.)
-  const covering = matchingSegments(name, a.city)[0]
-  const city = covering ? covering.city : a.city
-  const n = houseNumber(a.street)
-  const inDraft = draftMemberIds.value.has(addressId)
-  if (!inDraft && !claimableDoor(a)) {
-    // A door another turf owns never joins silently — flash whose it is, and
-    // offer the steal when this cutter may re-cut the owner.
-    const owner = a.turf_id ? paintTurfOf(a.turf_id) : undefined
-    flash(
-      `${a.street} belongs to ${owner ? `"${owner.name}"` : 'another turf'}.`,
-      owner && canStealFrom(owner)
-        ? {
-            label: 'Take it',
-            run: () => {
-              stealIds.value.add(addressId)
-              toggleDoorInDraft(addressId)
-            },
-          }
-        : null,
-    )
-    return
-  }
-  const segs = matchingSegments(name, city)
-  const nums = new Set<number>()
-  for (const row of streetRows(name, city)) {
-    if (segs.some((s) => matchesSegment(row, s))) nums.add(houseNumber(row.street))
-  }
-  snapshotDraft()
-  if (nums.has(n)) nums.delete(n)
-  else nums.add(n)
-  for (const s of segs) removeSegment(s)
-  // Only the doors that are actually ON the map can be "left out" — an
-  // ungeocoded neighbour has no dot to tap, so it must not split a run.
-  const visible = new Set<number>()
-  for (const row of streetRows(name, city)) {
-    if (row.lat != null && row.lng != null) visible.add(houseNumber(row.street))
-  }
-  if (nums.size) addStreetRuns(name, city, nums, visible)
-  // Segments were rebuilt with fresh keys — re-point the open editor at the
-  // street's first surviving segment, or close it if the street is gone.
-  const after = matchingSegments(name, city)
-  if (expandedSegKey.value && !segments.value.some((s) => s.key === expandedSegKey.value)) {
-    expandedSegKey.value = after[0]?.key ?? null
-  }
-  // Short: it's there to name the house your thumb actually hit, and the dot
-  // itself has already changed.
-  flash(inDraft ? `${a.street} removed.` : `${a.street} added.`, null, 1400)
 }
 
 function matchesSegment(a: AddressLite, seg: Pick<DraftSegment, 'range_start' | 'range_end' | 'parity'>): boolean {
@@ -2330,26 +2246,44 @@ function onLassoMove(e: PointerEvent) {
   drawLassoTrail()
 }
 
+/** A TAP with the lasso armed (no drag) means the ONE door under your
+ * finger — the nearest, never everything within a radius, so it stays exact
+ * at any zoom (a fat ring at county zoom would sweep half a town). Single
+ * doors are the whole reason a bare map tap was tempting; this keeps them
+ * one gesture without letting a stray tap on an unarmed map move anything
+ * (2026-07-25, user call: changing a turf goes through ☝ Streets or the
+ * lasso, always). */
+function lassoTapDoor(p: { x: number; y: number }): AddressLite | null {
+  const ll = doorLayer?.containerToLatLng(p.x, p.y)
+  const id = ll ? doorLayer?.doorAt(ll, TAP_RADIUS_PX) : null
+  return id ? (addressById.get(id) ?? null) : null
+}
+
 function onLassoUp() {
   if (!lassoDrawing) return
   lassoDrawing = false
-  const path = lassoPath
+  const drawn = lassoPath
   lassoPath = []
   const c = lassoCanvasEl.value
   c?.getContext('2d')?.clearRect(0, 0, c.width, c.height)
-  if (path.length < 3) return
+  if (!drawn.length) return
+  const wasTap = drawn.length < 3
   // The loop encloses doors, and the line itself brushes them — touching a
   // dot with the stroke counts, so a quick scribble over a few pins works.
-  const ids = doorLayer?.doorsInPolygon(path, LASSO_BRUSH_PX) ?? []
-  const doors = ids
-    .map((id) => addressById.get(id))
-    .filter((a): a is AddressLite => !!a)
+  // A tap resolves to its single nearest door instead.
+  const doors: AddressLite[] = wasTap
+    ? [lassoTapDoor(drawn[drawn.length - 1])].filter((a): a is AddressLite => !!a)
+    : (doorLayer?.doorsInPolygon(drawn, LASSO_BRUSH_PX) ?? [])
+        .map((id) => addressById.get(id))
+        .filter((a): a is AddressLite => !!a)
   if (selectMode.value === 'erase') {
     const drafted = doors.filter((a) => draftMemberIds.value.has(a.id))
     if (!drafted.length) {
       flash(
         segments.value.length
-          ? 'No draft doors in that loop — circle dots wearing the draft ring.'
+          ? wasTap
+            ? 'Not a door in this turf — tap a dot in this turf’s color.'
+            : 'No doors of this turf in that loop — circle dots in its color.'
           : 'Nothing to erase yet — Erase takes doors out of the turf being built. Add streets first, or open a turf and tap Edit.',
       )
       return
@@ -2362,13 +2296,17 @@ function onLassoUp() {
     const l = locatedStreet.value
     if (l && drafted.some((a) => doorOnStreet(a, l))) locatedStreet.value = null
     flash(
-      `Lasso: removed ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
+      wasTap
+        ? `${drafted[0].street} removed.`
+        : `Lasso: removed ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
     )
     return
   }
   if (!doors.length) {
     flash(
-      'No mapped doors in that loop — houses only get dots once their street is added or searched. Use the ☝ tool or search first.',
+      wasTap
+        ? 'No door there — tap a dot, or drag a loop around several.'
+        : 'No mapped doors in that loop — houses only get dots once their street is added or searched. Use the ☝ tool or search first.',
     )
     return
   }
@@ -2378,7 +2316,9 @@ function onLassoUp() {
   const taken = doors.filter((a) => !claimableDoor(a))
   if (!free.length) {
     flash(
-      `Every door in that loop belongs to another turf (${taken.length} skipped).`,
+      wasTap
+        ? `${taken[0].street} belongs to another turf.`
+        : `Every door in that loop belongs to another turf (${taken.length} skipped).`,
       stealActionFor(taken),
     )
     return
@@ -2391,9 +2331,11 @@ function onLassoUp() {
     return
   }
   flash(
-    taken.length
-      ? `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'} · ${taken.length} skipped (another turf's).`
-      : `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
+    wasTap
+      ? `${free[0].street} added.`
+      : taken.length
+        ? `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'} · ${taken.length} skipped (another turf's).`
+        : `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
     taken.length ? stealActionFor(taken) : null,
   )
   // Populate the dots: the captured streets usually hold doors that were

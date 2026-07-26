@@ -304,7 +304,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Map tools',
         target: 'turf-tools',
-        body: '◯ Lasso: drag a loop. Catches dots inside it or under the line.\n☝ Streets: tap a road to take or drop the whole street.\nAdd and Erase set direction, on the row underneath.\nTake shows while a tool is set to Add: sweeps pull doors out of whoever holds them, with no prompt. The old turf gives them up when you save.\nUndo steps back one gesture.',
+        body: 'A turf only changes through a tool. Arm one first.\n◯ Lasso: drag a loop — catches dots inside it or under the line. Tap a single dot for that one door.\n☝ Streets: tap a road to take or drop the whole street.\nAdd and Erase set direction, on the row underneath.\nTake shows while a tool is set to Add: sweeps pull doors out of whoever holds them, with no prompt. The old turf gives them up when you save.\nUndo steps back one gesture.',
       },
       {
         heading: 'Streets table',
@@ -314,7 +314,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Reading the map',
         target: 'turf-map',
-        body: 'Every door shows from the moment the page opens, colored by knock status.\nThe Turf layer adds ownership on top: one ring per door, in its turf’s color. Same in overview and while cutting.\nOne turf, one color — per-member shares are a Squad page matter and don’t show here.\nCutting: tap a door to put it in the turf, tap it again to take it out. Doors in the turf wear a dark ring.\nOverview: tap a door at any zoom for its turf, residents and recent knocks.',
+        body: 'Every door shows from the moment the page opens, colored by knock status.\nThe Turf layer adds ownership on top: one ring per door, in its turf’s color. Same in overview and while cutting.\nOne turf, one color — per-member shares are a Squad page matter and don’t show here.\nThe turf being cut rings its doors in its own color.\nTap a door at any zoom for its turf, residents and recent knocks. Taps never move a door — that takes a tool.',
         swatches: DOOR_COLORS,
       },
       {
