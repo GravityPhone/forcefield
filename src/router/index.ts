@@ -105,6 +105,11 @@ const router = createRouter({
     // too, which is why only they see the link when the feature is off.
     { path: '/appointments', name: 'appointments', component: () => import('@/views/AppointmentsView.vue'), meta: { roles: [] } },
 
+    // Who signed AND said they'd knock doors — the read side of the one
+    // follow-up after a signature. Managers recruit, so it's theirs; a
+    // canvasser's own asks were already answered at the door.
+    { path: '/volunteers', name: 'volunteers', component: () => import('@/views/VolunteersView.vue'), meta: { roles: ['campaign_manager', 'admin'] } },
+
     // Old squad-leader home — leads canvass like everyone else now, and turf
     // splitting lives on the Squad page. Kept only for stale bookmarks.
     { path: '/team', redirect: '/canvass' },

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import MyDoorsSheet from './MyDoorsSheet.vue'
 import AppointmentSheet from './AppointmentSheet.vue'
+import VolunteerSheet from './VolunteerSheet.vue'
 import { OUTCOMES } from '@/lib/outcomes'
 import { popIn } from '@/lib/motion'
 import { hapticNotify, hapticTap } from '@/lib/native'
@@ -17,6 +18,12 @@ const talk = useTalkStore()
 // the door and closing it costs nothing.
 const apptOpen = ref(false)
 
+// "Signed" has the other follow-up: the one ask worth making of somebody who
+// just signed is whether they'd knock doors too. Always on — unlike
+// appointments there's no switch, because a single optional sheet after a
+// signature isn't a feature that needs hiding.
+const volOpen = ref(false)
+
 // A physical tick under the finger confirms the tap registered without
 // looking down at the screen — this pair of buttons is the highest-frequency
 // interaction in the whole app.
@@ -31,6 +38,12 @@ function logOutcome(value: KnockOutcome) {
   void talk.logOutcome(value)
   if (!undoing && value === 'maybe' && appointmentSettings.value.enabled && talk.selectedAddress) {
     apptOpen.value = true
+  }
+  // Signed always has a person on it (requiresPerson), so there's someone to
+  // ask about — same undo guard: taking a signature back must not ask whether
+  // the person who didn't sign wants to volunteer.
+  if (!undoing && value === 'signed' && talk.selectedPerson) {
+    volOpen.value = true
   }
 }
 
@@ -161,6 +174,7 @@ function disabledReason(requiresPerson: boolean): string {
     </div>
     <MyDoorsSheet v-model:open="myDoorsOpen" />
     <AppointmentSheet v-model:open="apptOpen" />
+    <VolunteerSheet v-model:open="volOpen" />
   </div>
 </template>
 

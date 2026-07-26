@@ -70,7 +70,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Outcomes',
         target: 'talk-outcomes',
-        body: 'Signed: pick a person first.\nAll others: the person picked, or the household if none.\nCome back another time: offers a window to return in, when the campaign has appointments on. Optional — close it and the knock still logged.',
+        body: 'Signed: pick a person first, then asks whether they’d knock doors too. Optional — close it and the signature still logged.\nAll others: the person picked, or the household if none.\nCome back another time: offers a window to return in, when the campaign has appointments on. Optional — close it and the knock still logged.',
       },
       {
         heading: 'Come back',
@@ -258,6 +258,20 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       { target: 'knocks-search', body: 'Your own knocks, newest first. Search by street or name.' },
       { target: 'knocks-filters', body: 'Chips filter to one outcome and carry its count.' },
       { target: 'knocks-list', body: 'Tap a visit to reopen that door in Talk.' },
+    ],
+  },
+
+  '/volunteers': {
+    title: 'Volunteers',
+    sections: [
+      {
+        target: 'volunteers-count',
+        body: 'Signers who said they’d knock doors too, asked at the door right after signing.\nYes only — a missing name means no answer or no, which read the same.',
+      },
+      {
+        target: 'volunteers-list',
+        body: 'Newest first. Name, where they signed, who asked, when.\nTap the asker for their profile.',
+      },
     ],
   },
 

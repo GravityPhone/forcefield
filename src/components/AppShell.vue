@@ -124,6 +124,9 @@ const moreItems = computed<NavItem[]>(() => {
   const appointments: NavItem[] = showAppointments.value
     ? [{ to: '/appointments', label: 'Appointments', icon: 'calendar' }]
     : []
+  // Signers who said they'd knock too. Managers and admins recruit, so only
+  // they get the row — see the /volunteers route.
+  const volunteers: NavItem = { to: '/volunteers', label: 'Volunteers', icon: 'squads' }
   const aboutMe: NavItem = { to: '/profile', label: 'About me', icon: 'person' }
   const appearance: NavItem = { to: '/appearance', label: 'Appearance', icon: 'palette' }
   // Why we're knocking, and what to say — the same briefing for every role,
@@ -135,6 +138,7 @@ const moreItems = computed<NavItem[]>(() => {
     return [
       { to: '/admin/analytics', label: 'Analytics', icon: 'chart' },
       roster,
+      volunteers,
       aboutMe,
       appearance,
       campaign,
@@ -147,6 +151,7 @@ const moreItems = computed<NavItem[]>(() => {
       // Every crew out today — the Squad tab is the manager's own crew now.
       { to: '/squads', label: 'All squads', icon: 'squads' },
       roster,
+      volunteers,
       myKnocks,
       ...appointments,
       { to: '/admin/chat', label: 'AI Chat', icon: 'sparkle' },
@@ -407,6 +412,7 @@ onUnmounted(() => {
           <router-link to="/squad">Squad</router-link>
           <router-link v-if="auth.profile.role === 'campaign_manager'" to="/squads">All squads</router-link>
           <router-link to="/roster">Roster</router-link>
+          <router-link v-if="auth.profile.role === 'campaign_manager'" to="/volunteers">Volunteers</router-link>
           <router-link to="/history">My knocks</router-link>
           <router-link v-if="showAppointments" to="/appointments">Appointments</router-link>
           <router-link to="/bulletin">Bulletin</router-link>
