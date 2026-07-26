@@ -5,7 +5,8 @@ import OutcomeButtons from './OutcomeButtons.vue'
 import { computed } from 'vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import { hapticTap } from '@/lib/native'
-import { OUTCOME_DOOR_LEVEL, OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, PIN_DEFAULT_HEX } from '@/lib/outcomes'
+import { OUTCOME_DOOR_LEVEL, OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, OUTCOME_SHORT, PIN_DEFAULT_HEX } from '@/lib/outcomes'
+import { appointmentLabel } from '@/lib/appointments'
 import { houseNumber } from '@/lib/streetWalk'
 import { useTalkStore, type KnockHistoryEntry } from '@/stores/talk'
 import type { Address, KnockOutcome } from '@/types'
@@ -48,11 +49,21 @@ const banner = computed<{ outcome: KnockOutcome; label: string } | null>(() => {
   const householdLatest =
     latest && (OUTCOME_DOOR_LEVEL[latest.outcome] || !latest.person_id) ? latest.outcome : null
   if (householdLatest === 'skip' || householdLatest === 'hostile') {
-    return { outcome: householdLatest, label: OUTCOME_LABELS[householdLatest] }
+    return { outcome: householdLatest, label: OUTCOME_SHORT[householdLatest] }
   }
   if (signedIds.size > 0) return { outcome: 'maybe', label: `${signedIds.size}/${total} signed` }
-  if (householdLatest) return { outcome: householdLatest, label: OUTCOME_LABELS[householdLatest] }
+  if (householdLatest) return { outcome: householdLatest, label: OUTCOME_SHORT[householdLatest] }
   return null
+})
+
+// --- Appointments: somebody promised to be back at this door ---
+// Soonest first (the store orders them), and the person is resolved off the
+// roster already loaded for this address rather than a second query.
+const nextAppointment = computed(() => {
+  const a = talk.appointments[0]
+  if (!a) return null
+  const who = a.person_id ? (talk.roster.find((p) => p.id === a.person_id)?.name ?? null) : null
+  return { when: appointmentLabel(a.starts_at, a.ends_at), who }
 })
 
 // --- Door history display helpers ---
@@ -125,6 +136,15 @@ const PARTLY_SIGNED_OPTIONS = [
         </div>
         <button class="btn btn-sm" @click="talk.clearAddress()">Clear</button>
       </div>
+
+      <!-- Somebody said come back at a time. Reads before the roster does:
+           it's the reason you're standing here. -->
+      <div v-if="nextAppointment" class="appt-line" data-help="talk-appointment">
+        <span class="appt-dot" aria-hidden="true"></span>
+        <span class="appt-when">Come back {{ nextAppointment.when }}</span>
+        <span v-if="nextAppointment.who" class="muted appt-who">{{ nextAppointment.who }}</span>
+      </div>
+
       <RosterList />
 
       <!-- Everything that's ever happened at this door, newest first. -->
@@ -293,6 +313,38 @@ const PARTLY_SIGNED_OPTIONS = [
 .walkup-hint {
   margin: 0;
   font-size: 0.88rem;
+}
+
+/* --- Appointment on this door --- */
+
+.appt-line {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.45rem 0.65rem;
+  /* The come-back-another-time amber, so the card, the pin and the promise
+   * all say the same thing (fixed literal like every outcome color). */
+  border: 1.5px solid #e0a02e;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, #e0a02e 12%, var(--surface));
+  font-size: 0.9rem;
+}
+
+.appt-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #e0a02e;
+  flex-shrink: 0;
+}
+
+.appt-when {
+  font-weight: 700;
+}
+
+.appt-who {
+  font-size: 0.85rem;
 }
 
 /* --- Door history --- */

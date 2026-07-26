@@ -12,7 +12,7 @@ import {
 } from '@/lib/streetWalk'
 import { fetchMyTurf } from '@/lib/myTurf'
 import { useAuthStore } from './auth'
-import type { Address, KnockLog, KnockOutcome, NewKnock, Person } from '@/types'
+import type { Address, Appointment, KnockLog, KnockOutcome, NewKnock, Person } from '@/types'
 
 const WALK_DIRECTION_KEY = 'forcefield.walk_direction'
 const WALK_PARITY_KEY = 'forcefield.walk_parity'
@@ -39,6 +39,11 @@ interface TalkState {
   selectedAddress: Address | null
   roster: Person[]
   history: KnockHistoryEntry[]
+  /** Still-to-come appointments at the loaded door, soonest first — someone
+   * promised to be back here. Fetched with the door and refreshed after the
+   * appointment sheet saves. Empty when the campaign has appointments off,
+   * since nobody could have booked one. */
+  appointments: Appointment[]
   selectedPerson: Person | null
   notes: string
   /** Outcome logged for the CURRENT selection (person, or household if no
@@ -77,6 +82,19 @@ interface TalkState {
   myKnockPathLoaded: boolean
 }
 
+/** Still-to-come, not-called-off appointments at one door, soonest first.
+ * `ends_at` rather than `starts_at` is the cutoff on purpose: a window you're
+ * standing inside is the most relevant appointment there is. */
+function appointmentQuery(addressId: string) {
+  return supabase
+    .from('appointments')
+    .select('*')
+    .eq('household_id', addressId)
+    .eq('status', 'scheduled')
+    .gte('ends_at', new Date().toISOString())
+    .order('starts_at')
+}
+
 const SEARCH_DEBOUNCE_MS = 250
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 /** Invalidates in-flight Up-next lookups when a newer one starts. */
@@ -91,6 +109,7 @@ export const useTalkStore = defineStore('talk', {
     selectedAddress: null,
     roster: [],
     history: [],
+    appointments: [],
     selectedPerson: null,
     notes: '',
     pendingOutcome: null,
@@ -154,7 +173,7 @@ export const useTalkStore = defineStore('talk', {
     /** Load an address + its full roster + prior contact history, and land on
      * the Talk tab. Single entry point for search hits and Hunt taps. */
     async loadAddress(addressId: string, preselectPersonId?: string) {
-      const [addressRes, rosterRes, historyRes] = await Promise.all([
+      const [addressRes, rosterRes, historyRes, apptRes] = await Promise.all([
         supabase.from('addresses').select('*').eq('id', addressId).single(),
         supabase.from('persons').select('*').eq('household_id', addressId).order('name'),
         // The door's ENTIRE visit history, with who each knock was about and
@@ -165,11 +184,13 @@ export const useTalkStore = defineStore('talk', {
           .eq('household_id', addressId)
           .order('occurred_at', { ascending: false })
           .limit(500),
+        appointmentQuery(addressId),
       ])
       if (addressRes.error || !addressRes.data) return
       this.selectedAddress = addressRes.data as Address
       this.roster = (rosterRes.data ?? []) as Person[]
       this.history = (historyRes.data ?? []) as unknown as KnockHistoryEntry[]
+      this.appointments = (apptRes.data ?? []) as Appointment[]
       this.selectedPerson = preselectPersonId
         ? (this.roster.find((p) => p.id === preselectPersonId) ?? null)
         : null
@@ -203,10 +224,21 @@ export const useTalkStore = defineStore('talk', {
       this.activeClientId = null
     },
 
+    /** Re-read the loaded door's appointments — after the sheet books, moves
+     * or cancels one. No-op if the door changed underneath. */
+    async reloadAppointments() {
+      const id = this.selectedAddress?.id
+      if (!id) return
+      const { data, error } = await appointmentQuery(id)
+      if (error || this.selectedAddress?.id !== id) return
+      this.appointments = (data ?? []) as Appointment[]
+    },
+
     clearAddress() {
       this.selectedAddress = null
       this.roster = []
       this.history = []
+      this.appointments = []
       this.selectedPerson = null
       this.pendingOutcome = null
       this.activeClientId = null
@@ -267,11 +299,10 @@ export const useTalkStore = defineStore('talk', {
       this.upcoming = list
     },
 
-    /** Log an outcome for whatever is currently selected. Signed / Didn't
-     * Sign / Maybe require a person picked from the roster (OUTCOMES[].
-     * requiresPerson); Not Home / Skip / Hostile only require the household
-     * (selectedAddress) — OutcomeButtons.vue disables each button
-     * individually per that rule. Tapping the already-active button undoes
+    /** Log an outcome for whatever is currently selected. Only Signed needs a
+     * person picked from the roster (OUTCOMES[].requiresPerson); every other
+     * button logs against the picked person when there is one and against the
+     * household when there isn't. Tapping the already-active button undoes
      * it; tapping a different one swaps it in place (same DB row, via
      * activeClientId); tapping with nothing active creates a new log. The
      * button row itself never hides — this only changes which outcome is

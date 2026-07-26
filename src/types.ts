@@ -423,6 +423,50 @@ export interface ActivityFeedSettings {
   updated_at: string
 }
 
+/** Singleton knobs for appointments (2026-07-26) — the follow-up behind the
+ * "Come back another time" outcome. Off campaign-wide until a campaign
+ * manager turns it on, from the Appointment options card on /appointments.
+ * `window_minutes` is how long a come-back window is; the day hours bound
+ * which windows get offered at the door. */
+export interface AppointmentSettings {
+  id: boolean
+  enabled: boolean
+  window_minutes: number
+  day_start_hour: number
+  day_end_hour: number
+  updated_at: string
+}
+
+/** Mirrors the DB defaults in 20260726120000_appointments.sql. */
+export const DEFAULT_APPOINTMENT_SETTINGS: AppointmentSettings = {
+  id: true,
+  enabled: false,
+  window_minutes: 120,
+  day_start_hour: 9,
+  day_end_hour: 21,
+  updated_at: '',
+}
+
+/** A promise to come back to a door inside a time window. Booked at the door
+ * from the "Come back another time" button; read back on Talk (the door's own
+ * card), on /appointments, and in the Analytics Appointments tab.
+ *
+ * Whether it was KEPT is never stored — it's read off knock_logs (a knock at
+ * that household inside the window). `status` records only the thing a knock
+ * can't imply: that somebody called it off. */
+export interface Appointment {
+  id: string
+  household_id: string
+  person_id: string | null
+  canvasser_id: string
+  starts_at: string
+  ends_at: string
+  status: 'scheduled' | 'canceled'
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
 /** Client-side fallback while the settings row loads (or if it can't) —
  * mirrors the DB defaults in 20260720130000_activity_feed_settings.sql. */
 export const DEFAULT_FEED_SETTINGS: ActivityFeedSettings = {

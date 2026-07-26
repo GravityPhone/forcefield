@@ -1,20 +1,37 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import MyDoorsSheet from './MyDoorsSheet.vue'
+import AppointmentSheet from './AppointmentSheet.vue'
 import { OUTCOMES } from '@/lib/outcomes'
 import { popIn } from '@/lib/motion'
 import { hapticNotify, hapticTap } from '@/lib/native'
+import { appointmentSettings, ensureAppointmentSettings } from '@/lib/appointments'
 import { useTalkStore } from '@/stores/talk'
 import type { KnockOutcome } from '@/types'
 
 const talk = useTalkStore()
+
+// "Come back another time" is the one button with a follow-up: when the
+// campaign has appointments switched on, logging it offers a window to come
+// back in. The knock is already written by then — the sheet is optional at
+// the door and closing it costs nothing.
+const apptOpen = ref(false)
 
 // A physical tick under the finger confirms the tap registered without
 // looking down at the screen — this pair of buttons is the highest-frequency
 // interaction in the whole app.
 function logOutcome(value: KnockOutcome) {
   hapticTap('medium')
-  talk.logOutcome(value)
+  // Whether this tap SETS the outcome or undoes it, decided before the log
+  // runs: tapping the active button again is the undo gesture, and undoing
+  // must not open a booking sheet. Read here rather than after, because
+  // logOutcome's write can be up to four seconds on bad signal and the sheet
+  // has to appear under the thumb immediately.
+  const undoing = talk.pendingOutcome === value && !!talk.activeClientId
+  void talk.logOutcome(value)
+  if (!undoing && value === 'maybe' && appointmentSettings.value.enabled && talk.selectedAddress) {
+    apptOpen.value = true
+  }
 }
 
 function confirmNext() {
@@ -36,8 +53,13 @@ function confirmPrevious() {
 // (Labeled "My turf", not "My doors": it filters to the CREW's assignment,
 // which is what myTurfIds means. "My doors" is Scout's narrower filter — the
 // share with your name on it.)
-// Loaded once here so the switch is on screen before the first Next.
-onMounted(() => void talk.ensureMyTurf())
+// Loaded once here so the switch is on screen before the first Next, and the
+// appointment settings alongside it — the outcome button has to know whether
+// to ask about a time before it's first tapped.
+onMounted(() => {
+  void talk.ensureMyTurf()
+  void ensureAppointmentSettings()
+})
 const haveMyTurf = computed(() => talk.myTurfIds.size > 0)
 
 function toggleMyDoors() {
@@ -138,6 +160,7 @@ function disabledReason(requiresPerson: boolean): string {
       </div>
     </div>
     <MyDoorsSheet v-model:open="myDoorsOpen" />
+    <AppointmentSheet v-model:open="apptOpen" />
   </div>
 </template>
 

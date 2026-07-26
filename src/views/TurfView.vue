@@ -87,7 +87,7 @@ import { localToday, startOfLocalDayISO } from '@/lib/day'
 import { memberColor } from '@/lib/memberColors'
 import {
   OUTCOME_HEX,
-  OUTCOME_LABELS,
+  OUTCOME_SHORT,
   doorPartlySigned,
   doorStatusOutcome,
 } from '@/lib/outcomes'
@@ -3583,7 +3583,7 @@ onUnmounted(() => {
           <ul v-else class="door-card-list">
             <li v-for="(k, i) in doorInfo.knocks" :key="i" class="door-card-row">
               <span class="door-card-dot" :style="{ background: OUTCOME_HEX[k.outcome] }" aria-hidden="true"></span>
-              <span class="door-card-outcome">{{ OUTCOME_LABELS[k.outcome] }}</span>
+              <span class="door-card-outcome">{{ OUTCOME_SHORT[k.outcome] }}</span>
               <span v-if="knockWho(k)" class="muted door-card-who">{{ knockWho(k) }}</span>
               <span class="muted door-card-when">{{ knockWhen(k.occurred_at) }}</span>
             </li>

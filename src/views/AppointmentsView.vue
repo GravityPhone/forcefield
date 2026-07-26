@@ -1,0 +1,640 @@
+<script setup lang="ts">
+// Appointments (2026-07-26) — every "come back at X" a canvasser promised at
+// a door, in one list, grouped by day.
+//
+// The campaign manager's knobs live HERE, in a collapsible card at the top,
+// rather than on the dashboard: the 2026-07-21 rule is that controls sit on
+// the screen they affect (Board options on /leaderboard, Feed options on
+// /activity). It also means the nav only ever grows by one row, which is the
+// whole reason this is a page and not three.
+//
+// Whether an appointment was kept is DERIVED, never stored: a knock at that
+// door inside the window means somebody went back. Everything else the row
+// says comes from the clock. `status` in the DB records only the one thing a
+// knock can't imply — that a human called it off.
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import AppShell from '@/components/AppShell.vue'
+import { fetchAllRows, supabase } from '@/lib/supabase'
+import { hapticTap } from '@/lib/native'
+import {
+  appointmentSettings,
+  dayLabel,
+  ensureAppointmentSettings,
+  localDateKey,
+  refreshAppointmentSettings,
+  windowLabel,
+} from '@/lib/appointments'
+import { useAuthStore } from '@/stores/auth'
+import { useTalkStore } from '@/stores/talk'
+import type { Appointment } from '@/types'
+
+interface ApptRow extends Appointment {
+  addresses: { street: string; unit: string | null; city: string } | null
+  person: { name: string } | null
+  canvasser: { username: string; display_name: string | null } | null
+}
+
+/** How far back the list reaches. Older than this is analytics' job, not a
+ * dispatch screen's. */
+const PAST_DAYS = 14
+
+const auth = useAuthStore()
+const talk = useTalkStore()
+const router = useRouter()
+
+const rows = ref<ApptRow[]>([])
+/** household_id → knock timestamps (ms) since the earliest loaded window —
+ * what "kept" is read off. */
+const knockTimes = ref<Map<string, number[]>>(new Map())
+const loading = ref(true)
+const loadError = ref(false)
+
+const canManage = computed(
+  () => auth.profile?.role === 'admin' || auth.profile?.role === 'campaign_manager',
+)
+
+// --------------------------------------------------------------- loading
+
+async function load() {
+  loading.value = true
+  loadError.value = false
+  const since = new Date()
+  since.setDate(since.getDate() - PAST_DAYS)
+  since.setHours(0, 0, 0, 0)
+  try {
+    const data = await fetchAllRows<ApptRow>((from, to) =>
+      supabase
+        .from('appointments')
+        .select(
+          '*, addresses(street, unit, city), person:persons(name), canvasser:profiles(username, display_name)',
+        )
+        .gte('starts_at', since.toISOString())
+        .order('starts_at')
+        .order('id')
+        .range(from, to),
+    )
+    rows.value = data
+    await loadKnocks(data, since)
+  } catch {
+    loadError.value = true
+  } finally {
+    loading.value = false
+  }
+}
+
+/** Knocks at the doors we're showing, since the oldest window — the evidence
+ * a row is "kept". Chunked: `.in()` on a long id list blows the URL length,
+ * the same way the Squad page chunks its status fetch. */
+async function loadKnocks(appts: ApptRow[], since: Date) {
+  const ids = [...new Set(appts.map((a) => a.household_id))]
+  const by = new Map<string, number[]>()
+  const CHUNK = 200
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const slice = ids.slice(i, i + CHUNK)
+    const { data } = await supabase
+      .from('knock_logs')
+      .select('household_id, occurred_at')
+      .in('household_id', slice)
+      .gte('occurred_at', since.toISOString())
+    for (const k of data ?? []) {
+      const id = k.household_id as string
+      const list = by.get(id) ?? []
+      list.push(new Date(k.occurred_at as string).getTime())
+      by.set(id, list)
+    }
+  }
+  knockTimes.value = by
+}
+
+onMounted(async () => {
+  await ensureAppointmentSettings()
+  draft.value = { ...appointmentSettings.value }
+  await load()
+})
+
+// --------------------------------------------------------------- status
+
+type ApptState = 'upcoming' | 'now' | 'kept' | 'late' | 'missed' | 'canceled'
+
+const STATE_LABELS: Record<ApptState, string> = {
+  upcoming: '',
+  now: 'Now',
+  kept: 'Kept',
+  late: 'Went back late',
+  missed: 'Missed',
+  canceled: 'Canceled',
+}
+
+function stateOf(a: ApptRow, now = Date.now()): ApptState {
+  if (a.status === 'canceled') return 'canceled'
+  const start = new Date(a.starts_at).getTime()
+  const end = new Date(a.ends_at).getTime()
+  const knocks = knockTimes.value.get(a.household_id) ?? []
+  if (knocks.some((t) => t >= start && t <= end)) return 'kept'
+  if (now < start) return 'upcoming'
+  if (now <= end) return 'now'
+  if (knocks.some((t) => t > end)) return 'late'
+  return 'missed'
+}
+
+// --------------------------------------------------------------- scope
+
+type Scope = 'upcoming' | 'today' | 'past'
+const scope = ref<Scope>('upcoming')
+const SCOPES: { value: Scope; label: string }[] = [
+  { value: 'upcoming', label: 'Upcoming' },
+  { value: 'today', label: 'Today' },
+  { value: 'past', label: 'Past' },
+]
+const mineOnly = ref(false)
+
+const visible = computed(() => {
+  const now = Date.now()
+  const today = localDateKey(new Date())
+  const me = auth.profile?.id
+  return rows.value.filter((a) => {
+    if (mineOnly.value && a.canvasser_id !== me) return false
+    const end = new Date(a.ends_at).getTime()
+    if (scope.value === 'today') return localDateKey(new Date(a.starts_at)) === today
+    if (scope.value === 'upcoming') return end >= now && a.status !== 'canceled'
+    return end < now || a.status === 'canceled'
+  })
+})
+
+interface DayGroup {
+  key: string
+  label: string
+  items: ApptRow[]
+}
+
+/** Grouped by local day. Upcoming reads forward, Past reads backward — the
+ * nearest thing in either direction is what you came here for. */
+const groups = computed<DayGroup[]>(() => {
+  const list = [...visible.value]
+  if (scope.value === 'past') list.reverse()
+  const out: DayGroup[] = []
+  for (const a of list) {
+    const d = new Date(a.starts_at)
+    const key = localDateKey(d)
+    const last = out[out.length - 1]
+    if (last && last.key === key) last.items.push(a)
+    else out.push({ key, label: dayLabel(d), items: [a] })
+  }
+  return out
+})
+
+const upcomingCount = computed(() => {
+  const now = Date.now()
+  return rows.value.filter((a) => a.status === 'scheduled' && new Date(a.ends_at).getTime() >= now)
+    .length
+})
+
+// --------------------------------------------------------------- row actions
+
+function doorLine(a: ApptRow): string {
+  if (!a.addresses) return 'Unknown address'
+  return `${a.addresses.street}${a.addresses.unit ? ' ' + a.addresses.unit : ''}`
+}
+
+function bookedBy(a: ApptRow): string {
+  return a.canvasser ? a.canvasser.display_name || a.canvasser.username : 'unknown'
+}
+
+/** Tap a row: open that door in Talk, same handoff as a map pin or a knock
+ * in your history. Coming back IS the point of the list. */
+async function openDoor(a: ApptRow) {
+  hapticTap('light')
+  await talk.loadAddress(a.household_id, a.person_id ?? undefined)
+  await router.push({ name: 'canvass' })
+}
+
+const canCancel = (a: ApptRow) =>
+  a.status === 'scheduled' && (canManage.value || a.canvasser_id === auth.profile?.id)
+
+const canceling = ref('')
+
+async function cancel(a: ApptRow) {
+  canceling.value = a.id
+  const { error } = await supabase
+    .from('appointments')
+    .update({ status: 'canceled', updated_at: new Date().toISOString() })
+    .eq('id', a.id)
+  canceling.value = ''
+  if (!error) a.status = 'canceled'
+}
+
+// --------------------------------------------------------------- options
+
+// Edits bind into a draft rather than the shared settings ref: this page reads
+// window length while you're typing it, and a half-typed "1" would rebuild
+// every window preview underneath. Save publishes.
+const optionsOpen = ref(false)
+const optionsSaving = ref(false)
+const optionsSaved = ref(false)
+const optionsError = ref('')
+const draft = ref({ ...appointmentSettings.value })
+
+const windowPreview = computed(() => {
+  const d = new Date()
+  d.setHours(draft.value.day_start_hour, 0, 0, 0)
+  const end = new Date(d.getTime() + Math.max(15, draft.value.window_minutes) * 60_000)
+  return windowLabel(d, end)
+})
+
+function clampInt(n: number, lo: number, hi: number): number {
+  return Math.min(hi, Math.max(lo, Math.round(Number.isFinite(n) ? n : lo)))
+}
+
+async function saveOptions() {
+  optionsSaving.value = true
+  optionsError.value = ''
+  const start = clampInt(draft.value.day_start_hour, 0, 23)
+  const patch = {
+    enabled: draft.value.enabled,
+    window_minutes: clampInt(draft.value.window_minutes, 15, 480),
+    day_start_hour: start,
+    day_end_hour: clampInt(draft.value.day_end_hour, start + 1, 24),
+    updated_at: new Date().toISOString(),
+  }
+  const { error } = await supabase.from('appointment_settings').update(patch).eq('id', true)
+  optionsSaving.value = false
+  if (error) {
+    optionsError.value = 'Could not save — try again.'
+    return
+  }
+  await refreshAppointmentSettings()
+  draft.value = { ...appointmentSettings.value }
+  optionsSaved.value = true
+  setTimeout(() => (optionsSaved.value = false), 2000)
+}
+</script>
+
+<template>
+  <AppShell title="Appointments">
+    <div class="stack">
+      <!-- Manager knobs, on the screen they govern. -->
+      <div v-if="canManage" class="card options-card" data-help="appt-options">
+        <button class="options-head" :aria-expanded="optionsOpen" @click="optionsOpen = !optionsOpen">
+          <span>Appointment options</span>
+          <span class="options-state muted">{{ appointmentSettings.enabled ? 'On' : 'Off' }}</span>
+          <span class="options-caret" aria-hidden="true">{{ optionsOpen ? '▴' : '▾' }}</span>
+        </button>
+        <div v-if="optionsOpen" class="options-body">
+          <label class="check">
+            <input type="checkbox" v-model="draft.enabled" />
+            Offer a time when a door says come back
+          </label>
+          <div class="step-row">
+            window <input type="number" min="15" max="480" step="15" v-model.number="draft.window_minutes" /> minutes
+            <span class="preview">{{ windowPreview }}</span>
+          </div>
+          <div class="step-row">
+            between <input type="number" min="0" max="23" v-model.number="draft.day_start_hour" /> and
+            <input type="number" min="1" max="24" v-model.number="draft.day_end_hour" /> o’clock
+          </div>
+          <div class="options-actions">
+            <button class="btn btn-primary btn-sm" :disabled="optionsSaving" @click="saveOptions">
+              {{ optionsSaved ? 'Saved ✓' : optionsSaving ? 'Saving…' : 'Save' }}
+            </button>
+          </div>
+          <p v-if="optionsError" class="error options-error">{{ optionsError }}</p>
+        </div>
+      </div>
+
+      <p v-if="!appointmentSettings.enabled && !canManage" class="muted state">
+        Appointments are off.
+      </p>
+
+      <div class="scope" data-help="appt-scope">
+        <div class="chip-row" role="group" aria-label="Which appointments">
+          <button
+            v-for="s in SCOPES"
+            :key="s.value"
+            type="button"
+            class="chip"
+            :class="{ on: scope === s.value }"
+            @click="scope = s.value"
+          >
+            {{ s.label }}
+          </button>
+        </div>
+        <button
+          type="button"
+          class="chip mine"
+          :class="{ on: mineOnly }"
+          role="switch"
+          :aria-checked="mineOnly"
+          @click="mineOnly = !mineOnly"
+        >
+          Mine only
+        </button>
+        <span class="scope-right muted">{{ upcomingCount }} coming up</span>
+      </div>
+
+      <p v-if="loading" class="muted state">Loading…</p>
+      <p v-else-if="loadError" class="error state">Couldn’t load appointments.</p>
+      <p v-else-if="!groups.length" class="muted state">Nothing here.</p>
+
+      <section v-for="g in groups" :key="g.key" class="day" data-help="appt-list">
+        <h3 class="day-head">{{ g.label }}</h3>
+        <ul class="appt-list">
+          <li v-for="a in g.items" :key="a.id" class="appt-row" :class="stateOf(a)">
+            <button class="appt-main" @click="openDoor(a)">
+              <span class="appt-time">{{ windowLabel(new Date(a.starts_at), new Date(a.ends_at)) }}</span>
+              <span class="appt-body">
+                <span class="appt-door">{{ doorLine(a) }}</span>
+                <span class="muted appt-meta">
+                  <template v-if="a.person?.name">{{ a.person.name }} · </template>{{ bookedBy(a) }}
+                </span>
+              </span>
+              <span v-if="STATE_LABELS[stateOf(a)]" class="appt-state">{{ STATE_LABELS[stateOf(a)] }}</span>
+            </button>
+            <button
+              v-if="canCancel(a)"
+              class="appt-cancel"
+              :disabled="canceling === a.id"
+              :aria-label="`Cancel ${doorLine(a)}`"
+              title="Cancel"
+              @click="cancel(a)"
+            >
+              ✕
+            </button>
+          </li>
+        </ul>
+      </section>
+    </div>
+  </AppShell>
+</template>
+
+<style scoped>
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.state {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+/* --- Manager options (same collapsible as Feed options / Board options) --- */
+
+.options-card {
+  padding: 0;
+}
+
+.options-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.7rem 0.9rem;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.options-head > :first-child {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.options-state {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.options-caret {
+  color: var(--text-muted);
+}
+
+.options-body {
+  padding: 0 0.9rem 0.9rem;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.92rem;
+  margin: 0.35rem 0 0.75rem;
+}
+
+.check input {
+  width: auto;
+}
+
+.step-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin: 0 0 0.75rem 1.75rem;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+.step-row input {
+  width: 4.6em;
+  padding: 0.25rem 0.4rem;
+  font: inherit;
+  font-size: 0.88rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* What the first chip of the day will say — the setting, read back. */
+.preview {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.options-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.options-error {
+  margin: 0.5rem 0 0;
+}
+
+.error {
+  color: var(--danger, #c0392b);
+  font-size: 0.9rem;
+}
+
+/* --- Scope row --- */
+
+.scope {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.chip-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.chip {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.32rem 0.75rem;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.chip:hover {
+  color: var(--text);
+}
+
+.chip.on {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.scope-right {
+  font-size: 0.82rem;
+  margin-left: auto;
+}
+
+/* --- The list --- */
+
+.day-head {
+  margin: 0 0 0.4rem;
+  font-size: 0.92rem;
+}
+
+.appt-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.appt-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid #e0a02e;
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* The left edge carries the state, so a long list reads as a column of
+ * colors before it reads as words. */
+.appt-row.kept {
+  border-left-color: #2e9e5b;
+}
+
+.appt-row.missed {
+  border-left-color: #d64545;
+}
+
+.appt-row.late,
+.appt-row.canceled {
+  border-left-color: #8a90a5;
+}
+
+.appt-row.canceled .appt-main {
+  opacity: 0.6;
+}
+
+.appt-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.6rem 0.75rem;
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.appt-main:hover {
+  background: var(--surface-2);
+}
+
+.appt-time {
+  flex-shrink: 0;
+  font-weight: 800;
+  font-size: 0.88rem;
+  white-space: nowrap;
+}
+
+.appt-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+
+.appt-door {
+  font-weight: 700;
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+
+.appt-meta {
+  font-size: 0.82rem;
+}
+
+.appt-state {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.appt-cancel {
+  flex-shrink: 0;
+  width: 40px;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.appt-cancel:hover {
+  color: var(--danger, #c0392b);
+  background: var(--surface-2);
+}
+</style>

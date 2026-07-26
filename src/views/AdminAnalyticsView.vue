@@ -25,8 +25,13 @@ import Heatmap from '@/components/charts/Heatmap.vue'
 import ScatterChart from '@/components/charts/ScatterChart.vue'
 import type { BarItem } from '@/components/charts/BarChart.vue'
 import type { ScatterPoint } from '@/components/charts/ScatterChart.vue'
-import { supabase } from '@/lib/supabase'
+import { fetchAllRows, supabase } from '@/lib/supabase'
 import { OUTCOMES } from '@/lib/outcomes'
+import {
+  appointmentSettings,
+  ensureAppointmentSettings,
+  windowLabel,
+} from '@/lib/appointments'
 import { useChartPalette, ordinalRamp, fmtPct, fmtCount } from '@/lib/chartTheme'
 import { wilson, linearRegression, rollingMean } from '@/lib/stats'
 import { ANALYTICS_TAB_HELP } from '@/lib/helpContent'
@@ -82,6 +87,18 @@ const cityAddressTotals = shallowRef<Map<string, number>>(new Map())
 const turfAddressTotals = shallowRef<Map<string, number>>(new Map())
 const canvasserNames = shallowRef<Map<string, string>>(new Map())
 
+/** Come-back appointments (2026-07-26). Small table — loaded whole, and only
+ * ever read here; whether one was KEPT is derived against the knock history
+ * already in memory, exactly as the Appointments page derives it. */
+interface Appt {
+  household_id: string
+  canvasser_id: string
+  start: number
+  end: number
+  canceled: boolean
+}
+const appointments = shallowRef<Appt[]>([])
+
 const PAGE = 1000
 
 async function fetchAllPages<T>(
@@ -116,7 +133,7 @@ onMounted(async () => {
       supabase.from('addresses').select('id', { count: 'exact', head: true }),
     ])
 
-    const [rows, addrs, profs, turfs] = await Promise.all([
+    const [rows, addrs, profs, turfs, appts] = await Promise.all([
       fetchAllPages<KnockRow>(
         'knock_logs',
         'outcome, occurred_at, household_id, canvasser_id, squad_name, turf_name',
@@ -143,7 +160,31 @@ onMounted(async () => {
           if (error) throw new Error(error.message)
           return data ?? []
         }),
+      fetchAllRows<{
+        household_id: string
+        canvasser_id: string
+        starts_at: string
+        ends_at: string
+        status: string
+      }>((from, to) =>
+        supabase
+          .from('appointments')
+          .select('household_id, canvasser_id, starts_at, ends_at, status')
+          .order('id')
+          .range(from, to),
+      ),
     ])
+
+    // Whether the Appointments tab exists at all — a campaign that isn't
+    // using them shouldn't be shown an empty one.
+    void ensureAppointmentSettings()
+    appointments.value = appts.map((a) => ({
+      household_id: a.household_id,
+      canvasser_id: a.canvasser_id,
+      start: new Date(a.starts_at).getTime(),
+      end: new Date(a.ends_at).getTime(),
+      canceled: a.status === 'canceled',
+    }))
 
     const cityOf = new Map(addrs.map((a) => [a.id, a.city]))
     const totals = new Map<string, number>()
@@ -238,22 +279,29 @@ const RANGE_CHIPS: { value: number | null; label: string }[] = [
 ]
 
 const maxTs = computed(() => (knocks.value.length ? knocks.value[knocks.value.length - 1].ts : 0))
-const filtered = computed(() => {
-  const cutoff = rangeDays.value == null ? -Infinity : maxTs.value - rangeDays.value * 86_400_000
-  return knocks.value.filter((k) => k.ts >= cutoff)
-})
+const rangeCutoff = computed(() =>
+  rangeDays.value == null ? -Infinity : maxTs.value - rangeDays.value * 86_400_000,
+)
+const filtered = computed(() => knocks.value.filter((k) => k.ts >= rangeCutoff.value))
 
 // ---------------------------------------------------------------- tabs
 
-const TABS = [
+const ALL_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'areas', label: 'Areas' },
   { id: 'turfs', label: 'Turfs' },
   { id: 'squads', label: 'Squads' },
+  { id: 'appointments', label: 'Appointments' },
   { id: 'odds', label: 'Odds' },
   { id: 'canvassers', label: 'Canvassers' },
 ] as const
-type TabId = (typeof TABS)[number]['id']
+type TabId = (typeof ALL_TABS)[number]['id']
+
+/** Appointments earns a tab only once the campaign turns them on — a seventh
+ * tab is a real cost on a phone, and an empty one teaches nothing. */
+const TABS = computed(() =>
+  ALL_TABS.filter((t) => t.id !== 'appointments' || appointmentSettings.value.enabled),
+)
 const tab = ref<TabId>('overview')
 
 /** The header "?" teaches whichever tab is on screen. */
@@ -349,7 +397,11 @@ function openCanvasserRow(i: number) {
 
 const scopeCount = computed(() => (focus.value ? focusKnocks.value.length : filtered.value.length))
 const showTapHint = computed(
-  () => !focus.value && tab.value !== 'overview' && tab.value !== 'odds',
+  () =>
+    !focus.value &&
+    tab.value !== 'overview' &&
+    tab.value !== 'odds' &&
+    tab.value !== 'appointments',
 )
 
 // ---------------------------------------------------------------- shared builders
@@ -385,11 +437,13 @@ function dailyFor(sub: Knock[]) {
   return { axis, knocksPerDay, sigsPerDay }
 }
 
+// Charts use OUTCOMES[].short, not .label — a bar's name lives in a 130px
+// gutter and "Come back another time" is a full-width button's worth of words.
 function mixFor(sub: Knock[]): BarItem[] {
   const counts = new Map<KnockOutcome, number>()
   for (const k of sub) counts.set(k.outcome, (counts.get(k.outcome) ?? 0) + 1)
   return OUTCOMES.map((o) => ({
-    label: o.label,
+    label: o.short,
     value: counts.get(o.value) ?? 0,
     color: o.hex,
     detail: `${fmtPct((counts.get(o.value) ?? 0) / Math.max(1, sub.length), 1)} of all knocks`,
@@ -455,7 +509,7 @@ const outcomeStack = computed(() => {
       const i = idx.get(k.day)
       if (i != null) vals[i]++
     }
-    return { name: o.label, color: o.hex, values: vals }
+    return { name: o.short, color: o.hex, values: vals }
   })
 })
 
@@ -746,6 +800,200 @@ const canvasserRows = computed(() =>
 const CANVASSER_COLUMNS = ['Canvasser', 'Knocks', 'Conversations', 'Signatures', 'Close rate', 'Answer rate']
 
 // ---------------------------------------------------------------- focus panel
+// ---------------------------------------------------------------- appointments
+// The "Come back another time" follow-up (2026-07-26). Nothing here is
+// stored: an appointment is KEPT when a knock landed at that door inside its
+// window, LATE when the return came after it, MISSED when nobody ever went
+// back — read straight off the knock history already in memory. Only
+// "canceled" comes from the row itself, because no knock can imply it.
+
+type ApptState = 'kept' | 'late' | 'missed' | 'pending' | 'canceled'
+
+interface ApptResult {
+  appt: Appt
+  state: ApptState
+  /** Outcome of the first knock at or after the window opened — what going
+   * back actually got. Null until somebody goes. */
+  outcome: KnockOutcome | null
+}
+
+/** Every door's knocks, ts-ascending (knocks.value is already sorted). */
+const knocksByDoor = computed(() => {
+  const by = new Map<string, Knock[]>()
+  for (const k of knocks.value) {
+    const list = by.get(k.household)
+    if (list) list.push(k)
+    else by.set(k.household, [k])
+  }
+  return by
+})
+
+const apptResults = computed<ApptResult[]>(() => {
+  const now = Date.now()
+  const cutoff = rangeCutoff.value
+  const out: ApptResult[] = []
+  for (const a of appointments.value) {
+    if (a.start < cutoff) continue
+    const back = knocksByDoor.value.get(a.household_id)?.find((k) => k.ts >= a.start) ?? null
+    let state: ApptState
+    if (a.canceled) state = 'canceled'
+    else if (back && back.ts <= a.end) state = 'kept'
+    else if (now <= a.end) state = 'pending'
+    else if (back) state = 'late'
+    else state = 'missed'
+    out.push({ appt: a, state, outcome: back?.outcome ?? null })
+  }
+  return out
+})
+
+/** Windows that have closed and weren't called off — the only ones a kept
+ * rate can honestly be taken over. */
+const apptResolved = computed(() =>
+  apptResults.value.filter((r) => r.state !== 'pending' && r.state !== 'canceled'),
+)
+const apptKeptRate = computed(() => {
+  const res = apptResolved.value
+  return res.length ? res.filter((r) => r.state === 'kept').length / res.length : 0
+})
+
+const apptTiles = computed<Tile[]>(() => {
+  const r = apptResults.value
+  const count = (s: ApptState) => r.filter((x) => x.state === s).length
+  const signed = r.filter((x) => x.state === 'kept' && x.outcome === 'signed').length
+  const kept = count('kept')
+  return [
+    { label: 'Booked', value: fmtCount(r.length) },
+    { label: 'Kept', value: fmtCount(kept), hint: 'went back in the window' },
+    {
+      label: 'Kept rate',
+      value: apptResolved.value.length ? fmtPct(apptKeptRate.value, 1) : '—',
+      hint: 'kept ÷ windows closed',
+    },
+    { label: 'Missed', value: fmtCount(count('missed')) },
+    { label: 'Back late', value: fmtCount(count('late')) },
+    { label: 'Still to come', value: fmtCount(count('pending')) },
+    {
+      label: 'Signed on return',
+      value: fmtCount(signed),
+      hint: kept ? `${fmtPct(signed / kept, 1)} of kept` : undefined,
+    },
+  ]
+})
+
+const apptDayKey = (ts: number) => {
+  const d = new Date(ts)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** Own day axis, not the knock one: appointments run into the future, and a
+ * chart that stops at yesterday's last knock would hide what's booked. */
+const apptDaily = computed(() => {
+  const rs = apptResults.value
+  const axis: string[] = []
+  const booked: number[] = []
+  const kept: number[] = []
+  if (!rs.length) return { axis, booked, kept }
+  let min = Infinity
+  let max = -Infinity
+  for (const r of rs) {
+    min = Math.min(min, r.appt.start)
+    max = Math.max(max, r.appt.start)
+  }
+  // Stepped by calendar day rather than +86.4e6 ms, so a DST change doesn't
+  // slide every later bucket by an hour.
+  const cursor = new Date(min)
+  cursor.setHours(0, 0, 0, 0)
+  const maxKey = apptDayKey(max)
+  for (;;) {
+    const key = apptDayKey(cursor.getTime())
+    axis.push(key)
+    if (key === maxKey || axis.length > 400) break
+    cursor.setDate(cursor.getDate() + 1)
+  }
+  const idx = new Map(axis.map((d, i) => [d, i]))
+  booked.push(...new Array(axis.length).fill(0))
+  kept.push(...new Array(axis.length).fill(0))
+  for (const r of rs) {
+    const i = idx.get(apptDayKey(r.appt.start))
+    if (i == null) continue
+    booked[i]++
+    if (r.state === 'kept') kept[i]++
+  }
+  return { axis, booked, kept }
+})
+
+const apptSeries = computed<TimeSeries[]>(() => [
+  { name: 'Booked', color: cat.value[0], values: apptDaily.value.booked, area: true },
+  { name: 'Kept', color: cat.value[1], values: apptDaily.value.kept },
+])
+
+/** Kept rate per time-of-day window, in clock order — which windows people
+ * are actually home for. The one number that changes how a crew plans. */
+const keptByWindow = computed<BarItem[]>(() => {
+  const per = new Map<number, { n: number; k: number; label: string }>()
+  for (const r of apptResolved.value) {
+    const start = new Date(r.appt.start)
+    const key = start.getHours() * 60 + start.getMinutes()
+    const e = per.get(key) ?? { n: 0, k: 0, label: windowLabel(start, new Date(r.appt.end)) }
+    e.n++
+    if (r.state === 'kept') e.k++
+    per.set(key, e)
+  }
+  return [...per.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, e]) => {
+      const w = wilson(e.k, e.n)
+      return {
+        label: e.label,
+        value: w.p,
+        lo: w.lo,
+        hi: w.hi,
+        detail: `${e.k} of ${e.n} · 95% CI ${fmtPct(w.lo)}–${fmtPct(w.hi)}`,
+      }
+    })
+})
+
+/** What the return visit got, counting kept AND late returns — the door was
+ * worked either way. */
+const apptOutcomeMix = computed<BarItem[]>(() => {
+  const counts = new Map<KnockOutcome, number>()
+  let total = 0
+  for (const r of apptResults.value) {
+    if (!r.outcome || (r.state !== 'kept' && r.state !== 'late')) continue
+    counts.set(r.outcome, (counts.get(r.outcome) ?? 0) + 1)
+    total++
+  }
+  return OUTCOMES.map((o) => ({
+    label: o.short,
+    value: counts.get(o.value) ?? 0,
+    color: o.hex,
+    detail: `${fmtPct((counts.get(o.value) ?? 0) / Math.max(1, total), 1)} of return visits`,
+  }))
+})
+
+const apptByCanvasser = computed<BarItem[]>(() => {
+  const per = new Map<string, { n: number; k: number }>()
+  for (const r of apptResults.value) {
+    const e = per.get(r.appt.canvasser_id) ?? { n: 0, k: 0 }
+    e.n++
+    if (r.state === 'kept') e.k++
+    per.set(r.appt.canvasser_id, e)
+  }
+  return [...per.entries()]
+    .map(([id, e]) => ({
+      id,
+      label: canvasserNames.value.get(id) ?? 'Unknown',
+      value: e.n,
+      detail: `${fmtCount(e.k)} kept`,
+    }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 10)
+})
+
+const apptRows = computed(() =>
+  apptDaily.value.axis.map((d, i) => [d, apptDaily.value.booked[i], apptDaily.value.kept[i]]),
+)
+
 // One shared drill-down layout for whichever entity is focused: tiles, the
 // signatures trend with its 7-day average, two cross-linking rankings, and
 // the outcome mix.
@@ -1018,7 +1266,7 @@ const focusRanks = computed<FocusRank[]>(() => {
             <ChartCard
               title="What happened at doors"
               subtitle="per day"
-              :columns="['Day', ...OUTCOMES.map((o) => o.label)]"
+              :columns="['Day', ...OUTCOMES.map((o) => o.short)]"
               :rows="overviewDaily.axis.map((d, i) => [d, ...outcomeStack.map((s) => s.values[i])])"
             >
               <StackedBarChart :labels="overviewDaily.axis.map(dayLabel)" :series="outcomeStack" :height="230" />
@@ -1174,6 +1422,60 @@ const focusRanks = computed<FocusRank[]>(() => {
             selectable-rows
             @select-row="openSquadRow"
           />
+        </template>
+
+        <!-- ============================== Appointments -->
+        <template v-else-if="tab === 'appointments'">
+          <div class="tiles" data-help="appt-tiles">
+            <div v-for="t in apptTiles" :key="t.label" class="tile">
+              <span class="tile-label muted">{{ t.label }}</span>
+              <span class="tile-value">{{ t.value }}</span>
+              <span v-if="t.hint" class="tile-hint muted">{{ t.hint }}</span>
+            </div>
+          </div>
+
+          <ChartCard
+            title="Kept rate by window"
+            data-help="appt-windows"
+            subtitle="kept ÷ windows closed"
+            :columns="['Window', 'Kept rate', 'Detail']"
+            :rows="rateRows(keptByWindow)"
+          >
+            <BarChart
+              :items="keptByWindow"
+              :color="cat[0]"
+              percent
+              :ref-value="apptKeptRate"
+              :max="pctMax(keptByWindow, apptKeptRate)"
+            />
+          </ChartCard>
+
+          <div class="two-col">
+            <ChartCard
+              title="Appointments per day"
+              data-help="appt-trend"
+              :columns="['Day', 'Booked', 'Kept']"
+              :rows="apptRows"
+            >
+              <TimeSeriesChart :labels="apptDaily.axis.map(dayLabel)" :series="apptSeries" />
+            </ChartCard>
+
+            <ChartCard
+              title="What the return visit got"
+              :columns="['Outcome', 'Visits', 'Share']"
+              :rows="apptOutcomeMix.map((i) => [i.label, i.value, i.detail ?? ''])"
+            >
+              <BarChart :items="apptOutcomeMix" :color="cat[0]" />
+            </ChartCard>
+          </div>
+
+          <ChartCard
+            title="Who books them"
+            :columns="['Canvasser', 'Booked', 'Detail']"
+            :rows="apptByCanvasser.map((i) => [i.label, i.value, i.detail ?? ''])"
+          >
+            <BarChart :items="apptByCanvasser" :color="cat[0]" selectable @select="openPerson" />
+          </ChartCard>
         </template>
 
         <!-- ============================== Odds -->

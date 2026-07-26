@@ -163,7 +163,7 @@ async function openDoor(v: VisitRow) {
           @click="outcomeFilter = o.value"
         >
           <span class="chip-dot" :style="{ background: o.hex }" aria-hidden="true"></span>
-          {{ o.label }}
+          {{ o.short }}
           <span class="chip-count">{{ outcomeCounts[o.value] }}</span>
         </button>
       </div>

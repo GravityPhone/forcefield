@@ -11,6 +11,7 @@ import HelpTour from '@/components/ui/HelpTour.vue'
 import { hapticTap } from '@/lib/native'
 import { canvassGameOpen } from '@/lib/easterEgg'
 import { setChromeInsets } from '@/lib/appChrome'
+import { appointmentSettings, ensureAppointmentSettings } from '@/lib/appointments'
 import { helpFor, type HelpTopic } from '@/lib/helpContent'
 
 // Easter-egg mini game (25 rapid taps on your own name, /profile) — async so the
@@ -105,11 +106,24 @@ const barItems = computed<NavItem[]>(() => {
   ]
 })
 
+/** Appointments earn a nav row only once the campaign is using them — except
+ * for campaign managers, whose page it also is: the on/off switch lives on
+ * it, so hiding the link while it's off would make the feature unreachable.
+ * Admins don't knock and don't run the day, so they never get it. */
+const showAppointments = computed(() => {
+  const role = auth.profile?.role
+  if (!role || role === 'admin') return false
+  return role === 'campaign_manager' || appointmentSettings.value.enabled
+})
+
 const moreItems = computed<NavItem[]>(() => {
   if (!auth.profile) return []
   const roster: NavItem = { to: '/roster', label: 'Roster', icon: 'squads' }
   // Own knock history — everyone who knocks doors gets it (admins don't).
   const myKnocks: NavItem = { to: '/history', label: 'My knocks', icon: 'clock' }
+  const appointments: NavItem[] = showAppointments.value
+    ? [{ to: '/appointments', label: 'Appointments', icon: 'calendar' }]
+    : []
   const aboutMe: NavItem = { to: '/profile', label: 'About me', icon: 'person' }
   const appearance: NavItem = { to: '/appearance', label: 'Appearance', icon: 'palette' }
   // Why we're knocking, and what to say — the same briefing for every role,
@@ -134,6 +148,7 @@ const moreItems = computed<NavItem[]>(() => {
       { to: '/squads', label: 'All squads', icon: 'squads' },
       roster,
       myKnocks,
+      ...appointments,
       { to: '/admin/chat', label: 'AI Chat', icon: 'sparkle' },
       // Turf lives in the bottom tab bar now, not here.
       { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
@@ -144,7 +159,7 @@ const moreItems = computed<NavItem[]>(() => {
     ]
   }
   // Squad leaders split turf right on the Squad page now — no Turf link.
-  return [myKnocks, roster, aboutMe, appearance, campaign]
+  return [myKnocks, ...appointments, roster, aboutMe, appearance, campaign]
 })
 
 const moreOpen = ref(false)
@@ -227,6 +242,7 @@ const ICONS = {
   map: '<path d="M9 4l6 2 6-2v14l-6 2-6-2-6 2V6z"/><path d="M9 4v14M15 6v14"/>',
   shield: '<path d="M12 3l7 2.6v5.6c0 4.3-2.9 7.9-7 9.8-4.1-1.9-7-5.5-7-9.8V5.6z"/><path d="M9.2 12l2 2 3.6-4"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l2.9 1.9"/>',
+  calendar: '<rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 10h17M8 3.5v3M16 3.5v3"/><circle cx="12" cy="15" r="1.4"/>',
   chart: '<path d="M4 4v16h16"/><path d="M8 16v-5M12 16V7M16 16v-8"/>',
   sliders: '<path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>',
   flag: '<path d="M6 21V4"/><path d="M6 5h11l-2.2 3.5L17 12H6z"/>',
@@ -284,6 +300,9 @@ function observeChrome() {
 }
 
 onMounted(() => {
+  // Whether the campaign is running appointments decides a nav row, so the
+  // shell asks once — every other consumer shares the same cached answer.
+  void ensureAppointmentSettings()
   void nextTick(updateNavScrollHints)
   if (navEl.value) {
     navResizeObserver = new ResizeObserver(updateNavScrollHints)
@@ -389,6 +408,7 @@ onUnmounted(() => {
           <router-link v-if="auth.profile.role === 'campaign_manager'" to="/squads">All squads</router-link>
           <router-link to="/roster">Roster</router-link>
           <router-link to="/history">My knocks</router-link>
+          <router-link v-if="showAppointments" to="/appointments">Appointments</router-link>
           <router-link to="/bulletin">Bulletin</router-link>
           <router-link to="/leaderboard">Leaderboard</router-link>
         </template>

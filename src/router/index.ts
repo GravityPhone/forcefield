@@ -87,6 +87,12 @@ const router = createRouter({
     // everyone else; this is the self view, searchable and grouped by day.
     { path: '/history', name: 'history', component: () => import('@/views/MyKnocksView.vue'), meta: { roles: [] } },
 
+    // Every "come back at X" promised at a door. Open to any logged-in role —
+    // the canvasser who made the promise has to be able to find it — but the
+    // campaign manager's on/off switch and window length live on this page
+    // too, which is why only they see the link when the feature is off.
+    { path: '/appointments', name: 'appointments', component: () => import('@/views/AppointmentsView.vue'), meta: { roles: [] } },
+
     // Old squad-leader home — leads canvass like everyone else now, and turf
     // splitting lives on the Squad page. Kept only for stale bookmarks.
     { path: '/team', redirect: '/canvass' },

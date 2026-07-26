@@ -6,7 +6,7 @@ import { fadeUp } from '@/lib/motion'
 import { avatarUrl } from '@/lib/avatars'
 import { startOfLocalDayISO } from '@/lib/day'
 import { memberColor } from '@/lib/memberColors'
-import { OUTCOME_HEX, OUTCOME_LABELS } from '@/lib/outcomes'
+import { OUTCOME_HEX, OUTCOME_SHORT } from '@/lib/outcomes'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { DEFAULT_FEED_SETTINGS } from '@/types'
@@ -542,7 +542,7 @@ function whoIdOf(item: FeedItem): string | null {
                 <router-link class="who-link" :to="{ name: 'member', params: { id: item.whoId } }">{{ item.who }}</router-link>
                 <span class="outcome-chip" :style="{ color: OUTCOME_HEX[item.outcome] }">
                   <span class="outcome-dot" :style="{ background: OUTCOME_HEX[item.outcome] }"></span>
-                  {{ OUTCOME_LABELS[item.outcome] }}</span
+                  {{ OUTCOME_SHORT[item.outcome] }}</span
                 >{{ item.personName ? ' — ' + item.personName : '' }}
               </span>
               <span class="muted row-meta">

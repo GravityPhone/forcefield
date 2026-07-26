@@ -52,7 +52,7 @@ const DOOR_COLORS: HelpSwatch[] = [
   { fill: '#2f6fed', label: 'Not knocked' },
   { fill: '#2e9e5b', label: 'Everyone signed' },
   { fill: '#2e9e5b', band: '#e0a02e', label: 'Some signed, names left' },
-  { fill: '#e0a02e', label: 'Maybe, nobody signed yet' },
+  { fill: '#e0a02e', label: 'Come back another time, nobody signed yet' },
   { fill: '#d64545', label: 'Not interested, skip or hostile' },
   { fill: '#8a90a5', label: 'Not home' },
   { fill: '#2f6fed', halo: '#111111', label: 'Dark ring: knocked today' },
@@ -70,7 +70,12 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Outcomes',
         target: 'talk-outcomes',
-        body: 'Signed: pick a person first.\nAll others: the person picked, or the household if none.',
+        body: 'Signed: pick a person first.\nAll others: the person picked, or the household if none.\nCome back another time: offers a window to return in, when the campaign has appointments on. Optional — close it and the knock still logged.',
+      },
+      {
+        heading: 'Come back',
+        target: 'talk-appointment',
+        body: 'Somebody promised to be back at this door. Whoever is on the street can take it.\nThe whole list is under More → Appointments.',
       },
       {
         heading: 'Next and Back',
@@ -243,6 +248,25 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       { target: 'knocks-search', body: 'Your own knocks, newest first. Search by street or name.' },
       { target: 'knocks-filters', body: 'Chips filter to one outcome and carry its count.' },
       { target: 'knocks-list', body: 'Tap a visit to reopen that door in Talk.' },
+    ],
+  },
+
+  '/appointments': {
+    title: 'Appointments',
+    sections: [
+      {
+        target: 'appt-scope',
+        body: 'Every "come back at X" promised at a door, by day.\nUpcoming: windows still open. Past: the last two weeks.\nMine only: the ones you booked.',
+      },
+      {
+        target: 'appt-list',
+        body: 'Tap a row to open that door in Talk. ✕ cancels it.\nKept: a knock landed inside the window. Missed: nobody went back.',
+      },
+      {
+        heading: 'Options',
+        target: 'appt-options',
+        body: 'Campaign managers only.\nOff: the outcome button logs and never asks about a time.\nWindow: how long a come-back window runs.\nHours: the span windows are offered across.',
+      },
     ],
   },
 
@@ -489,6 +513,24 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         target: 'squads-chart',
         body: 'Close rate: signatures ÷ conversations.\nAnswer rate: opens ÷ knocks.\nWhiskers are 95% confidence ranges.',
+      },
+    ],
+  },
+
+  appointments: {
+    title: 'Appointments tab',
+    sections: [
+      {
+        target: 'appt-tiles',
+        body: 'Kept: a knock landed at that door inside its window.\nBack late: the return came after the window closed.\nMissed: nobody ever went back.\nKept rate counts closed windows only — what is still to come can’t be missed yet.',
+      },
+      {
+        target: 'appt-windows',
+        body: 'Kept rate by time of day, in clock order. Whisker: 95% confidence range. Dashed line: overall kept rate.',
+      },
+      {
+        target: 'appt-trend',
+        body: 'Booked runs into the future; kept can’t. Nothing here is stored — it is read off the knock history.',
       },
     ],
   },

@@ -27,7 +27,7 @@ import { attachMapScrollGuard } from '@/lib/mapScroll'
 import type { MapScrollGuard } from '@/lib/mapScroll'
 import {
   OUTCOME_HEX,
-  OUTCOME_LABELS,
+  OUTCOME_SHORT,
   PIN_DEFAULT_HEX,
   doorPartlySigned,
   doorStatusOutcome,
@@ -307,11 +307,11 @@ const doorRundown = computed<RundownRow[]>(() => {
   const rows: RundownRow[] = [
     { key: 'signed', label: 'Everyone signed', color: OUTCOME_HEX.signed, band: null, count: 0 },
     { key: 'partly', label: 'Partly signed', color: OUTCOME_HEX.signed, band: OUTCOME_HEX.maybe, count: 0 },
-    { key: 'maybe', label: OUTCOME_LABELS.maybe, color: OUTCOME_HEX.maybe, band: null, count: 0 },
-    { key: 'not_home', label: OUTCOME_LABELS.not_home, color: OUTCOME_HEX.not_home, band: null, count: 0 },
-    { key: 'didnt_sign', label: OUTCOME_LABELS.didnt_sign, color: OUTCOME_HEX.didnt_sign, band: null, count: 0 },
-    { key: 'skip', label: OUTCOME_LABELS.skip, color: OUTCOME_HEX.skip, band: null, count: 0 },
-    { key: 'hostile', label: OUTCOME_LABELS.hostile, color: OUTCOME_HEX.hostile, band: null, count: 0 },
+    { key: 'maybe', label: OUTCOME_SHORT.maybe, color: OUTCOME_HEX.maybe, band: null, count: 0 },
+    { key: 'not_home', label: OUTCOME_SHORT.not_home, color: OUTCOME_HEX.not_home, band: null, count: 0 },
+    { key: 'didnt_sign', label: OUTCOME_SHORT.didnt_sign, color: OUTCOME_HEX.didnt_sign, band: null, count: 0 },
+    { key: 'skip', label: OUTCOME_SHORT.skip, color: OUTCOME_HEX.skip, band: null, count: 0 },
+    { key: 'hostile', label: OUTCOME_SHORT.hostile, color: OUTCOME_HEX.hostile, band: null, count: 0 },
     { key: 'todo', label: 'Not knocked yet', color: PIN_DEFAULT_HEX, band: null, count: 0 },
   ]
   return rows
@@ -2537,7 +2537,7 @@ watch(
               <span class="feed-main">
                 <span class="feed-street">{{ prettyStreet(row.street) || 'Door' }}</span>
                 <span class="muted feed-meta">
-                  {{ OUTCOME_LABELS[row.outcome] }}<template v-if="row.person"> · {{ row.person }}</template>
+                  {{ OUTCOME_SHORT[row.outcome] }}<template v-if="row.person"> · {{ row.person }}</template>
                 </span>
               </span>
               <span class="muted feed-time">{{ feedStamp(row.occurredAt) }}</span>

@@ -30,33 +30,51 @@ import type { KnockOutcome } from '@/types'
  *
  * `ink`: legible text color OVER a surface filled with `hex` (Talk-mode
  * roster bubbles, the household banner). Fixed literals like the fills
- * themselves — picked per hex by contrast, not by theme. */
+ * themselves — picked per hex by contrast, not by theme.
+ *
+ * `short`: the same outcome for chrome that has no room for a sentence —
+ * chart axis labels (130px), filter chips, uppercase status pills, compact
+ * rows. Identical to `label` for five of the six; it exists because "Come
+ * back another time" is a phrase a canvasser reads on a full-width button
+ * and nothing else in the app has that much width. Use OUTCOME_LABELS for
+ * prose lines and buttons, OUTCOME_SHORT where the label is a tag. */
 export const OUTCOMES: {
   value: KnockOutcome
   label: string
+  short: string
   hex: string
   ink: string
   requiresPerson: boolean
   doorLevel: boolean
 }[] = [
-  { value: 'signed', label: 'Signed', hex: '#2e9e5b', ink: '#181c26', requiresPerson: true, doorLevel: false },
+  { value: 'signed', label: 'Signed', short: 'Signed', hex: '#2e9e5b', ink: '#181c26', requiresPerson: true, doorLevel: false },
   // The stored value stays `didnt_sign` — only the label changed (2026-07-25,
   // user call): "Not Interested" is what the canvasser actually heard, and it
   // reads as "don't come back here" rather than as a scorekeeping loss. No
   // behavior moved with it; this outcome closes a door for the walk exactly as
   // it always did (CLOSED_OUTCOMES in streetWalk.ts).
-  { value: 'didnt_sign', label: 'Not Interested', hex: '#d64545', ink: '#ffffff', requiresPerson: false, doorLevel: false },
-  { value: 'maybe', label: 'Maybe', hex: '#e0a02e', ink: '#181c26', requiresPerson: false, doorLevel: false },
-  { value: 'not_home', label: 'Not Home', hex: '#8a90a5', ink: '#181c26', requiresPerson: false, doorLevel: true },
+  { value: 'didnt_sign', label: 'Not Interested', short: 'Not Interested', hex: '#d64545', ink: '#ffffff', requiresPerson: false, doorLevel: false },
+  // Was "Maybe" until 2026-07-26 (user call). Same stored value, same color,
+  // same walk behavior — but "Maybe" described the canvasser's guess, and this
+  // describes what to DO about it. It's also the one button that asks a
+  // follow-up: with appointments enabled, tapping it offers a window to come
+  // back in (src/lib/appointments.ts, AppointmentSheet.vue).
+  { value: 'maybe', label: 'Come back another time', short: 'Come back', hex: '#e0a02e', ink: '#181c26', requiresPerson: false, doorLevel: false },
+  { value: 'not_home', label: 'Not Home', short: 'Not Home', hex: '#8a90a5', ink: '#181c26', requiresPerson: false, doorLevel: true },
   // Skip and Hostile share Not Interested's red ON PURPOSE (2026-07-14): to a
   // canvasser all three mean the same thing — "this door is a no, don't come
   // back". The labels/positions tell them apart where it matters.
-  { value: 'skip', label: 'Skip', hex: '#d64545', ink: '#ffffff', requiresPerson: false, doorLevel: true },
-  { value: 'hostile', label: 'Hostile', hex: '#d64545', ink: '#ffffff', requiresPerson: false, doorLevel: true },
+  { value: 'skip', label: 'Skip', short: 'Skip', hex: '#d64545', ink: '#ffffff', requiresPerson: false, doorLevel: true },
+  { value: 'hostile', label: 'Hostile', short: 'Hostile', hex: '#d64545', ink: '#ffffff', requiresPerson: false, doorLevel: true },
 ]
 
 export const OUTCOME_LABELS: Record<KnockOutcome, string> = Object.fromEntries(
   OUTCOMES.map((o) => [o.value, o.label]),
+) as Record<KnockOutcome, string>
+
+/** Tag-sized outcome names — see `short` above. */
+export const OUTCOME_SHORT: Record<KnockOutcome, string> = Object.fromEntries(
+  OUTCOMES.map((o) => [o.value, o.short]),
 ) as Record<KnockOutcome, string>
 
 export const OUTCOME_HEX: Record<KnockOutcome, string> = Object.fromEntries(
