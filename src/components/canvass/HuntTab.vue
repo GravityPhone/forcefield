@@ -1503,6 +1503,11 @@ let listFollow: 'top' | 'stay' = 'top'
  * list's own top edge in every state the sheet actually reaches. Scrolls the
  * LIST only — never the page, which would yank you off the map you were just
  * reading. */
+/** Most the page may move to finish the job — a settle, never a jump. */
+function nudgeCap(safe: { height: number }): number {
+  return Math.max(120, safe.height * 0.25)
+}
+
 function scrollActiveIntoView() {
   const follow = listFollow
   listFollow = 'top'
@@ -1512,17 +1517,29 @@ function scrollActiveIntoView() {
   const row = el.querySelector<HTMLElement>('.result-active')
   if (!row) return
   const listBox = el.getBoundingClientRect()
+  const rowBox = row.getBoundingClientRect()
   const safe = safeViewport()
   const winTop = Math.max(listBox.top, safe.top)
-  const winBottom = Math.min(listBox.bottom, safe.bottom)
-  // None of the list is on screen — moving it now would just be a scroll
-  // nobody sees, and the row would be wrong again by the time it is.
-  if (winBottom - winTop < 40) return
-  const target = el.scrollTop + row.getBoundingClientRect().top - winTop
-  el.scrollTo({
-    top: Math.max(0, Math.min(el.scrollHeight - el.clientHeight, target)),
-    behavior: 'smooth',
-  })
+
+  const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight)
+  const applied = Math.max(0, Math.min(maxScroll, el.scrollTop + rowBox.top - winTop))
+  el.scrollTo({ top: applied, behavior: 'smooth' })
+
+  // Where that leaves the row. Two ways it can still be cut off: the strip of
+  // list on screen is shorter than a row (the page is at the top and the map
+  // owns the screen), or the house is near the end of a street and the list
+  // can't scroll far enough to lift it to the top. Either way the PAGE gives
+  // the difference — the least it can, capped, so it settles rather than
+  // jumps. Tapping a pin has to end with the house you tapped on screen.
+  const shift = applied - el.scrollTop
+  const rowTop = rowBox.top - shift
+  const rowBottom = rowTop + rowBox.height
+  let nudge = 0
+  if (rowBottom > safe.bottom) nudge = rowBottom - safe.bottom
+  else if (rowTop < safe.top) nudge = rowTop - safe.top
+  if (nudge === 0) return
+  const cap = nudgeCap(safe)
+  window.scrollBy({ top: Math.max(-cap, Math.min(cap, nudge)), behavior: 'smooth' })
 }
 
 // Both halves of "tap a pin, find the house": the street's houses arriving,
@@ -1965,7 +1982,9 @@ onUnmounted(() => {
 .hunt {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  /* Every rem between these blocks is a rem the first house in the list
+     doesn't get (2026-07-25 — it was being cut in half by the fold). */
+  gap: 0.6rem;
 }
 
 .map-wrap {
@@ -1973,10 +1992,21 @@ onUnmounted(() => {
 }
 
 .map {
-  /* `svh` (small viewport height) instead of `dvh` — `dvh` shrinks/grows as
+  /* A share of what you can actually SEE, not of the whole window (2026-07-25):
+   * the sticky header and the fixed tab bar took ~125px that used to be page,
+   * and the map kept its full 45svh out of the rest — which is what pushed the
+   * first house in the list off the bottom of the screen. 47% of the band is
+   * the same slice of visible screen the map had before the chrome arrived,
+   * and it re-divides itself when the header grows with the Text size pref.
+   *
+   * `svh` (small viewport height) instead of `dvh` — `dvh` shrinks/grows as
    * the on-screen keyboard opens/closes while typing in the search box
    * below, and that live resize was what made the page jump on focus/blur. */
-  height: min(45svh, 420px);
+  height: clamp(
+    220px,
+    calc((100svh - var(--app-top-h, 0px) - var(--app-bottom-h, 0px)) * 0.47),
+    420px
+  );
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface-2);
@@ -2226,7 +2256,7 @@ onUnmounted(() => {
 .results-sheet {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.42rem;
   margin-top: -0.25rem;
   padding: 0 0.55rem 0.55rem;
   border: 1px solid var(--border);
@@ -2242,7 +2272,9 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 26px;
+  /* Trimmed from 26px (2026-07-25). It spans the full sheet width, so it's
+     still an easy thing to land a thumb on. */
+  height: 20px;
   margin: 0 -0.55rem;
   cursor: grab;
   touch-action: none;
@@ -2271,12 +2303,14 @@ onUnmounted(() => {
   transform: scaleX(1.15);
 }
 
-/* The open street's header row: back out of it, and what you're looking at. */
+/* The open street's header row: back out of it, and what you're looking at.
+   Kept short — it sits between the map and the first house, and every pixel
+   here is one the first house doesn't get. */
 .street-head {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0 0.15rem 0.1rem;
+  gap: 0.45rem;
+  padding: 0 0.15rem;
 }
 
 .street-back {
