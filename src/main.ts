@@ -4,6 +4,9 @@ import { MotionPlugin } from '@vueuse/motion'
 import App from './App.vue'
 import router from './router'
 import { initNativeShell } from './lib/native'
+// @font-face declarations only — costs nothing until a font is actually
+// picked, since a browser downloads a face only when text renders in it.
+import './fonts.css'
 import './style.css'
 
 const app = createApp(App)

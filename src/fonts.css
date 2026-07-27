@@ -1,0 +1,91 @@
+/* Appearance → Font. See src/assets/fonts/README.md for the set and its
+ * licenses, and scripts/fetch-fonts.mjs for why the picker stopped being
+ * system stacks only.
+ *
+ * THESE DECLARATIONS COST NOTHING UNTIL A FONT IS PICKED. A browser fetches
+ * an @font-face only when text actually renders in that family, so the
+ * default (`system`, which has no @font-face at all) downloads zero bytes and
+ * the cold-start budget is untouched. The rules themselves are a few hundred
+ * bytes of CSS.
+ *
+ * The url()s are resolved by Vite, which content-hashes each file into
+ * /assets/ — that is what earns them the `immutable, max-age=31536000` rule
+ * already in netlify.toml. Moving these into public/ would silently drop them
+ * to must-revalidate and re-check every face on every cold open.
+ *
+ * font-display: swap on purpose. A canvasser on one bar reads the fallback
+ * immediately and gets the chosen face when it lands; `block` would show them
+ * an empty screen on a porch, which no font choice is worth. */
+
+@font-face {
+  font-family: 'FF Rounded';
+  src: url('./assets/fonts/nunito.woff2') format('woff2-variations');
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'FF Grotesque';
+  src: url('./assets/fonts/inter.woff2') format('woff2-variations');
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'FF Geometric';
+  src: url('./assets/fonts/jost.woff2') format('woff2-variations');
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'FF Condensed';
+  src: url('./assets/fonts/archivo-narrow.woff2') format('woff2-variations');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'FF Legible';
+  src: url('./assets/fonts/atkinson.woff2') format('woff2-variations');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'FF Slab';
+  src: url('./assets/fonts/bitter.woff2') format('woff2-variations');
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'FF Marker';
+  src: url('./assets/fonts/caveat.woff2') format('woff2-variations');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Anton is single weight by design — it is already the heaviest thing here.
+ * Letting the browser synthesise 600/700/800 on top of it smears the stems
+ * shut, so the app's weight hierarchy is dropped rather than faked. That is
+ * the honest trade for a poster face: same shape everywhere, and size plus
+ * color still carry the hierarchy. */
+@font-face {
+  font-family: 'FF Poster';
+  src: url('./assets/fonts/anton.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+html[data-font='poster'] body {
+  font-synthesis-weight: none;
+}

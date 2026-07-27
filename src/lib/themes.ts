@@ -619,31 +619,38 @@ export function sunlightTokens(t: ThemeTokens, dark = false): ThemeTokens {
   }
 }
 
-/** System-font stacks only — a font choice must not add a single byte of
- * webfont download. Every stack therefore names several real faces across
- * Windows / macOS / iOS / Android and ends in a generic family, so a device
- * missing all of them still lands somewhere sane rather than on Times.
+/** The `FF *` families are bundled woff2 faces declared in src/fonts.css; the
+ * rest of each stack is the system fallback shown during the swap and on the
+ * rare device that can't take the file.
  *
- * Widened from 4 to 14 on 2026-07-25 (user call). The set is deliberately
- * grouped by FEEL — sans, then serif, then the two novelty faces — because
- * that's the order the picker renders them in. */
+ * This used to be system stacks only, on a rule that a font choice must not
+ * cost a byte. That rule cannot be honored on a phone: Android ships one sans
+ * family, so `rounded`, `grotesque`, `geometric`, `condensed`, `legible` and
+ * `poster` all resolved to the SAME face — six choices, one font, which is
+ * exactly what got reported. Nothing is downloaded until a font is picked
+ * (see the header of src/fonts.css), so `system` is still free.
+ *
+ * `serif` and `mono` deliberately keep pure system stacks: the `serif` and
+ * `monospace` generics exist on every device and are guaranteed to differ
+ * from the sans default, so those two already work everywhere for free.
+ *
+ * Order = sans, then serif, then the three novelty faces; the picker renders
+ * them in this order. */
 export const FONT_STACKS: Record<FontId, string> = {
   system: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-  rounded: "ui-rounded, 'SF Pro Rounded', 'Nunito', 'Varela Round', system-ui, sans-serif",
-  grotesque: "'Helvetica Neue', Helvetica, Arial, sans-serif",
-  geometric: "Futura, 'Century Gothic', 'Avenir Next', Avenir, 'URW Gothic', system-ui, sans-serif",
-  condensed: "'Arial Narrow', 'Roboto Condensed', 'Liberation Sans Narrow', 'Segoe UI', sans-serif",
-  // Verdana/Tahoma are on essentially every device and were drawn for small
-  // sizes — the most readable option here on a phone in bad light.
-  legible: "'Atkinson Hyperlegible', Verdana, Tahoma, 'DejaVu Sans', sans-serif",
-  trebuchet: "'Trebuchet MS', 'Lucida Grande', 'Lucida Sans Unicode', sans-serif",
+  rounded: "'FF Rounded', ui-rounded, 'SF Pro Rounded', system-ui, sans-serif",
+  grotesque: "'FF Grotesque', 'Helvetica Neue', Helvetica, Arial, sans-serif",
+  geometric: "'FF Geometric', Futura, 'Century Gothic', 'Avenir Next', system-ui, sans-serif",
+  condensed: "'FF Condensed', 'Arial Narrow', 'Roboto Condensed', 'Segoe UI', sans-serif",
+  // Atkinson Hyperlegible, drawn by the Braille Institute to disambiguate
+  // I/l/1 and O/0 — the one choice here with a job beyond taste, and the
+  // reason it earns its bytes on a phone held at arm's length in the sun.
+  legible: "'FF Legible', Verdana, Tahoma, 'DejaVu Sans', sans-serif",
   serif: "ui-serif, Georgia, 'Times New Roman', serif",
-  book: "'Palatino Linotype', Palatino, 'Book Antiqua', 'Iowan Old Style', Georgia, serif",
-  garamond: "Garamond, 'EB Garamond', 'Apple Garamond', 'Times New Roman', serif",
-  slab: "Rockwell, 'Roboto Slab', 'Bookman Old Style', Georgia, serif",
+  slab: "'FF Slab', Rockwell, 'Roboto Slab', 'Bookman Old Style', Georgia, serif",
   mono: "ui-monospace, 'Cascadia Code', 'Roboto Mono', Menlo, Consolas, monospace",
-  marker: "'Segoe Print', 'Bradley Hand', 'Chalkboard SE', 'Comic Sans MS', cursive",
-  poster: "Impact, Haettenschweiler, 'Arial Black', 'Franklin Gothic Bold', sans-serif",
+  marker: "'FF Marker', 'Segoe Print', 'Bradley Hand', 'Chalkboard SE', cursive",
+  poster: "'FF Poster', Impact, Haettenschweiler, 'Arial Black', sans-serif",
 }
 
 export const TEXT_SCALES: { value: number; label: string }[] = [
@@ -720,6 +727,9 @@ export function applyDisplayPrefs(prefs: DisplayPrefs, tokens: ThemeTokens) {
 
   style.setProperty('--font-scale', String(prefs.textScale))
   style.setProperty('--font-body', FONT_STACKS[prefs.font])
+  // Lets fonts.css special-case a face — currently only Poster, which is
+  // single weight and must not have bold synthesised onto it.
+  root.setAttribute('data-font', prefs.font)
   if (prefs.corners !== 'theme') {
     style.setProperty('--radius', prefs.corners === 'sharp' ? '4px' : '18px')
   }

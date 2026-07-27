@@ -113,6 +113,25 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Form controls do NOT inherit font-family — every browser hands them their
+ * own UA font instead. Without this rule the Appearance → Font pref reached
+ * body copy and nothing else, and this app is overwhelmingly buttons:
+ * measured on /canvass, 17 of 75 text elements ignored the setting, including
+ * all six outcome buttons, the Talk/Scout tabs and both search boxes. The
+ * biggest text on the busiest screen was the text that never changed, which
+ * is most of why picking a font read as doing nothing.
+ *
+ * font-FAMILY only, deliberately: the shorthand `font: inherit` would also
+ * reset size and weight, and the typed-field rules below carry a
+ * non-negotiable max(16px, …) floor (iOS Safari zooms the page in on a
+ * focused field under 16px). */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
 /* --- Background flair (Appearance → lib/patterns.ts) ---
  * Two fixed mask layers pinned behind everything (z-index -1 keeps them
  * under all content but over the body background). The mask carries the

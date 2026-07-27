@@ -353,7 +353,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       },
       {
         target: 'appearance-text',
-        body: 'Text size scales the app. Tabs, map buttons and typing fields stay put.\nEach font card is drawn in its own face. All of them ship with the device, so nothing downloads.',
+        body: 'Text size scales the app. Tabs, map buttons and typing fields stay put.',
+      },
+      {
+        target: 'appearance-font',
+        body: 'Every row in the list is set in the face it names.\nSystem, Serif and Typewriter use fonts already on the phone. The rest download once, then stay cached.\nLegible is Atkinson Hyperlegible, drawn so I, l and 1 cannot be confused.',
       },
     ],
   },

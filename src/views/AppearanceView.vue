@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
+import AppSelect from '@/components/ui/AppSelect.vue'
 import { useThemeStore } from '@/stores/theme'
 import { FONT_STACKS, TEXT_SCALES } from '@/lib/themes'
 import type { ThemeGroup } from '@/lib/themes'
@@ -41,7 +42,7 @@ function setPrefs(patch: Partial<DisplayPrefs>) {
   void theme.setPrefs(patch)
 }
 
-// Order = sans, then serif, then the two novelty faces. Matches FONT_STACKS.
+// Order = sans, then serif, then the three novelty faces. Matches FONT_STACKS.
 const FONT_CHOICES: { id: FontId; label: string }[] = [
   { id: 'system', label: 'System' },
   { id: 'rounded', label: 'Rounded' },
@@ -49,15 +50,27 @@ const FONT_CHOICES: { id: FontId; label: string }[] = [
   { id: 'geometric', label: 'Geometric' },
   { id: 'condensed', label: 'Condensed' },
   { id: 'legible', label: 'Legible' },
-  { id: 'trebuchet', label: 'Trebuchet' },
   { id: 'serif', label: 'Serif' },
-  { id: 'book', label: 'Book' },
-  { id: 'garamond', label: 'Garamond' },
   { id: 'slab', label: 'Slab' },
   { id: 'mono', label: 'Typewriter' },
   { id: 'marker', label: 'Marker' },
   { id: 'poster', label: 'Poster' },
 ]
+
+/** Each row wears the face it names and sets a house number in it. */
+const fontOptions = computed(() =>
+  FONT_CHOICES.map((f) => ({
+    value: f.id,
+    label: f.label,
+    hint: '123 Walnut St',
+    style: { fontFamily: FONT_STACKS[f.id] },
+  })),
+)
+
+const fontPick = computed({
+  get: () => theme.prefs.font,
+  set: (id: string) => setPrefs({ font: id as FontId }),
+})
 
 const CORNER_CHOICES: { id: DisplayPrefs['corners']; label: string }[] = [
   { id: 'theme', label: 'Scheme default' },
@@ -185,29 +198,23 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
       </div>
     </div>
 
-    <!-- A GRID of specimens, not a dropdown (2026-07-25, user call: "I want
-         the font picker to actually display what the fonts look like"). A
-         native <select> only styles its options per-face on some browsers,
-         and on a phone it hands rendering to the OS picker entirely — so the
-         one thing you need to see was the one thing it wouldn't show. Each
-         card renders its own name AND a house number in its own face, since
-         addresses are what this app mostly sets. -->
-    <div class="pref-block">
+    <!-- A dropdown whose every row renders in the face it names, plus a house
+         number as the specimen (addresses are what this app mostly sets).
+         It was a grid of specimen cards between 2026-07-25 and 2026-07-27,
+         because a NATIVE <select> hands its menu to the OS on a phone and so
+         can't show a face at all. AppSelect is Reka, i.e. real DOM rows we
+         style ourselves, which is what makes a dropdown viable here.
+         Opening the menu is also the only moment the bundled faces download,
+         which is later than the grid managed: it pulled all eight on page
+         load. -->
+    <div class="pref-block" data-help="appearance-font">
       <span class="pref-title">Font</span>
-      <div class="font-grid">
-        <button
-          v-for="f in FONT_CHOICES"
-          :key="f.id"
-          class="font-card"
-          :class="{ active: theme.prefs.font === f.id }"
-          :style="{ fontFamily: FONT_STACKS[f.id] }"
-          @click="setPrefs({ font: f.id })"
-        >
-          <span class="font-name">{{ f.label }}</span>
-          <span class="font-sample">123 Walnut St</span>
-          <span v-if="theme.prefs.font === f.id" class="badge font-badge">On</span>
-        </button>
-      </div>
+      <AppSelect
+        v-model="fontPick"
+        :options="fontOptions"
+        aria-label="Font"
+        :style="{ fontFamily: FONT_STACKS[theme.prefs.font] }"
+      />
     </div>
 
     <button
@@ -445,62 +452,6 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
-}
-
-/* The font dropdown wears the app's control shape and the chosen face. */
-/* Font specimens. Cards deliberately do NOT set font-family themselves —
- * the inline style on each button does, so everything inside inherits the
- * face being previewed. */
-.font-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 0.6rem;
-}
-
-.font-card {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.15rem;
-  min-height: 68px;
-  padding: 0.55rem 0.7rem;
-  border: 2px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  color: var(--text);
-  cursor: pointer;
-  text-align: left;
-  overflow: hidden;
-}
-
-.font-card.active {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
-}
-
-.font-card:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.font-name {
-  font-size: 1.05rem;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-/* A house number, because that's what this app mostly renders. */
-.font-sample {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-.font-badge {
-  position: absolute;
-  top: 0.35rem;
-  right: 0.35rem;
 }
 
 .seg-btn {

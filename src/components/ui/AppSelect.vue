@@ -2,6 +2,7 @@
 // Themed replacement for native <select>: same job, but the options render
 // as a real on-brand menu with 44px touch rows instead of the OS widget.
 // Reka UI handles keyboard nav, typeahead, aria, and positioning.
+import type { StyleValue } from 'vue'
 import {
   SelectContent,
   SelectItem,
@@ -17,6 +18,14 @@ import {
 export interface SelectOption {
   value: string
   label: string
+  /** Muted trailing text on the row — a specimen, a count, a unit. Not a
+   * description: the label still has to carry the meaning on its own. */
+  hint?: string
+  /** Inline style for this one row. Exists so the font picker can render
+   * each option in the face it names, which a native <select> cannot do on a
+   * phone (it hands the whole menu to the OS). Everything in the row
+   * inherits it, so `hint` is set in that face too. */
+  style?: StyleValue
 }
 
 // class / aria-label / etc. land on the trigger button, the element that
@@ -43,8 +52,15 @@ const model = defineModel<string>({ required: true })
     <SelectPortal>
       <SelectContent class="sel-menu" position="popper" :side-offset="6" align="start">
         <SelectViewport class="sel-viewport">
-          <SelectItem v-for="o in options" :key="o.value" class="sel-item" :value="o.value">
+          <SelectItem
+            v-for="o in options"
+            :key="o.value"
+            class="sel-item"
+            :value="o.value"
+            :style="o.style"
+          >
             <SelectItemText>{{ o.label }}</SelectItemText>
+            <span v-if="o.hint" class="sel-hint">{{ o.hint }}</span>
             <SelectItemIndicator class="sel-check">✓</SelectItemIndicator>
           </SelectItem>
         </SelectViewport>
@@ -148,6 +164,17 @@ const model = defineModel<string>({ required: true })
 .sel-item[data-state='checked'] {
   font-weight: 700;
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+/* margin-left:auto rather than relying on the parent's space-between: auto
+   margins eat the free space first, so the label stays hard left and the hint
+   sits next to the checkmark whether or not a row has one. */
+.sel-hint {
+  margin-left: auto;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sel-check {

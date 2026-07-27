@@ -42,6 +42,12 @@ export type PatternId =
   | 'stripes'
   | 'dots'
 
+/** `trebuchet`, `book` and `garamond` were dropped 2026-07-27: all three named
+ * fonts that exist only on desktop, so on a phone they rendered as the plain
+ * system sans or the plain system serif — the same face as a neighbouring
+ * choice. A stored pref naming one normalizes back to `system`
+ * (normalizeThemeSettings checks membership in FONT_STACKS), so nothing is
+ * stranded and no migration is needed. */
 export type FontId =
   | 'system'
   | 'rounded'
@@ -49,10 +55,7 @@ export type FontId =
   | 'geometric'
   | 'condensed'
   | 'legible'
-  | 'trebuchet'
   | 'serif'
-  | 'book'
-  | 'garamond'
   | 'slab'
   | 'mono'
   | 'marker'
