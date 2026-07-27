@@ -7,11 +7,14 @@
 // asking.
 //
 // Manager/admin only: recruiting is their job, and a canvasser's own asks are
-// already answered on the porch.
+// already answered on the porch. It's also the read gate on the phone numbers
+// — volunteer_phones is readable by whoever took the number down and by
+// managers, nobody else.
 import { computed, onMounted, ref } from 'vue'
 import AppShell from '@/components/AppShell.vue'
 import { avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
+import { embeddedPhone, telHref } from '@/lib/phone'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 
 interface VolunteerRow {
@@ -27,12 +30,16 @@ interface VolunteerRow {
     avatar: string | null
     color: string | null
   } | null
+  /** Null unless somebody took a number down at the door. No number, no Call
+   *  button — the same rule as every other call button in the app. */
+  phone: string | null
 }
 
 const SELECT =
   'person_id, household_id, created_at, ' +
   'person:persons(name), address:addresses(street, city), ' +
-  'canvasser:profiles(id, username, display_name, avatar, color)'
+  'canvasser:profiles(id, username, display_name, avatar, color), ' +
+  'volunteer_phones(phone)'
 
 const rows = ref<VolunteerRow[]>([])
 const loading = ref(true)
@@ -42,11 +49,14 @@ const search = ref('')
 const shown = computed(() => {
   const q = search.value.trim().toLowerCase()
   if (!q) return rows.value
+  // Digits match the number however it was punctuated at the door.
+  const digits = q.replace(/\D/g, '')
   return rows.value.filter(
     (r) =>
       (r.person?.name ?? '').toLowerCase().includes(q) ||
       (r.address?.street ?? '').toLowerCase().includes(q) ||
-      (r.address?.city ?? '').toLowerCase().includes(q),
+      (r.address?.city ?? '').toLowerCase().includes(q) ||
+      (!!digits && (r.phone ?? '').replace(/\D/g, '').includes(digits)),
   )
 })
 
@@ -81,7 +91,11 @@ onMounted(async () => {
     loadError.value = true
     return
   }
-  rows.value = data
+  type Row = Omit<VolunteerRow, 'phone'> & { volunteer_phones: unknown }
+  rows.value = (data as unknown as Row[]).map(({ volunteer_phones, ...r }) => ({
+    ...r,
+    phone: embeddedPhone(volunteer_phones),
+  }))
 })
 </script>
 
@@ -89,7 +103,7 @@ onMounted(async () => {
   <AppShell title="Volunteers">
     <div class="stack">
       <p v-if="loading" class="muted">Loading…</p>
-      <p v-else-if="loadError" class="error">Couldn’t load the list — try again.</p>
+      <p v-else-if="loadError" class="error">Couldn’t load the list. Try again.</p>
       <p v-else-if="!rows.length" class="muted">
         Nobody yet. A signer who says they’d knock doors lands here.
       </p>
@@ -104,7 +118,7 @@ onMounted(async () => {
           v-model="search"
           class="vol-search"
           type="search"
-          placeholder="Search name or street…"
+          placeholder="Search name, street or number…"
           aria-label="Search volunteers"
         />
 
@@ -117,8 +131,20 @@ onMounted(async () => {
               <span v-if="r.address" class="vol-where muted">
                 {{ r.address.street }} · {{ r.address.city }}
               </span>
+              <span v-if="r.phone" class="vol-phone">{{ r.phone }}</span>
             </div>
             <div class="row-meta">
+              <!-- The point of the page. Renders purely off the number being
+                   there, like every other call button in the app. -->
+              <a
+                v-if="r.phone"
+                class="btn btn-sm call-btn"
+                data-help="volunteers-call"
+                :href="telHref(r.phone)"
+                :aria-label="`Call ${r.person?.name ?? 'volunteer'}`"
+              >
+                Call
+              </a>
               <router-link
                 v-if="r.canvasser"
                 class="asker"
@@ -200,6 +226,23 @@ onMounted(async () => {
 
 .vol-where {
   font-size: 0.82rem;
+}
+
+/* Shown as well as dialled — a manager working the list from a desk phone
+   still needs to read it. Tabular figures so a column of numbers lines up. */
+.vol-phone {
+  font-size: 0.86rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.call-btn {
+  flex-shrink: 0;
+  border: 1.5px solid var(--accent);
+  color: var(--accent);
+  background: transparent;
+  font-weight: 700;
+  text-decoration: none;
 }
 
 .row-meta {

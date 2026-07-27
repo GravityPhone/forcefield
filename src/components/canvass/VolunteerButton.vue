@@ -14,8 +14,14 @@
 // Still one ask with one answer, and still YES-ONLY (see the migration): the
 // mark exists or it doesn't. Pressing again removes it — the same
 // tap-again-to-undo gesture as the outcome buttons above.
+//
+// A number to ring them on appears beside the button once the mark is on
+// (2026-07-26, user call) — a name on a list nobody can call is a list nobody
+// acts on. It lives in its own table with its own RLS (volunteer_phones): the
+// mark is org-readable, a member of the public's phone number is not.
 import { computed, ref, watch } from 'vue'
 import { supabase } from '@/lib/supabase'
+import { embeddedPhone } from '@/lib/phone'
 import { hapticNotify, hapticTap } from '@/lib/native'
 import { useAuthStore } from '@/stores/auth'
 import { useTalkStore } from '@/stores/talk'
@@ -29,7 +35,20 @@ const on = ref(false)
 const saving = ref(false)
 const error = ref('')
 
+/** What's in the box. */
+const phone = ref('')
+/** What's actually stored — so Save is dead until something changed, and a
+ *  blank save only issues a DELETE when there's a row to remove. */
+const savedPhone = ref('')
+const savingPhone = ref(false)
+const phoneError = ref('')
+
+// Matches the volunteer_phones CHECK constraint — reject it here with a human
+// sentence rather than surfacing a Postgres error at a door.
+const PHONE_RE = /^\+?[0-9() .-]{7,20}$/
+
 const person = computed(() => talk.selectedPerson)
+const phoneDirty = computed(() => phone.value.trim() !== savedPhone.value)
 
 // The mark is keyed on the person alone, so it reloads whenever the pick
 // changes — a primary-key lookup, cheap enough to run on every roster tap.
@@ -39,18 +58,27 @@ watch(
   person,
   async (p) => {
     error.value = ''
+    phoneError.value = ''
     on.value = false
+    phone.value = ''
+    savedPhone.value = ''
     if (!p) return
     const id = p.id
+    // One trip for both — the number embeds off its FK to this row.
     const { data } = await supabase
       .from('volunteer_interest')
-      .select('person_id')
+      .select('person_id, volunteer_phones(phone)')
       .eq('person_id', id)
       .maybeSingle()
     // The pick can move on while that's in flight — a stale answer must not
     // land on whoever is selected now.
     if (talk.selectedPerson?.id !== id) return
     on.value = !!data
+    // RLS hands the number to whoever wrote it down and to managers. Anyone
+    // else gets the mark with an empty box, which is the honest reading of
+    // "on the list, but their number isn't yours to see".
+    savedPhone.value = data ? (embeddedPhone(data.volunteer_phones) ?? '') : ''
+    phone.value = savedPhone.value
   },
   { immediate: true },
 )
@@ -74,6 +102,13 @@ async function toggle() {
     saving.value = false
     on.value = !!data
     if (data) error.value = 'Recorded by someone else.'
+    else {
+      // The number cascades off the mark (volunteer_phones' FK) — it was given
+      // so somebody could ring them about volunteering, and that's over.
+      phone.value = ''
+      savedPhone.value = ''
+      phoneError.value = ''
+    }
     return
   }
   // insert, not upsert: there's no UPDATE policy on the table (nothing about a
@@ -89,11 +124,53 @@ async function toggle() {
     // No offline queue, for appointments' reason: a knock can be replayed
     // silently, but a person volunteering is worth saying out loud if it
     // didn't save.
-    error.value = 'Couldn’t save it — try again.'
+    error.value = 'Couldn’t save it. Try again.'
     return
   }
   hapticNotify('success')
   on.value = true
+}
+
+/** Save (or clear) the callback number. Submitted explicitly — the box is
+ *  typed into mid-conversation and an autosave would fire on every digit. */
+async function savePhone() {
+  const p = person.value
+  const me = auth.profile
+  if (!p || !me || savingPhone.value || !on.value) return
+  const value = phone.value.trim()
+  const digits = value.replace(/\D/g, '').length
+  if (value && (!PHONE_RE.test(value) || digits < 7 || digits > 15)) {
+    phoneError.value = 'Needs at least 7 digits.'
+    return
+  }
+  hapticTap('light')
+  savingPhone.value = true
+  phoneError.value = ''
+  // Blank = take the number back off, same rule as /profile's own phone field.
+  // recorded_by rides along on the upsert, so it means "who last wrote this
+  // number down" — that's also the read gate, and the person fixing a typo is
+  // the person who should still be able to see it.
+  const { error: e } = value
+    ? await supabase.from('volunteer_phones').upsert({
+        person_id: p.id,
+        phone: value,
+        recorded_by: me.id,
+        updated_at: new Date().toISOString(),
+      })
+    : await supabase.from('volunteer_phones').delete().eq('person_id', p.id)
+  savingPhone.value = false
+  if (e) {
+    // Only whoever took the number down (or a manager) may change it — RLS
+    // refuses everyone else, and the primary key refuses a second number for
+    // the same person.
+    phoneError.value =
+      e.code === '42501' || e.code === '23505'
+        ? 'Someone else has their number.'
+        : 'Couldn’t save it. Try again.'
+    return
+  }
+  hapticNotify('success')
+  savedPhone.value = value
 }
 </script>
 
@@ -113,7 +190,7 @@ async function toggle() {
         !person
           ? 'Pick who from the list above'
           : on
-            ? 'On the volunteer list — tap to remove'
+            ? 'On the volunteer list. Tap to remove'
             : 'Mark them as willing to knock doors'
       "
       @click="toggle"
@@ -122,6 +199,23 @@ async function toggle() {
       Wants to volunteer
     </button>
     <span v-if="error" class="vol-error">{{ error }}</span>
+
+    <!-- The number to ring them back on, once they're on the list. A form so
+         the phone keyboard's Go key submits it, and explicitly submitted so
+         nothing is written while a number is half-typed. -->
+    <form v-if="on" class="phone-row" data-help="talk-volunteer-phone" @submit.prevent="savePhone">
+      <input
+        v-model="phone"
+        class="phone-input"
+        type="tel"
+        inputmode="tel"
+        maxlength="20"
+        placeholder="Phone number"
+        aria-label="Volunteer’s phone number"
+      />
+      <button type="submit" class="btn btn-sm phone-save" :disabled="!phoneDirty || savingPhone">Save</button>
+    </form>
+    <span v-if="phoneError" class="vol-error">{{ phoneError }}</span>
   </div>
 </template>
 
@@ -163,6 +257,36 @@ async function toggle() {
   width: 1.15rem;
   font-size: 1rem;
   line-height: 1;
+}
+
+/* Beside the button where there's room, on its own line on a phone — the two
+ * travel as one block so the box never orphans from the mark it belongs to. */
+.phone-row {
+  display: flex;
+  gap: 0.4rem;
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+/* Both 44px like the button they sit under, not the 34px .btn-sm default —
+ * this is typed on a porch, one-handed, in the sun. */
+.phone-input {
+  flex: 1 1 auto;
+  /* Without this a flex item floors at its content width and pushes the row
+   * past the screen edge — the app never scrolls sideways. */
+  min-width: 0;
+  min-height: 44px;
+}
+
+.phone-save {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding-inline: 0.9rem;
+  font-weight: 700;
+}
+
+.phone-save:disabled {
+  opacity: 0.45;
 }
 
 .vol-error {

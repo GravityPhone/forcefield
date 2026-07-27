@@ -78,6 +78,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'Marks the picked person as willing to knock doors. Press again to remove.\nNeeds a person picked, like Signed.\nYes only — nothing is recorded for a no.\nThe list is under More → Volunteers, for managers.',
       },
       {
+        heading: 'Their number',
+        target: 'talk-volunteer-phone',
+        body: 'A number to call them back on. Optional.\nSave to store it, blank and Save to take it back off.\nSeen by you and by managers, not by the rest of the org.\nGoes when the volunteer mark goes.',
+      },
+      {
         heading: 'Come back',
         target: 'talk-appointment',
         body: 'Somebody promised to be back at this door. Whoever is on the street can take it.\nThe whole list is under More → Appointments.',
@@ -279,6 +284,10 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         target: 'volunteers-list',
         body: 'Newest first. Name, where they signed, who asked, when.\nTap the asker for their profile.',
+      },
+      {
+        target: 'volunteers-call',
+        body: 'Dials the number the canvasser took down at the door.\nNo button means no number was taken.\nSearch matches digits too.',
       },
     ],
   },
