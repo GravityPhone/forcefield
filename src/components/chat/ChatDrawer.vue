@@ -4,10 +4,11 @@ import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import ChatMemberList from '@/components/chat/ChatMemberList.vue'
 import GifPicker from '@/components/chat/GifPicker.vue'
-import { useChatStore, type ChatListItem, type OutgoingFile } from '@/stores/chat'
+import { canLeaveChat, useChatStore, type ChatListItem, type OutgoingFile } from '@/stores/chat'
 import { useSquadsStore } from '@/stores/squads'
 import { useAuthStore } from '@/stores/auth'
 import { defaultSquadName } from '@/lib/squadName'
+import { localToday } from '@/lib/day'
 import { useThemeStore } from '@/stores/theme'
 import { vacStyles } from '@/lib/themes'
 import { avatarUrl } from '@/lib/avatars'
@@ -166,8 +167,48 @@ function openRoom(id: string) {
 function backToList() {
   view.value = 'list'
   membersExpanded.value = false
+  leaveArmed.value = false
   chat.closeChat()
 }
+
+// --- Leaving a room ---
+
+const leaveArmed = ref(false)
+let leaveTimer: ReturnType<typeof setTimeout> | undefined
+
+const canLeave = computed(() => canLeaveChat(chat.activeChat))
+
+/** Two taps, no dialog — the same gesture /history uses to delete a knock,
+ * for the same reason: a confirm dialog is hard to dismiss one-handed. The
+ * arming lapses on its own so a stray tap can't sit there waiting to fire. */
+function onLeaveTap() {
+  hapticTap('light')
+  clearTimeout(leaveTimer)
+  if (!leaveArmed.value) {
+    leaveArmed.value = true
+    leaveTimer = setTimeout(() => (leaveArmed.value = false), 4000)
+    return
+  }
+  leaveArmed.value = false
+  void doLeave()
+}
+
+async function doLeave() {
+  const id = chat.activeChatId
+  if (id && (await chat.leaveChat(id))) backToList()
+}
+
+// Switching rooms disarms — otherwise the second tap lands on a room you
+// never meant to leave.
+watch(
+  () => chat.activeChatId,
+  () => {
+    clearTimeout(leaveTimer)
+    leaveArmed.value = false
+  },
+)
+
+onUnmounted(() => clearTimeout(leaveTimer))
 
 // Deep links (router /chat guard, Squads page) open the drawer with a room
 // already active — follow along.
@@ -454,7 +495,13 @@ const creating = ref(false)
 const addingPeople = ref(false)
 const pickedToAdd = ref<ChatProfile[]>([])
 
-const joinableSquads = computed(() => chat.chats.filter((c) => c.kind === 'squad' && !c.isMember))
+// The exact complement of pruneOldSquadRooms: a room you can join is one it
+// would not have dropped you from. Written as `>= today` rather than
+// `=== today` so the two rules can never disagree about a room. Offering
+// yesterday's crews here would hand back the rooms just auto-left.
+const joinableSquads = computed(() =>
+  chat.chats.filter((c) => c.kind === 'squad' && !c.isMember && (c.day ?? '') >= localToday()),
+)
 
 function openComposer() {
   composing.value = true
@@ -561,6 +608,15 @@ async function addPeople() {
           @click="addingPeople = true; pickedToAdd = []"
         >
           + Add
+        </button>
+        <button
+          v-if="view === 'room' && canLeave"
+          class="head-btn head-leave"
+          :class="{ armed: leaveArmed }"
+          :aria-label="leaveArmed ? 'Tap again to leave this chat' : 'Leave this chat'"
+          @click="onLeaveTap"
+        >
+          {{ leaveArmed ? 'Leave?' : 'Leave' }}
         </button>
         <button class="head-btn head-close" aria-label="Close chat" @click="chat.closeDrawer()">✕</button>
       </header>
@@ -846,6 +902,22 @@ async function addPeople() {
 .head-close {
   color: var(--text-muted);
   font-size: 1.05rem;
+}
+
+/* Leaving is the one destructive thing in this header, so it wears the
+   danger color rather than the accent every other button here uses. Armed,
+   it fills — the second tap should look like it does something. */
+.head-leave {
+  color: var(--danger);
+}
+
+.head-leave.armed {
+  background: var(--danger);
+  color: #fff;
+}
+
+.head-leave.armed:hover {
+  background: var(--danger);
 }
 
 /* --- Room list --- */

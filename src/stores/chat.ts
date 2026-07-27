@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import { embeddedPhone } from '@/lib/phone'
+import { localDayOf, localToday } from '@/lib/day'
 import { useAuthStore } from './auth'
 import type { Chat, ChatFile, ChatKind, ChatMessage, ChatProfile, MessageReaction } from '@/types'
 
@@ -9,6 +10,17 @@ import type { Chat, ChatFile, ChatKind, ChatMessage, ChatProfile, MessageReactio
 export interface ChatListItem extends Chat {
   members: ChatProfile[]
   isMember: boolean
+  /** The day a SQUAD room belongs to (null for every other kind). A squad
+   * lasts one day, so its room does too — see pruneOldSquadRooms. */
+  day: string | null
+}
+
+/** Rooms you can actually leave. Every other kind's membership is implicit
+ * in RLS (the global room, the three team rooms), so there is no
+ * chat_members row to remove and nothing "leaving" could mean. Same test as
+ * the drawer's "+ Add" button, for the same reason. */
+export function canLeaveChat(chat: Chat | null | undefined): boolean {
+  return chat?.kind === 'squad' || chat?.kind === 'dm'
 }
 
 /** Attachment as emitted by vue-advanced-chat's composer (before upload). */
@@ -144,10 +156,12 @@ export const useChatStore = defineStore('chat', {
       this.loadingChats = true
       // chat_members has two FKs to profiles (user_id, added_by) — the embed
       // must name the user_id one explicitly or PostgREST rejects it.
+      // squads(squad_date) rides along on the squads.chat_id FK: it's what
+      // dates a crew's room, and it costs nothing to carry.
       const { data, error } = await supabase
         .from('chats')
         .select(
-          '*, chat_members(user_id, profiles!chat_members_user_id_fkey(id, username, display_name, avatar, color, member_phones(phone)))',
+          '*, squads(squad_date), chat_members(user_id, profiles!chat_members_user_id_fkey(id, username, display_name, avatar, color, member_phones(phone)))',
         )
         .order('created_at')
       this.loadingChats = false
@@ -160,9 +174,10 @@ export const useChatStore = defineStore('chat', {
       this.chatsError = ''
 
       type Row = Chat & {
+        squads: { squad_date: string }[] | null
         chat_members: { user_id: string; profiles: (ChatProfile & { member_phones?: unknown }) | null }[]
       }
-      this.chats = (data as Row[]).map((row) => {
+      const built = (data as Row[]).map((row) => {
         const members = row.chat_members
           .map((m): ChatProfile | null => {
             if (!m.profiles) return null
@@ -185,8 +200,20 @@ export const useChatStore = defineStore('chat', {
             row.kind !== 'squad' && row.kind !== 'dm'
               ? true
               : members.some((m) => m.id === this.myId),
+          // A crew and its room are created in the same transaction
+          // (create_squad), so squad_date is the truth. A room whose crew has
+          // since been deleted falls back to the local day it was made, which
+          // is the same day — squads are never created for another date.
+          day:
+            row.kind === 'squad'
+              ? (row.squads?.[0]?.squad_date ?? localDayOf(new Date(row.created_at)))
+              : null,
         }
       })
+      // Yesterday's crews are done. Drop out of their rooms BEFORE the list
+      // renders, so the drawer never shows a room it is about to remove.
+      await this.pruneOldSquadRooms(built)
+      this.chats = built
       // Team room first, leadership rooms, squads (today's crews), global, PMs.
       const rank: Record<ChatKind, number> = {
         team: 0,
@@ -197,6 +224,41 @@ export const useChatStore = defineStore('chat', {
         dm: 5,
       }
       this.chats.sort((a, b) => rank[a.kind] - rank[b.kind] || a.created_at.localeCompare(b.created_at))
+    },
+
+    /** A squad lasts one day, so its chat room stops being yours at midnight
+     * — otherwise the room list is every crew you have ever been out with,
+     * which is what it had become.
+     *
+     * This is a real membership DELETE, not a filter on the list: hiding the
+     * room locally would leave it there on the next device, and would keep
+     * feeding its messages into the unread badge (get_unread_counts scopes by
+     * is_chat_member, not by kind). RLS has always allowed removing your own
+     * chat_members row, so no migration was needed.
+     *
+     * Silent on purpose: "automatically" is the whole point, and the app
+     * already dissolves the crew itself overnight. Rejoining is one tap in
+     * the Start a chat sheet, which lists every open squad room. */
+    async pruneOldSquadRooms(rooms: ChatListItem[]) {
+      const myId = this.myId
+      if (!myId) return
+      const today = localToday()
+      const stale = rooms.filter((c) => c.kind === 'squad' && c.isMember && c.day && c.day < today)
+      if (!stale.length) return
+      const ids = stale.map((c) => c.id)
+      const { error } = await supabase
+        .from('chat_members')
+        .delete()
+        .eq('user_id', myId)
+        .in('chat_id', ids)
+      // A failed prune must leave the rooms alone rather than hide them —
+      // they'd reappear on the next load and read as a bug.
+      if (error) return
+      for (const c of stale) {
+        c.isMember = false
+        c.members = c.members.filter((m) => m.id !== myId)
+        delete this.unread[c.id]
+      }
     },
 
     // --- Unread tracking ---
@@ -557,6 +619,41 @@ export const useChatStore = defineStore('chat', {
         .from('chat_members')
         .insert({ chat_id: chatId, user_id: auth.profile.id, added_by: auth.profile.id })
       await this.loadChats()
+    },
+
+    /** Leave a room you're in. Squads and PMs only (canLeaveChat) — every
+     * other kind's membership is implicit in RLS, so there is no row to
+     * remove. Returns whether it worked; the caller navigates on true.
+     *
+     * Leaving a squad ROOM does not leave the CREW: the Squad page has its
+     * own Leave for that, and someone can perfectly well be out with a crew
+     * whose chatter they'd rather not carry. Squad rooms stay visible and
+     * open to anyone, so this is reversible from the Start a chat sheet;
+     * a PM is invite-only, which is why leaving asks twice. */
+    async leaveChat(chatId: string): Promise<boolean> {
+      const myId = this.myId
+      if (!myId) return false
+      this.sendError = ''
+      await ensureFreshSession()
+      const { error } = await supabase
+        .from('chat_members')
+        .delete()
+        .match({ chat_id: chatId, user_id: myId })
+      if (error) {
+        this.sendError = "Couldn't leave that chat. Try again."
+        return false
+      }
+      const room = this.chats.find((c) => c.id === chatId)
+      if (room) {
+        room.isMember = false
+        room.members = room.members.filter((m) => m.id !== myId)
+      }
+      delete this.unread[chatId]
+      // Don't leave the drawer pointed at a room that is no longer yours —
+      // the Squad page sets preferredChatId and would re-open it.
+      if (this.preferredChatId === chatId) this.preferredChatId = null
+      if (this.activeChatId === chatId) this.closeChat()
+      return true
     },
 
     async addMembers(chatId: string, memberIds: string[]) {
