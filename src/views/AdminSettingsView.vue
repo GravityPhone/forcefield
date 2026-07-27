@@ -134,7 +134,7 @@ async function saveAppointments() {
   <AppShell title="Admin Settings">
     <div class="stack">
       <div class="card" data-help="settings-key">
-        <h3>AI Assistant: Anthropic API Key</h3>
+        <h3>Assistant: Anthropic API Key</h3>
         <form v-if="!loading" @submit.prevent="saveKey">
           <div class="field">
             <label for="anthropic-key">API key</label>

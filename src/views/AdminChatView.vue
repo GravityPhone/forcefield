@@ -513,7 +513,7 @@ async function send() {
 </script>
 
 <template>
-  <AppShell title="AI Chat">
+  <AppShell title="Forcefield Assistant">
     <div class="chat card">
       <div class="chat-bar">
         <button

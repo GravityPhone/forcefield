@@ -6,10 +6,10 @@
 // src/lib/stats.ts.
 //
 // UI model (reworked 2026-07-21): NO global filter bar. The top of the page
-// is tabs only; each tab carries its own scope — day chips on every tab, an
-// area chip picker inside Areas, and tap-to-drill everywhere else (bars,
-// dots, and table rows open the thing they name; drill views cross-link
-// between tabs). Teaching copy lives in the per-tab help sheets
+// is tabs only; each tab carries its own scope — day chips on every tab, and
+// tap-to-drill everywhere else (bars, dots, and table rows open the thing
+// they name; drill views cross-link between tabs). Teaching copy lives in the
+// per-tab help sheets
 // (ANALYTICS_TAB_HELP → AppShell's "?"), never in chart subtitles — those
 // stay at 2–3 word hints. (A logistic-regression "Predictor" tab existed
 // until 2026-07-14 — removed as more than managers needed; stats.ts keeps
@@ -25,7 +25,6 @@ import Heatmap from '@/components/charts/Heatmap.vue'
 import ScatterChart from '@/components/charts/ScatterChart.vue'
 import type { BarItem } from '@/components/charts/BarChart.vue'
 import type { ScatterPoint } from '@/components/charts/ScatterChart.vue'
-import AppSelect from '@/components/ui/AppSelect.vue'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { OUTCOMES } from '@/lib/outcomes'
 import {
@@ -63,7 +62,6 @@ interface Knock {
   weekday: number // 0 = Sunday
   household: string
   canvasser: string
-  city: string
   squad: string
   turf: string
   attempt: number
@@ -83,7 +81,9 @@ const loading = ref(true)
 const loadNote = ref('Counting knocks…')
 const loadError = ref('')
 const knocks = shallowRef<Knock[]>([])
-const cityAddressTotals = shallowRef<Map<string, number>>(new Map())
+/** Every address on file. Range-independent by nature — the denominator for
+ * "doors never knocked". */
+const addressTotal = ref(0)
 /** Doors currently sitting in each turf (by turf name) — the denominator for
  * turf coverage. Current cut only; historical knocks keep their stamped name
  * even if that turf no longer exists (they just get no coverage bar). */
@@ -143,9 +143,9 @@ onMounted(async () => {
         knockCount ?? 0,
         (n) => (loadNote.value = `Loading knocks… ${fmtCount(n)} / ${fmtCount(knockCount ?? 0)}`),
       ),
-      fetchAllPages<{ id: string; city: string; turf_id: string | null }>(
+      fetchAllPages<{ id: string; turf_id: string | null }>(
         'addresses',
-        'id, city, turf_id',
+        'id, turf_id',
         addrCount ?? 0,
         () => {},
       ),
@@ -189,10 +189,7 @@ onMounted(async () => {
       canceled: a.status === 'canceled',
     }))
 
-    const cityOf = new Map(addrs.map((a) => [a.id, a.city]))
-    const totals = new Map<string, number>()
-    for (const a of addrs) totals.set(a.city, (totals.get(a.city) ?? 0) + 1)
-    cityAddressTotals.value = totals
+    addressTotal.value = addrs.length
     // Doors per turf, resolved to the TOP-LEVEL turf name — same resolution
     // the knock stamps use, so numerator and denominator agree.
     const turfById = new Map(turfs.map((t) => [t.id, t]))
@@ -211,7 +208,7 @@ onMounted(async () => {
     canvasserNames.value = new Map(profs.map((p) => [p.id, p.display_name || p.username]))
 
     loadNote.value = 'Crunching…'
-    knocks.value = enrich(rows, cityOf)
+    knocks.value = enrich(rows)
   } catch (e) {
     loadError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -247,7 +244,7 @@ const CHART_OUTCOMES = [...OUTCOMES].sort(
   (a, b) => Number(CONVERSATION.has(b.value)) - Number(CONVERSATION.has(a.value)),
 )
 
-function enrich(rows: KnockRow[], cityOf: Map<string, string>): Knock[] {
+function enrich(rows: KnockRow[]): Knock[] {
   const parsed = rows
     .filter((r) => r.household_id)
     .map((r) => {
@@ -260,7 +257,6 @@ function enrich(rows: KnockRow[], cityOf: Map<string, string>): Knock[] {
         weekday: d.getDay(),
         household: r.household_id!,
         canvasser: r.canvasser_id,
-        city: cityOf.get(r.household_id!) ?? 'Unknown',
         squad: r.squad_name ?? NO_SQUAD,
         turf: r.turf_name ?? NO_TURF,
         attempt: 0,
@@ -385,9 +381,15 @@ function pickRange(v: RangeKey) {
 // "Turf" is singular everywhere it's user-facing (2026-07-26, user call:
 // "wherever we're selecting it, they're both plural in reality"). The tab id
 // stays `turfs` — it keys ANALYTICS_TAB_HELP and the focus switch.
+// An "Areas" tab (sign rate / answer rate / coverage by town, taken from
+// addresses.city) sat second until 2026-07-27. Removed: the demo canvasses
+// Marysville and nothing else, so every chart on it was one bar. The user
+// wants CUSTOM areas here in the future — a manager drawing their own regions
+// rather than the address's own town — so rebuild it around that, not around
+// the city column. Everything it needed is still in memory: the whole knock
+// set, and the shared drill panel takes any predicate over it.
 const ALL_TABS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'areas', label: 'Areas' },
   { id: 'turfs', label: 'Turf' },
   { id: 'squads', label: 'Squads' },
   { id: 'appointments', label: 'Appointments' },
@@ -407,25 +409,22 @@ const tab = ref<TabId>('overview')
 const helpTopic = computed(() => ANALYTICS_TAB_HELP[tab.value])
 
 // ---------------------------------------------------------------- drill focus
-// Areas/Turfs/Squads/Canvassers each hold a focused entity; the focus panel
-// (one shared template block) replaces the tab's compare view. Focus sticks
-// per tab, so flipping away and back keeps your place — the back chip clears.
+// Turf/Squads/Canvassers each hold a focused entity; the focus panel (one
+// shared template block) replaces the tab's compare view. Focus sticks per
+// tab, so flipping away and back keeps your place — the back chip clears.
 
-const areaFocus = ref('')
 const turfFocus = ref('')
 const squadFocus = ref('')
 const canvasserFocus = ref('') // profile id
 
 interface Focus {
-  kind: 'area' | 'turf' | 'squad' | 'canvasser'
+  kind: 'turf' | 'squad' | 'canvasser'
   label: string
   all: string
 }
 
 const focus = computed<Focus | null>(() => {
   switch (tab.value) {
-    case 'areas':
-      return areaFocus.value ? { kind: 'area', label: areaFocus.value, all: 'All areas' } : null
     case 'turfs':
       return turfFocus.value ? { kind: 'turf', label: turfFocus.value, all: 'All turf' } : null
     case 'squads':
@@ -444,8 +443,7 @@ const focus = computed<Focus | null>(() => {
 })
 
 function clearFocus() {
-  if (tab.value === 'areas') areaFocus.value = ''
-  else if (tab.value === 'turfs') turfFocus.value = ''
+  if (tab.value === 'turfs') turfFocus.value = ''
   else if (tab.value === 'squads') squadFocus.value = ''
   else if (tab.value === 'canvassers') canvasserFocus.value = ''
 }
@@ -457,8 +455,6 @@ const focusPick = computed<((k: Knock) => boolean) | null>(() => {
   const f = focus.value
   if (!f) return null
   switch (f.kind) {
-    case 'area':
-      return (k) => k.city === f.label
     case 'turf':
       return (k) => k.turf === f.label
     case 'squad':
@@ -474,10 +470,6 @@ const focusKnocks = computed<Knock[]>(() => {
 })
 
 // Cross-tab jumps: rankings inside a focus panel open THEIR entity's tab.
-function openArea(item: BarItem) {
-  areaFocus.value = item.label
-  tab.value = 'areas'
-}
 function openTurf(item: BarItem) {
   turfFocus.value = item.label
   tab.value = 'turfs'
@@ -663,14 +655,8 @@ function rateItem(label: string, hits: number, of: number, unit: string, id?: st
 
 // ---------------------------------------------------------------- overview
 
-/** Every address on file, so "how much of the county is left" can be
- * answered. Range-independent on purpose: a door nobody has ever knocked is
- * not a fact about the last 30 days. */
-const addressTotal = computed(() => {
-  let n = 0
-  for (const v of cityAddressTotals.value.values()) n += v
-  return n
-})
+/** "How much of the county is left" — range-independent on purpose: a door
+ * nobody has ever knocked is not a fact about the last 30 days. */
 const everKnockedDoors = computed(() => new Set(knocks.value.map((k) => k.household)).size)
 
 const kpis = computed<Tile[]>(() => {
@@ -759,31 +745,7 @@ const outcomeStack = computed(() => {
 
 const outcomeMix = computed(() => mixFor(filtered.value))
 
-// ---------------------------------------------------------------- areas
-
-/** Every area that has knocks, busiest first. A DROPDOWN since 2026-07-26
- * (user call: "rather than have them be bubbles you have to click, I'd rather
- * it be a drop down box") — the chip row grew a line every time the campaign
- * reached a new village, and a picker that reflows the page under your thumb
- * is worse than a list that opens over it. Each row carries its knock count,
- * which the chips had nowhere to put. */
-const areaNames = computed(() => {
-  const counts = new Map<string, number>()
-  for (const k of knocks.value) counts.set(k.city, (counts.get(k.city) ?? 0) + 1)
-  return [...counts.entries()].sort((a, b) => b[1] - a[1])
-})
-
-/** Reka refuses an empty-string option value, so "everything" needs a
- * sentinel of its own rather than reusing the empty focus. */
-const ALL_AREAS = '__all'
-const areaOptions = computed(() => [
-  { value: ALL_AREAS, label: 'All areas' },
-  ...areaNames.value.map(([name, n]) => ({ value: name, label: `${name} (${fmtCount(n)} knocks)` })),
-])
-const areaPick = computed({
-  get: () => areaFocus.value || ALL_AREAS,
-  set: (v: string) => (areaFocus.value = v === ALL_AREAS ? '' : v),
-})
+// ---------------------------------------------------------------- rates
 
 function rateBy(
   key: (k: Knock) => string,
@@ -834,29 +796,6 @@ function signRateBy(key: (k: Knock) => string, include: (k: Knock) => boolean = 
     : rateBy(key, (k) => k.signed, (k) => include(k) && k.conversed, 'conversations', minDen)
 }
 
-const signRateByCity = computed(() => signRateBy((k) => k.city))
-const answerRateByCity = computed(() =>
-  rateBy((k) => k.city, (k) => k.conversed, (k) => k.interacted, 'interactions', 50),
-)
-const coverageByCity = computed<BarItem[]>(() => {
-  const knocked = new Map<string, Set<string>>()
-  for (const k of filtered.value) {
-    if (!knocked.has(k.city)) knocked.set(k.city, new Set())
-    knocked.get(k.city)!.add(k.household)
-  }
-  return [...knocked.entries()]
-    .map(([city, doors]) => {
-      const total = cityAddressTotals.value.get(city) ?? doors.size
-      return {
-        label: city,
-        value: doors.size / Math.max(1, total),
-        detail: `${fmtCount(doors.size)} of ${fmtCount(total)} doors on file`,
-        note: `${fmtCount(Math.max(0, total - doors.size))} still to knock`,
-      }
-    })
-    .filter((i) => (cityAddressTotals.value.get(i.label) ?? 0) >= 50)
-    .sort((a, b) => b.value - a.value)
-})
 
 const rateRows = (items: BarItem[]) => items.map((i) => [i.label, fmtPct(i.value, 1), i.detail ?? ''])
 
@@ -1366,12 +1305,7 @@ const focusTiles = computed<Tile[]>(() => {
     { label: 'Days active', value: fmtCount(days) },
   ]
   if (f && f.kind !== 'canvasser') tiles.push({ label: 'Canvassers', value: fmtCount(people) })
-  const total =
-    f?.kind === 'turf'
-      ? turfAddressTotals.value.get(f.label)
-      : f?.kind === 'area'
-        ? cityAddressTotals.value.get(f.label)
-        : undefined
+  const total = f?.kind === 'turf' ? turfAddressTotals.value.get(f.label) : undefined
   if (total) {
     tiles.push({
       label: 'Coverage',
@@ -1442,11 +1376,6 @@ const focusRanks = computed<FocusRank[]>(() => {
   if (!f) return []
   const sub = focusKnocks.value
   switch (f.kind) {
-    case 'area':
-      return [
-        { title: 'Turf here', items: rankBy(sub, (k) => k.turf, NO_TURF), open: openTurf },
-        { title: 'Canvassers here', items: rankPeople(sub), open: openPerson },
-      ]
     case 'turf':
       return [
         { title: 'Crews here', items: rankBy(sub, (k) => k.squad, NO_SQUAD), open: openSquad },
@@ -1528,11 +1457,6 @@ const focusRanks = computed<FocusRank[]>(() => {
             <span class="muted">to</span>
             <input v-model="customTo" type="date" class="day-input" aria-label="Window ends" />
           </div>
-        </div>
-
-        <!-- The Areas tab's picker lives IN the tab, not above the page. -->
-        <div v-if="tab === 'areas'" class="area-pick" data-help="analytics-areachips">
-          <AppSelect v-model="areaPick" :options="areaOptions" small aria-label="Area" />
         </div>
 
         <!-- ============================== Focused entity (shared drill panel) -->
@@ -1629,80 +1553,6 @@ const focusRanks = computed<FocusRank[]>(() => {
               <BarChart :items="outcomeMix" :color="cat[0]" measure="Knocks logged" />
             </ChartCard>
           </div>
-        </template>
-
-        <!-- ============================== Areas (compare) -->
-        <template v-else-if="tab === 'areas'">
-          <div class="two-col">
-            <ChartCard
-              title="Sign rate by area"
-              data-help="areas-rate"
-              :subtitle="signRateSubtitle"
-              :columns="['Area', 'Sign rate', 'Detail']"
-              :rows="rateRows(signRateByCity)"
-            >
-              <div class="chip-row base-row" role="group" aria-label="Count sign rate out of">
-                <button
-                  v-for="b in RATE_BASES"
-                  :key="b.value"
-                  type="button"
-                  class="chip"
-                  :class="{ on: rateBase === b.value }"
-                  @click="rateBase = b.value"
-                >
-                  {{ b.label }}
-                </button>
-              </div>
-              <BarChart
-                :items="signRateByCity"
-                :color="cat[0]"
-                percent
-                selectable
-                measure="Sign rate"
-                :ref-value="overallRates.sign"
-                ref-label="campaign average"
-                :max="pctMax(signRateByCity, overallRates.sign)"
-                @select="openArea"
-              />
-            </ChartCard>
-
-            <ChartCard
-              title="Answer rate by area"
-              subtitle="share of interactions somebody answered"
-              :columns="['Area', 'Answer rate', 'Detail']"
-              :rows="rateRows(answerRateByCity)"
-            >
-              <BarChart
-                :items="answerRateByCity"
-                :color="cat[0]"
-                percent
-                selectable
-                measure="Answer rate"
-                :ref-value="overallRates.answer"
-                ref-label="campaign average"
-                :max="pctMax(answerRateByCity, overallRates.answer)"
-                @select="openArea"
-              />
-            </ChartCard>
-          </div>
-
-          <ChartCard
-            title="Door coverage by area"
-            data-help="areas-coverage"
-            subtitle="share of the doors on file knocked at least once"
-            :columns="['Area', 'Coverage', 'Detail']"
-            :rows="rateRows(coverageByCity)"
-          >
-            <BarChart
-              :items="coverageByCity"
-              :color="cat[0]"
-              percent
-              :max="1"
-              selectable
-              measure="Door coverage"
-              @select="openArea"
-            />
-          </ChartCard>
         </template>
 
         <!-- ============================== Turf (compare) -->
@@ -2175,13 +2025,6 @@ const focusRanks = computed<FocusRank[]>(() => {
   outline: 2px solid var(--accent);
   outline-offset: -1px;
   border-color: var(--accent);
-}
-
-/* The Areas picker. Capped so it doesn't stretch to the full column width on
-   a desktop, where a select as wide as a chart reads as a page control
-   rather than this tab's scope. */
-.area-pick {
-  max-width: 22rem;
 }
 
 /* "Per interaction / Per door knocked", inside each sign-rate card: the knob

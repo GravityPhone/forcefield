@@ -462,7 +462,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
   },
 
   '/admin/chat': {
-    title: 'AI assistant',
+    title: 'Assistant',
     sections: [
       {
         target: 'aichat-input',
@@ -525,7 +525,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'analytics-tabs',
-        body: 'The same knocks, cut seven ways. Each tab has its own help under this button.',
+        body: 'The same knocks, cut a few different ways. Each tab has its own help under this button.',
       },
       {
         heading: 'What counts as what',
@@ -551,34 +551,9 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     ],
   },
 
-  areas: {
-    title: 'Areas tab',
-    sections: [
-      {
-        heading: 'Areas',
-        target: 'analytics-areachips',
-        body: 'An area is a town or village, taken from the address. Not turf and not a crew.\nPick one from the dropdown, or open any bar, to see that area alone. Turf and canvassers inside it link on to their own tabs.',
-      },
-      { heading: 'Getting around', target: 'areas-rate', body: CARD_CONTROLS },
-      { heading: 'What counts as what', target: 'areas-rate', body: WHAT_COUNTS },
-      { heading: 'Reading these charts', target: 'areas-rate', body: READING_A_RATE },
-      {
-        heading: 'Out of what',
-        target: 'areas-rate',
-        body: 'Per conversation: out of the doors that opened, how many signed. How persuasive the conversations are.\nPer door knocked: out of every door walked up to, how many produced a signature. What an hour of knocking there is worth.\nThe chips switch every sign rate chart on the page together.',
-      },
-      {
-        heading: 'Coverage',
-        target: 'areas-coverage',
-        body: 'Share of the addresses on file in that area knocked at least once. How much ground is left, not how well it went.',
-      },
-      {
-        heading: 'Missing areas',
-        target: 'areas-rate',
-        body: 'An area with too few knocks to say anything is left off the charts and kept in the table.',
-      },
-    ],
-  },
+  // An "Areas tab" deck sat here until 2026-07-27. The tab went with it: the
+  // demo canvasses one town, so every chart on it was a single bar. See the
+  // note above ALL_TABS in AdminAnalyticsView.vue.
 
   turfs: {
     title: 'Turf tab',

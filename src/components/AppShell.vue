@@ -156,7 +156,7 @@ const moreItems = computed<NavItem[]>(() => {
       volunteers,
       myKnocks,
       ...appointments,
-      { to: '/admin/chat', label: 'AI Chat', icon: 'sparkle' },
+      { to: '/admin/chat', label: 'Assistant', icon: 'sparkle' },
       // Turf lives in the bottom tab bar now, not here.
       { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
       aboutMe,
@@ -189,7 +189,7 @@ const DEMO_ROLES: { role: AppRole; blurb: string }[] = [
   },
   {
     role: 'campaign_manager',
-    blurb: 'The command center: dashboard, turf cutting, analytics, roles, and the AI chat.',
+    blurb: 'The command center: dashboard, turf cutting, analytics, roles, and the assistant.',
   },
 ]
 
@@ -410,8 +410,8 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <!-- Desktop/tablet top tabs. AI Chat stays admin-only; the user-to-user
-         Chat link is for everyone. -->
+    <!-- Desktop/tablet top tabs. The Assistant stays admin-only; the
+         user-to-user Chat link is for everyone. -->
     <div v-if="auth.profile" ref="navWrapEl" class="admin-nav-wrap">
       <nav ref="navEl" class="admin-nav" @scroll="updateNavScrollHints">
         <template v-if="auth.profile.role === 'admin'">
@@ -427,7 +427,7 @@ onUnmounted(() => {
           <router-link to="/admin/analytics">Analytics</router-link>
           <router-link to="/admin/roles">Roles</router-link>
           <router-link to="/turf">Turf</router-link>
-          <router-link to="/admin/chat">AI Chat</router-link>
+          <router-link to="/admin/chat">Assistant</router-link>
           <router-link to="/admin/settings">Settings</router-link>
         </template>
         <router-link v-else to="/canvass">Canvass</router-link>
