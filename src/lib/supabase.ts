@@ -70,6 +70,11 @@ export async function fetchAllRows<T>(
   page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
   pageSize = 1000,
   concurrency = 4,
+  /** Called with each page's rows as they land, in order, before the whole
+   * set is ready. Lets a caller show partial results instead of holding a
+   * spinner until the last page — a 24-page read is several seconds even
+   * when nothing goes wrong. Throwing from here aborts the read. */
+  onPage?: (rows: T[]) => void,
 ): Promise<T[]> {
   const all: T[] = []
   for (let from = 0; ; from += pageSize * concurrency) {
@@ -80,6 +85,7 @@ export async function fetchAllRows<T>(
     )
     for (const rows of batch) {
       all.push(...rows)
+      if (rows.length) onPage?.(rows)
       if (rows.length < pageSize) return all
     }
   }

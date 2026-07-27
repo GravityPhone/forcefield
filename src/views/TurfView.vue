@@ -371,12 +371,29 @@ const staleDaysLabel = computed(() => {
   return first === last ? first : `${first} to ${last}`
 })
 
-function indexAddresses(rows: AddressLite[]) {
+/** Street summaries accumulate across pages (see addToIndex), so the map they
+ * are built in outlives any single call. */
+const streetSummaryByKey = new Map<
+  string,
+  { street_name: string; city: string; count: number; lo: number; hi: number }
+>()
+
+function resetIndex() {
   addressById.clear()
   streetsByKey.clear()
   streetsByName.clear()
   streetsByNorm.clear()
-  const summaries = new Map<string, { street_name: string; city: string; count: number; lo: number; hi: number }>()
+  streetSummaryByKey.clear()
+  streetSummaries = []
+}
+
+/** Fold one page of addresses into the street indexes. Kept separate from
+ * resetIndex so startup can index each page as it lands (loadCutterData)
+ * rather than holding everything back until the 24th one: the county table
+ * is several seconds of paging even on a good connection, and the whole
+ * point of this page is searching streets. */
+function addToIndex(rows: AddressLite[]) {
+  const summaries = streetSummaryByKey
   for (const a of rows) {
     addressById.set(a.id, a)
     const name = streetNameOf(a.street)
@@ -404,6 +421,13 @@ function indexAddresses(rows: AddressLite[]) {
     }
   }
   streetSummaries = [...summaries.values()]
+}
+
+/** Replace the whole index (the post-save reloadAll path, where the row set
+ * arrives complete). */
+function indexAddresses(rows: AddressLite[]) {
+  resetIndex()
+  addToIndex(rows)
 }
 
 /** Every row on a street — from memory, never the network. City given =
@@ -949,7 +973,7 @@ function* locatedCanvasDoors() {
 /** The WHOLE address table, ungeocoded rows included — street sweeps, door
  * counts, and search all run from memory so no gesture ever waits on the
  * network. ~23k slim rows ≈ a small map tile's worth of JSON. */
-async function fetchAddresses(): Promise<AddressLite[]> {
+async function fetchAddresses(onPage?: (rows: AddressLite[]) => void): Promise<AddressLite[]> {
   // 8 concurrent pages: ~23 pages of 1000 land in 3 round trips instead of 6.
   return fetchAllRows<AddressLite>(
     (from, to) =>
@@ -960,6 +984,7 @@ async function fetchAddresses(): Promise<AddressLite[]> {
         .range(from, to),
     1000,
     8,
+    onPage,
   )
 }
 
@@ -1135,6 +1160,7 @@ async function initialize() {
   // Fly to where the user is standing — cutting usually starts on the
   // ground — while the street data streams in behind the map.
   void zoomToMe()
+
   void loadCutterData()
 }
 
@@ -1172,8 +1198,16 @@ async function zoomToMe() {
  * The map is already up and interactive while this runs. */
 async function loadCutterData() {
   try {
-    const [rows] = await Promise.all([
-      fetchAddresses(),
+    // All five reads go out together, as they always have — the address
+    // paging is the slow one and the other four ride alongside it.
+    //
+    // They are deliberately still published TOGETHER, at the end. Publishing
+    // the turf list as soon as its own query landed was tried and reverted:
+    // the rows render their door counts out of the address index, so the
+    // whole dispatch list sat there reading "0 doors" until the county table
+    // finished. A turf list that says every turf is empty is worse than a
+    // turf list that isn't there yet.
+    const meta = Promise.all([
       fetchTurfs(),
       squadsStore.loadToday(),
       supabase
@@ -1192,11 +1226,32 @@ async function loadCutterData() {
           mySquadIds.value = new Set((res.data ?? []).map((r) => r.squad_id as string))
         }),
     ])
+
+    // Index and paint each page as it lands instead of holding all 24 back
+    // for the last one. Searching a street is what this page is for, and the
+    // county table is several seconds of paging even when nothing is wrong.
+    resetIndex()
+    await fetchAddresses((page) => {
+      if (unmounted) return
+      addToIndex(page)
+      for (const a of page) {
+        if (a.lat != null && a.lng != null) doorLayer?.upsertDoor(canvasDoorOf(a))
+      }
+      doorLayer?.requestRepaint()
+      // A search typed while the pages are still arriving refines itself
+      // rather than sitting on whatever the index held when it was typed.
+      if (streetQuery.value.trim().length >= 2) onStreetInput(streetQuery.value)
+    })
+    if (unmounted) return
+    // Belt and braces: the streaming upserts above skip any page that landed
+    // before the layer existed, and this also drops doors that are no longer
+    // in the table on a re-run. One pass over an already-built index.
+    doorLayer?.setDoors(locatedCanvasDoors())
+    await meta
+    if (unmounted) return
     await computeLeaderlessSquads()
     if (unmounted) return
     defaultDraftParent()
-    indexAddresses(rows)
-    doorLayer?.setDoors(locatedCanvasDoors())
     refreshStaleTurfs()
     // Every door paints on its knock status from the moment the page opens
     // (see paintForDoor), so the statuses are no longer a lazy trim-mode
