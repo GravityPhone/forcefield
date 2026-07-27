@@ -21,7 +21,18 @@
 //
 // The readout is STICKY after a finger lifts. There is no hover on a phone,
 // so clearing on release would flash the answer and take it away again.
-import { computed, ref } from 'vue'
+//
+// TWO TAPS TO DRILL (2026-07-27, user call: "it's way too touchy and it's
+// quick to link over. I have to double tap on another item in order to go over
+// to it"). A single tap used to navigate, which meant a bar could not be READ
+// without leaving the tab it was on — and reading is what the tooltip above
+// exists for. So the first tap ARMS a row (lights it, pins its readout) and
+// only a second tap on that same row emits `select`. Tapping a different row
+// just moves the arming. There is deliberately no time window: the whole
+// complaint was that the page acted too fast, and a 300ms double-tap would
+// only move the trap rather than remove it. A quick double tap still works,
+// because it is two taps on one row.
+import { computed, ref, watch } from 'vue'
 import { fmtCount, fmtPct } from '@/lib/chartTheme'
 import { useChartWidth } from './useChartWidth'
 
@@ -56,8 +67,13 @@ const props = withDefaults(
     /** What the bar length MEANS, named at the top of the tooltip so a finger
      * on a bar answers "information on what?" without leaving the chart. */
     measure?: string
+    /** Long rankings show this many rows and hide the rest behind a "Show all
+     * N" button (2026-07-27, user call: "some of these, like, just turf scraps
+     * just go on so long"). 74 turfs is 2,200px of bars nobody scrolls past.
+     * 0 disables the cap for a chart whose tail is the point. */
+    cap?: number
   }>(),
-  { percent: false, selectable: false, refLabel: 'average' },
+  { percent: false, selectable: false, refLabel: 'average', cap: 12 },
 )
 
 const emit = defineEmits<{ (e: 'select', item: BarItem): void }>()
@@ -68,6 +84,8 @@ const BAR_H = 16
 const LABEL_W = 130
 const VALUE_W = 52
 
+// Taken over EVERY item, not just the shown ones, so expanding a capped list
+// never rescales the bars already on screen.
 const axisMax = computed(() => {
   // the reference marker must stay on-axis even when every bar sits below it
   if (props.max != null) return Math.max(props.max, props.refValue ?? 0) || 1
@@ -75,18 +93,44 @@ const axisMax = computed(() => {
   for (const it of props.items) m = Math.max(m, it.hi ?? it.value)
   return Math.max(m, props.refValue ?? 0) || 1
 })
+
+const expanded = ref(false)
+const capped = computed(() => props.cap > 0 && props.items.length > props.cap)
+const shown = computed(() =>
+  capped.value && !expanded.value ? props.items.slice(0, props.cap) : props.items,
+)
+
 const plotW = computed(() => Math.max(40, width.value - LABEL_W - VALUE_W - 8))
 const w = (v: number) => (Math.min(v, axisMax.value) / axisMax.value) * plotW.value
-const height = computed(() => props.items.length * ROW_H + 4 + (props.refValue != null ? 14 : 0))
+const height = computed(() => shown.value.length * ROW_H + 4 + (props.refValue != null ? 14 : 0))
 
 const hover = ref<number | null>(null)
 const held = ref(false)
+/** Row waiting on its confirming tap. Indexes `shown`. */
+const armed = ref<number | null>(null)
 const fmt = (v: number) => (props.percent ? fmtPct(v, 1) : fmtCount(v))
+
+// An index means nothing once the rows behind it change, so re-cutting the
+// data (a day chip, a rate base, a new tab) or folding the list disarms.
+watch([() => props.items, expanded], () => {
+  armed.value = null
+  hover.value = null
+})
+
+function onRowClick(i: number) {
+  if (!props.selectable) return
+  if (armed.value === i) {
+    emit('select', shown.value[i])
+    return
+  }
+  armed.value = i
+  hover.value = i
+}
 
 function rowAt(ev: PointerEvent): number | null {
   const rect = (ev.currentTarget as SVGElement).getBoundingClientRect()
   const i = Math.floor((ev.clientY - rect.top) / ROW_H)
-  return i >= 0 && i < props.items.length ? i : null
+  return i >= 0 && i < shown.value.length ? i : null
 }
 function onDown(ev: PointerEvent) {
   held.value = true
@@ -105,7 +149,10 @@ function onLeave(ev: PointerEvent) {
 /** Tooltip sits just off the touched row, flipping above it in the bottom
  * half so it never runs off the card. */
 const tipRow = computed(() => (hover.value ?? 0) * ROW_H)
-const tipAbove = computed(() => hover.value != null && hover.value > props.items.length / 2)
+const tipAbove = computed(() => hover.value != null && hover.value > shown.value.length / 2)
+/** Only the armed row invites the second tap; a mouse hovering elsewhere
+ * afterwards is reading, not aiming. */
+const tipArmed = computed(() => props.selectable && hover.value != null && hover.value === armed.value)
 </script>
 
 <template>
@@ -126,28 +173,29 @@ const tipAbove = computed(() => hover.value != null && hover.value > props.items
           :x1="LABEL_W + w(refValue)"
           :x2="LABEL_W + w(refValue)"
           :y1="0"
-          :y2="items.length * ROW_H"
+          :y2="shown.length * ROW_H"
         />
-        <text class="ref-label" :x="LABEL_W + w(refValue)" :y="items.length * ROW_H + 11" text-anchor="middle">
+        <text class="ref-label" :x="LABEL_W + w(refValue)" :y="shown.length * ROW_H + 11" text-anchor="middle">
           {{ refLabel }}
         </text>
       </g>
       <g
-        v-for="(it, i) in items"
+        v-for="(it, i) in shown"
         :key="it.label"
         class="row"
         :class="{ sel: selectable }"
         :opacity="hover === null || hover === i ? 1 : 0.55"
-        @click="selectable && emit('select', it)"
+        @click="onRowClick(i)"
       >
-        <!-- full-row hit target, lit while it's the one being read -->
+        <!-- full-row hit target: lit while it's being read, accented once it's
+             armed and one tap from opening -->
         <rect
           :x="0"
           :y="i * ROW_H"
           :width="width"
           :height="ROW_H"
           rx="4"
-          :class="{ lit: hover === i }"
+          :class="{ lit: hover === i, armed: armed === i }"
           class="hit"
         />
         <text class="label" :x="LABEL_W - 8" :y="i * ROW_H + ROW_H / 2 + 4" text-anchor="end">
@@ -194,13 +242,21 @@ const tipAbove = computed(() => hover.value != null && hover.value > props.items
     >
       <div v-if="measure" class="tip-measure muted">{{ measure }}</div>
       <div class="tip-head">
-        <span class="tip-name">{{ items[hover].label }}</span>
-        <strong class="tip-value">{{ fmt(items[hover].value) }}</strong>
+        <span class="tip-name">{{ shown[hover].label }}</span>
+        <strong class="tip-value">{{ fmt(shown[hover].value) }}</strong>
       </div>
-      <div v-if="items[hover].detail" class="tip-detail muted">{{ items[hover].detail }}</div>
-      <div v-if="items[hover].note" class="tip-note muted">{{ items[hover].note }}</div>
+      <div v-if="shown[hover].detail" class="tip-detail muted">{{ shown[hover].detail }}</div>
+      <div v-if="shown[hover].note" class="tip-note muted">{{ shown[hover].note }}</div>
+      <div v-if="tipArmed" class="tip-open">Tap again to open</div>
     </div>
-    <p v-else class="tip-hint muted">Hold a bar for the numbers behind it</p>
+    <!-- Kept in the layout while a readout is up, so the button below it can't
+         hop under a thumb that's about to press it. -->
+    <p class="tip-hint muted" :class="{ hidden: hover !== null }">
+      Hold a bar for the numbers behind it
+    </p>
+    <button v-if="capped" type="button" class="more-btn" @click="expanded = !expanded">
+      {{ expanded ? 'Show fewer' : `Show all ${fmtCount(items.length)}` }}
+    </button>
   </div>
 </template>
 
@@ -240,9 +296,34 @@ svg {
 .hit.lit {
   fill: var(--surface-2);
 }
+.hit.armed {
+  fill: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
 .tip-hint {
   font-size: 0.74rem;
   margin: 0.25rem 0 0;
+}
+.tip-hint.hidden {
+  visibility: hidden;
+}
+.more-btn {
+  appearance: none;
+  margin-top: 0.35rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.more-btn:hover {
+  color: var(--text);
 }
 .tip {
   position: absolute;
@@ -288,6 +369,12 @@ svg {
 .tip-note {
   font-size: 0.75rem;
   line-height: 1.35;
+}
+.tip-open {
+  margin-top: 0.2rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--accent);
 }
 .row {
   transition: opacity 0.1s ease;

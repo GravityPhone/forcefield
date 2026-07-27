@@ -949,20 +949,17 @@ const scatterPoints = computed<ScatterPoint[]>(() =>
 )
 const scatterFit = computed(() => linearRegression(scatterPoints.value.map((p) => ({ x: p.x, y: p.y }))))
 
-/** The signature chart can show the whole roster, not just a leaderboard
- * cut — bars simply grow with the list. Top 12 stays as an option for
- * campaigns with more canvassers than screen. */
-const earnersScope = ref<'12' | 'all'>('all')
+/** The whole roster, longest bar first. It used to carry its own Everyone /
+ * Top 12 chip pair; BarChart's own cap does that for every long chart on the
+ * page now, and two controls for one intent is one too many. */
 const signatureEarners = computed<BarItem[]>(() =>
-  (earnersScope.value === 'all' ? canvasserStats.value : canvasserStats.value.slice(0, 12)).map(
-    (c) => ({
-      id: c.id,
-      label: c.name,
-      value: c.sigs,
-      detail: `${fmtCount(c.knocks)} knocks, ${fmtCount(c.interactions)} interactions`,
-      note: `Sign rate ${fmtPct(c.signRate, 1)}`,
-    }),
-  ),
+  canvasserStats.value.map((c) => ({
+    id: c.id,
+    label: c.name,
+    value: c.sigs,
+    detail: `${fmtCount(c.knocks)} knocks, ${fmtCount(c.interactions)} interactions`,
+    note: `Sign rate ${fmtPct(c.signRate, 1)}`,
+  })),
 )
 
 const canvasserRows = computed(() =>
@@ -1351,7 +1348,7 @@ const focusRanks = computed<FocusRank[]>(() => {
             </button>
           </div>
           <span class="scope-right muted">
-            {{ fmtCount(scopeCount) }} knocks<span v-if="showTapHint">, tap any bar to open it</span>
+            {{ fmtCount(scopeCount) }} knocks<span v-if="showTapHint">, tap once to read, again to open</span>
           </span>
         </div>
 
@@ -1835,24 +1832,6 @@ const focusRanks = computed<FocusRank[]>(() => {
               :columns="['Canvasser', 'Signatures']"
               :rows="signatureEarners.map((i) => [i.label, i.value])"
             >
-              <div class="chip-row earners">
-                <button
-                  type="button"
-                  class="chip"
-                  :class="{ on: earnersScope === 'all' }"
-                  @click="earnersScope = 'all'"
-                >
-                  Everyone ({{ canvasserStats.length }})
-                </button>
-                <button
-                  type="button"
-                  class="chip"
-                  :class="{ on: earnersScope === '12' }"
-                  @click="earnersScope = '12'"
-                >
-                  Top 12
-                </button>
-              </div>
               <BarChart
                 :items="signatureEarners"
                 :color="cat[0]"
@@ -1989,12 +1968,6 @@ const focusRanks = computed<FocusRank[]>(() => {
 .scope-right {
   font-size: 0.82rem;
   margin-left: auto;
-}
-
-/* Everyone / Top 12 chips inside the signature-earners card. */
-.earners {
-  justify-content: flex-end;
-  margin-bottom: 0.5rem;
 }
 
 /* The Areas picker. Capped so it doesn't stretch to the full column width on

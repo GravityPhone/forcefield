@@ -3,7 +3,10 @@
 // ring; hovering uses NEAREST-point search over the whole plot (nobody has to
 // land on a dot dead-center), and the hovered point's label + values show in
 // a tooltip.
-import { computed, ref } from 'vue'
+// Dots drill on the SECOND tap, like the bars: nearest-point search means a
+// tap lands on SOMEBODY whether or not you aimed at them, so one tap opening a
+// person was the touchiest control on the page. See BarChart's header.
+import { computed, ref, watch } from 'vue'
 import { niceTicks, fmtCount, fmtPct } from '@/lib/chartTheme'
 import type { LinearFit } from '@/lib/stats'
 import { useChartWidth } from './useChartWidth'
@@ -81,11 +84,23 @@ function onMove(ev: PointerEvent) {
 function onLeave(ev: PointerEvent) {
   if (ev.pointerType === 'mouse') hover.value = null
 }
+const armed = ref<number | null>(null)
+watch(
+  () => props.points,
+  () => (armed.value = null),
+)
 function onClick(ev: MouseEvent) {
   if (!props.selectable) return
   const i = nearestIdx(ev)
-  if (i != null) emit('select', props.points[i])
+  if (i == null) return
+  if (armed.value === i) {
+    emit('select', props.points[i])
+    return
+  }
+  armed.value = i
+  hover.value = i
 }
+const tipArmed = computed(() => props.selectable && hover.value != null && hover.value === armed.value)
 const fmtY = (v: number) => (props.yPercent ? fmtPct(v, 1) : fmtCount(v))
 const tooltipLeft = computed(() => {
   if (hover.value == null) return 0
@@ -131,9 +146,10 @@ const tooltipLeft = computed(() => {
         :key="i"
         :cx="px(p.x)"
         :cy="py(p.y)"
-        :r="hover === i ? 6 : 4.5"
+        :r="hover === i || armed === i ? 6 : 4.5"
         :fill="p.color ?? color"
         class="dot"
+        :class="{ armed: armed === i }"
         :opacity="hover === null || hover === i ? 1 : 0.5"
       />
     </svg>
@@ -142,6 +158,7 @@ const tooltipLeft = computed(() => {
       <div class="tt-label">{{ points[hover].label }}</div>
       <div><strong>{{ fmtCount(points[hover].x) }}</strong> <span class="muted">{{ xLabel }}</span></div>
       <div><strong>{{ fmtY(points[hover].y) }}</strong> <span class="muted">{{ yLabel }}</span></div>
+      <div v-if="tipArmed" class="tt-open">Tap again to open</div>
     </div>
   </div>
 </template>
@@ -181,6 +198,10 @@ svg.sel {
   stroke-width: 2;
   transition: r 0.08s ease;
 }
+.dot.armed {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
 .fit {
   stroke-width: 2;
   stroke-dasharray: none;
@@ -203,5 +224,10 @@ svg.sel {
 .tt-label {
   color: var(--text-muted);
   margin-bottom: 0.15rem;
+}
+.tt-open {
+  margin-top: 0.2rem;
+  font-weight: 700;
+  color: var(--accent);
 }
 </style>

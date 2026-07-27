@@ -503,6 +503,14 @@ export function helpFor(path: string): HelpTopic | null {
 const READING_A_RATE =
   'Hold a bar for the numbers behind it.\nWhisker, the thin line through a bar: how sure the number is. Short means plenty of knocks behind it. Long means few, so treat it as a guess.\nTwo bars whose whiskers overlap are not really different.\nDashed line: the whole campaign, for comparison.'
 
+/** How the cards themselves behave. Repeated on every tab, for the same reason
+ * WHAT_COUNTS is: a walkthrough starts on whichever tab you are standing on. */
+const FOLDING_CARDS = 'Tap a card heading to fold it away. It stays folded next time.'
+const CARD_CONTROLS =
+  'Two taps to open something. The first lights it up and shows its numbers, the second goes there. Tapping a different bar just moves the highlight.\n' +
+  FOLDING_CARDS +
+  '\nLong lists show the first 12. "Show all" opens the rest.'
+
 /** The one paragraph the whole page rests on. */
 const WHAT_COUNTS =
   'Knock: one logged visit. The same door twice is two knocks.\nDoor: one household, counted once however often it is knocked.\nInteraction: a knock where somebody came to the door. Signed, Not Interested, Return and Hostile count. Not Home and Skip do not.'
@@ -530,6 +538,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
         target: 'analytics-scope',
         body: 'The day chips re-cut every number on the tab. All time is the whole campaign.\nThe count on the right is how many knocks are in view.',
       },
+      { heading: 'Folding cards away', target: 'overview-trend', body: FOLDING_CARDS },
       {
         heading: 'Reading a line chart',
         target: 'overview-trend',
@@ -544,8 +553,9 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Areas',
         target: 'analytics-areachips',
-        body: 'An area is a town or village, taken from the address. Not turf and not a crew.\nPick one from the dropdown, or tap any bar, to see that area alone. Turf and canvassers inside it link on to their own tabs.',
+        body: 'An area is a town or village, taken from the address. Not turf and not a crew.\nPick one from the dropdown, or open any bar, to see that area alone. Turf and canvassers inside it link on to their own tabs.',
       },
+      { heading: 'Getting around', target: 'areas-rate', body: CARD_CONTROLS },
       { heading: 'What counts as what', target: 'areas-rate', body: WHAT_COUNTS },
       { heading: 'Reading these charts', target: 'areas-rate', body: READING_A_RATE },
       {
@@ -584,7 +594,8 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Going deeper',
         target: 'turfs-rate',
-        body: 'Tap a bar or a table row for one turf on its own: which crews worked it, who knocked it, signatures by day.',
+        body: 'Open a bar or a table row for one turf on its own: which crews worked it, who knocked it, signatures by day.\n' +
+          CARD_CONTROLS,
       },
     ],
   },
@@ -602,7 +613,8 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Going deeper',
         target: 'squads-table',
-        body: 'Tap a bar or a row for one crew: the turf it worked, its members, its signatures by day.',
+        body: 'Open a bar or a row for one crew: the turf it worked, its members, its signatures by day.\n' +
+          CARD_CONTROLS,
       },
     ],
   },
@@ -626,6 +638,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
         target: 'appt-trend',
         body: 'None of it is recorded by anyone. Kept and missed are worked out by checking the knock history against each promised window.\nBooked runs into the future. Kept cannot.',
       },
+      { heading: 'Getting around', target: 'appt-tiles', body: CARD_CONTROLS },
     ],
   },
 
@@ -653,6 +666,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
         target: 'odds-funnel',
         body: 'Doors, counted once each, at three stages: knocked, somebody came out, somebody signed.\nHold a bar for what share of the stage above it reached that stage.\nThe drop between two bars is where the campaign is losing doors.',
       },
+      { heading: 'Folding cards away', target: 'odds-heatmap', body: FOLDING_CARDS },
     ],
   },
 
@@ -668,7 +682,8 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Going deeper',
         target: 'canvassers-table',
-        body: 'Tap a dot, a bar or a row for one person: signatures by day, what their knocks turned into, the turf and crews they worked.',
+        body: 'Open a dot, a bar or a row for one person: signatures by day, what their knocks turned into, the turf and crews they worked.\n' +
+          CARD_CONTROLS,
       },
       {
         heading: 'A fair reading',
