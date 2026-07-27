@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import type { AppRole } from '@/types'
 import { useAuthStore, roleHome } from '@/stores/auth'
 import { useChatStore } from '@/stores/chat'
+import { captureScroll, recallScroll, waitForScrollRoom } from '@/lib/pageState'
 
 declare module 'vue-router' {
   interface RouteMeta {
@@ -147,9 +148,39 @@ const router = createRouter({
 
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
+
+  /**
+   * Put the page back where it was.
+   *
+   * Keep-alive (App.vue) restores everything INSIDE the page — its DOM, its
+   * refs, its map — but the window's own scroll offset isn't part of a
+   * component, so it has to be carried separately or every return lands you at
+   * the top of a page you'd scrolled halfway down. Without a scrollBehavior at
+   * all, which is what this app had, vue-router leaves the offset wherever the
+   * last page put it, so a new page could also open halfway down for no
+   * reason. Both are fixed here.
+   *
+   * Vue Router calls this after `nextTick`, so a cached page is fully back in
+   * the DOM by now and its offset is immediately reachable — the wait inside
+   * `waitForScrollRoom` only ever costs something for a page that was evicted
+   * and is still fetching.
+   */
+  async scrollBehavior(to, _from, savedPosition) {
+    // Browser back/forward carries its own position and that one wins: it is
+    // what the gesture means.
+    if (savedPosition) return savedPosition
+    const top = recallScroll(to.path)
+    if (!top) return { top: 0, left: 0 }
+    await waitForScrollRoom(top)
+    return { top, left: 0 }
+  },
 })
 
-router.beforeEach(async (to) => {
+router.beforeEach(async (to, from) => {
+  // Before anything can redirect: the offset still belongs to the page being
+  // left, and this is the last moment it does.
+  if (from.name) captureScroll(from.path)
+
   const auth = useAuthStore()
   if (!auth.ready) await auth.init()
 

@@ -1,3 +1,9 @@
+<script lang="ts">
+// See LandingView: named for App.vue's keep-alive `exclude` list. This one is a
+// gate you pass through once, so there is nothing to come back to either.
+export default { name: 'ChooseCampaignView' }
+</script>
+
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'

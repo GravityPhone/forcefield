@@ -1,3 +1,11 @@
+<script lang="ts">
+// Named so App.vue's keep-alive `exclude` matches something real rather than a
+// name inferred from the filename. The sign-in screens hold nothing worth
+// coming back to, and a cached login form would keep a typed username across a
+// log out.
+export default { name: 'LandingView' }
+</script>
+
 <script setup lang="ts">
 import AppLogo from '@/components/AppLogo.vue'
 </script>

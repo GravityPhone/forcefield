@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import AppShell from '@/components/AppShell.vue'
+import { onPageEnter, whileOnPage } from '@/lib/pageState'
 import { supabase } from '@/lib/supabase'
 import { localDayRangeISO, localToday } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
@@ -239,23 +240,34 @@ function jumpToMyRow(boardId: string) {
     ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
 }
 
-onMounted(() => {
-  void refreshAll()
-  // New knocks are the only thing that moves standings; debounce so a burst
-  // of offline-queue replays becomes one refetch.
-  channel = supabase
-    .channel('leaderboard-knocks')
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'knock_logs' }, () => {
-      if (refetchTimer) clearTimeout(refetchTimer)
-      refetchTimer = setTimeout(() => void refreshAll(), 500)
-    })
-    .subscribe()
-})
+// Standings only move while somebody is watching them: the page is kept alive
+// (App.vue), so this is tied to being on screen rather than to mount, or the
+// channel would outlive the visit and go on refetching a board nobody is
+// looking at.
+whileOnPage(
+  () => {
+    // New knocks are the only thing that moves standings; debounce so a burst
+    // of offline-queue replays becomes one refetch.
+    channel = supabase
+      .channel('leaderboard-knocks')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'knock_logs' }, () => {
+        if (refetchTimer) clearTimeout(refetchTimer)
+        refetchTimer = setTimeout(() => void refreshAll(), 500)
+      })
+      .subscribe()
+  },
+  () => {
+    if (refetchTimer) clearTimeout(refetchTimer)
+    refetchTimer = null
+    if (channel) void supabase.removeChannel(channel)
+    channel = null
+  },
+)
 
-onUnmounted(() => {
-  if (refetchTimer) clearTimeout(refetchTimer)
-  if (channel) void supabase.removeChannel(channel)
-})
+// Every knock logged while the channel was off is a standing that moved
+// without us. refreshAll already declines to overwrite the settings while the
+// Board options card is open, so an unsaved edit survives this.
+onPageEnter(() => void refreshAll())
 </script>
 
 <template>

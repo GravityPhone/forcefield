@@ -2,7 +2,7 @@
 // Themed replacement for native <select>: same job, but the options render
 // as a real on-brand menu with 44px touch rows instead of the OS widget.
 // Reka UI handles keyboard nav, typeahead, aria, and positioning.
-import { onBeforeUnmount } from 'vue'
+import { onBeforeUnmount, onDeactivated, ref } from 'vue'
 import type { StyleValue } from 'vue'
 import { pinScrollThroughLock } from '@/lib/appChrome'
 import {
@@ -55,6 +55,9 @@ const model = defineModel<string>({ required: true })
  */
 let releasePin: (() => void) | null = null
 
+/** Reka's own open state, held here so a page change can force it shut. */
+const menuOpen = ref(false)
+
 function onOpenChange(open: boolean) {
   releasePin?.()
   releasePin = open ? pinScrollThroughLock() : null
@@ -63,10 +66,20 @@ function onOpenChange(open: boolean) {
 // A route change can unmount this with the menu still up; the pin must not
 // outlive it or the page is left fixed at a negative offset.
 onBeforeUnmount(() => releasePin?.())
+
+// And since pages are kept alive (src/lib/pageState.ts) a route change usually
+// does NOT unmount this any more — it deactivates it, and the menu is rendered
+// through a portal into <body>, so it would be left floating over the next page
+// with the body still pinned. Same reasoning as BottomSheet: shut it.
+onDeactivated(() => {
+  menuOpen.value = false
+  releasePin?.()
+  releasePin = null
+})
 </script>
 
 <template>
-  <SelectRoot v-model="model" @update:open="onOpenChange">
+  <SelectRoot v-model="model" v-model:open="menuOpen" @update:open="onOpenChange">
     <SelectTrigger class="sel-trigger" :class="{ 'sel-small': small }" v-bind="$attrs">
       <SelectValue class="sel-value" />
       <svg class="sel-chevron" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">

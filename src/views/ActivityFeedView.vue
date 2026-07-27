@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import AppShell from '@/components/AppShell.vue'
 import CampaignPace from '@/components/CampaignPace.vue'
@@ -9,6 +9,7 @@ import { startOfLocalDayISO } from '@/lib/day'
 import { memberColor } from '@/lib/memberColors'
 import { OUTCOME_HEX, OUTCOME_SHORT } from '@/lib/outcomes'
 import { loadCampaignPace, type LoadedPace } from '@/lib/pace'
+import { onPageEnter, whileOnPage } from '@/lib/pageState'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { DEFAULT_FEED_SETTINGS } from '@/types'
@@ -396,23 +397,37 @@ async function onLiveKnock(raw: { id: string; occurred_at: string }) {
   if (fresh.length) items.value = [...fresh.reverse(), ...items.value].slice(0, MAX_ITEMS)
 }
 
-onMounted(() => {
+// The page is kept alive (App.vue), so leaving it does NOT unmount it, and
+// onUnmounted does not run until it is finally evicted from the cache. The
+// socket therefore hangs off being ON SCREEN — otherwise a feed you left five
+// screens ago holds a channel open and goes on appending rows nobody is
+// reading.
+whileOnPage(
+  () => {
+    channel = supabase
+      .channel('activity-feed')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'knock_logs' },
+        (payload) => void onLiveKnock(payload.new as { id: string; occurred_at: string }),
+      )
+      .subscribe()
+  },
+  () => {
+    if (channel) void supabase.removeChannel(channel)
+    channel = null
+  },
+)
+
+// Re-read on every arrival, not just the first: with the channel off while
+// away, whatever the crew logged in the meantime never arrived. This replaces
+// the day's rows and leaves the scroll position, the open options card and the
+// filter chips exactly as they were.
+onPageEnter(() => {
   void load()
   // Its own trip, unawaited — the day's rows are what the page is for and
   // shouldn't wait on the campaign's arithmetic.
   void loadCampaignPace().then((p) => (pace.value = p))
-  channel = supabase
-    .channel('activity-feed')
-    .on(
-      'postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'knock_logs' },
-      (payload) => void onLiveKnock(payload.new as { id: string; occurred_at: string }),
-    )
-    .subscribe()
-})
-
-onUnmounted(() => {
-  if (channel) void supabase.removeChannel(channel)
 })
 
 // --- Display ---

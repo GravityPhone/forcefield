@@ -4,10 +4,19 @@
  * user call: going to Canvass and back, "it's not staying on the same part of
  * the map, and it does that just fine in Scout").
  *
- * Scout stays put because App.vue's `<keep-alive>` names CanvasserHomeView and
- * nothing else, so Scout is never torn down. /turf is remounted on every visit:
- * a fresh map at the fallback centre, then a flight to geolocation, which threw
- * away the view the canvasser had deliberately set, every single trip.
+ * Scout stayed put because App.vue's `<keep-alive>` named CanvasserHomeView and
+ * nothing else, so Scout was never torn down. /turf was remounted on every
+ * visit: a fresh map at the fallback centre, then a flight to geolocation,
+ * which threw away the view the canvasser had deliberately set, every trip.
+ *
+ * SINCE LATER THAT SAME DAY EVERY PAGE IS KEPT ALIVE (src/lib/pageState.ts), so
+ * the ordinary trip to another screen and back no longer reaches this code at
+ * all — the whole component survives, map included. What this still covers is
+ * EVICTION: the cache holds a bounded number of pages, so a manager working
+ * across five or six screens can have /turf thrown out and rebuilt, and this is
+ * what stops that being visible. Worth keeping for a second reason too: it is
+ * the one piece of the page cheap enough to keep forever, so the expensive
+ * parts can be dropped without the map jumping.
  *
  * THIS BLOCK EXISTS BECAUSE `<script setup>` IS NOT MODULE SCOPE. Everything
  * declared at the top of a `<script setup>` compiles INTO the setup function,
@@ -90,6 +99,7 @@ import AppShell from '@/components/AppShell.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import type { SelectOption } from '@/components/ui/AppSelect.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
+import DoorOddsPanel from '@/components/odds/DoorOddsPanel.vue'
 import { attachPoiTapGuard, loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
@@ -112,6 +122,7 @@ import type { BadgePerson } from '@/lib/doorBadges'
 import { afterScrollUnlock } from '@/lib/appChrome'
 import { attachMapScrollGuard } from '@/lib/mapScroll'
 import type { MapScrollGuard } from '@/lib/mapScroll'
+import { onPageEnter, whileOnPage } from '@/lib/pageState'
 import {
   geocodeAndCache,
   geocodeMissing,
@@ -3781,12 +3792,40 @@ onMounted(() => {
       isFullscreen: () => isFullscreen.value,
     })
   }
-  document.addEventListener('fullscreenchange', onFullscreenChange)
-  document.addEventListener('webkitfullscreenchange', onFullscreenChange)
-  window.addEventListener('scroll', measureScroll, { passive: true })
-  window.addEventListener('resize', measureScroll)
-  measureScroll()
 })
+
+// The window listeners belong to being ON SCREEN, not to being mounted
+// (2026-07-27). The page is kept alive now, so onUnmounted no longer runs when
+// you navigate away, and a cached cutter would go on running measureScroll on
+// every scroll of every other page in the app — measuring elements sitting in
+// a detached container, to decide whether to show a jump-to-top button nobody
+// can see.
+whileOnPage(
+  () => {
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange)
+    window.addEventListener('scroll', measureScroll, { passive: true })
+    window.addEventListener('resize', measureScroll)
+    measureScroll()
+  },
+  () => {
+    document.removeEventListener('fullscreenchange', onFullscreenChange)
+    document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
+    window.removeEventListener('scroll', measureScroll)
+    window.removeEventListener('resize', measureScroll)
+  },
+)
+
+// Turfs are cut and dispatched from other screens too — a squad leader
+// splitting the crew's ground on /squad re-stamps doors this page colors. So
+// re-read them on the way back in, but NEVER while a draft is open: that is
+// somebody mid-cut, and the whole reason this page is now kept alive is that
+// the draft survives a trip to another screen. Throttled because this page's
+// reads are the most expensive in the app.
+onPageEnter(() => {
+  if (!initStarted || draftOpen.value) return
+  void fetchTurfs()
+}, 60_000)
 
 // Cards appear and disappear as the draft opens/closes and streets pile up —
 // re-measure after the DOM settles rather than polling.
@@ -3794,6 +3833,8 @@ watch([draftOpen, segments, streetMatches, selectedTurfId], () => void nextTick(
   deep: true,
 })
 
+// The eviction path — the listeners went to whileOnPage above, which has
+// already run its stop by the time this fires.
 onUnmounted(() => {
   unmounted = true
   if (indexBumpTimer) {
@@ -3804,10 +3845,6 @@ onUnmounted(() => {
   scrollGuard = null
   doorLayer?.dispose()
   cityLayer?.dispose()
-  document.removeEventListener('fullscreenchange', onFullscreenChange)
-  document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
-  window.removeEventListener('scroll', measureScroll)
-  window.removeEventListener('resize', measureScroll)
 })
 </script>
 
@@ -4202,6 +4239,15 @@ onUnmounted(() => {
               :class="{ signed: p.signed }"
             >{{ p.name }}<span v-if="p.signed" aria-hidden="true"> ✓</span></span>
           </div>
+          <!-- Managers only. Cutting turf is the moment somebody is deciding
+               where to send a crew, so this is the map where the odds are
+               most worth having. -->
+          <DoorOddsPanel
+            class="door-card-odds"
+            compact
+            :household-id="doorInfo.address.id"
+            :residents="doorInfo.roster.length"
+          />
           <p v-if="doorInfo.loading" class="muted door-card-note">Loading history…</p>
           <p v-else-if="!doorInfo.knocks.length" class="muted door-card-note">Never knocked.</p>
           <ul v-else class="door-card-list">
@@ -5330,6 +5376,10 @@ onUnmounted(() => {
 
 .door-card-x:hover {
   color: var(--danger);
+}
+
+.door-card-odds {
+  margin: 0.4rem 0;
 }
 
 .door-card-note {

@@ -1,3 +1,8 @@
+<script lang="ts">
+// See LandingView: named for App.vue's keep-alive `exclude` list.
+export default { name: 'LoginView' }
+</script>
+
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'

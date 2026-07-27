@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import AppShell from '@/components/AppShell.vue'
@@ -26,6 +26,7 @@ import type { CanvasDoor, DoorBadge, DoorPaintState } from '@/lib/doorCanvas'
 import { createBadgeFactory } from '@/lib/doorBadges'
 import { attachMapScrollGuard } from '@/lib/mapScroll'
 import type { MapScrollGuard } from '@/lib/mapScroll'
+import { onPageEnter, whileOnPage } from '@/lib/pageState'
 import { afterScrollUnlock, keepInSafeView, scrollIntoSafeView } from '@/lib/appChrome'
 import {
   OUTCOME_HEX,
@@ -143,6 +144,10 @@ const recentByMember = ref<Map<string, RecentDoor[]>>(new Map())
 const pingsByMember = ref<Map<string, MemberPing>>(new Map())
 /** Repaints the pins on a clock so staleness ages on its own — the markers
  *  are updated imperatively, so there's nothing reactive to tick here. */
+/** True only while this page is the one on screen (see whileOnPage at the
+ *  bottom). A kept-alive page goes on running its watchers while hidden, and
+ *  a couple of them reach outside this component. */
+let onSquadPage = false
 let presenceTimer: ReturnType<typeof setInterval> | undefined
 let presenceFeed: RealtimeChannel | null = null
 /** door id -> latest-knock status row (outcome + signed/person counts) —
@@ -1085,6 +1090,13 @@ function updateMemberMarker(member: ChatProfile, plink = false) {
  * no mapped turf doors at all. */
 function fitToSquad() {
   if (!map) return
+  // Already looking at the crew's ground? Then leave the map alone — the same
+  // don't-re-frame rule Scout, the "Our turf" toggle and the turf cutter all
+  // follow. This matters more now that pages are kept alive (2026-07-27): a
+  // squadmate joining reloads the dashboard, and without this the map would
+  // jump back to a whole-turf fit under someone who had zoomed into the block
+  // they were working — including on the way back from another screen.
+  if (ourTurfInView()) return
   const bounds = new google.maps.LatLngBounds()
   for (const d of turfDoors.value.values()) {
     if (d.lat != null && d.lng != null) bounds.extend({ lat: d.lat, lng: d.lng })
@@ -2033,12 +2045,16 @@ function openSquadChat() {
 // On this page, the chat drawer IS the squad's chat (2026-07-24, user call):
 // pulling the right-edge handle open here lands in the crew's room rather
 // than the room list. The store field is the whole mechanism — the drawer
-// honors it whenever it's opened without an explicit room — and it's cleared
-// on unmount so every other screen still opens on the list.
+// honors it whenever it's opened without an explicit room.
+//
+// Guarded on being on screen (2026-07-27): a cached page still runs its
+// watchers, so a crew forming while you're on another screen would otherwise
+// reach over and point the chat handle at a room you aren't looking at.
+// whileOnPage below owns setting and clearing it; this only keeps it current.
 watch(
   () => mySquad.value?.chat_id ?? null,
   (id) => {
-    chat.preferredChatId = id
+    if (onSquadPage) chat.preferredChatId = id
   },
   { immediate: true },
 )
@@ -2135,13 +2151,45 @@ function onFullscreenChange() {
 
 // --- Lifecycle ---
 
-onMounted(async () => {
-  squads.subscribeToRosters()
-  document.addEventListener('fullscreenchange', onFullscreenChange)
-  document.addEventListener('webkitfullscreenchange', onFullscreenChange)
-  await squads.loadToday()
-  subscribeToKnocks()
-})
+// Everything this page does to the world OUTSIDE itself, tied to being on
+// screen rather than to mount (2026-07-27). The page is kept alive now, so
+// onUnmounted does not run when you navigate away — it runs when the page is
+// finally evicted from the cache, which could be never. Left on mount, this
+// page would hold two realtime channels and a 30-second timer open from
+// wherever you happened to be, and — worst of the four — would leave
+// `preferredChatId` pointing at the crew's room, so the chat handle on every
+// other screen in the app would open the squad chat instead of the room list.
+whileOnPage(
+  () => {
+    squads.subscribeToRosters()
+    subscribeToKnocks()
+    // Idempotent, and it re-arms the timer as well as the channel.
+    subscribePresence()
+    onSquadPage = true
+    chat.preferredChatId = mySquad.value?.chat_id ?? null
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange)
+  },
+  () => {
+    squads.unsubscribeFromRosters()
+    if (knockFeed) void supabase.removeChannel(knockFeed)
+    knockFeed = null
+    if (presenceFeed) void supabase.removeChannel(presenceFeed)
+    presenceFeed = null
+    clearInterval(presenceTimer)
+    presenceTimer = undefined
+    onSquadPage = false
+    chat.preferredChatId = null
+    document.removeEventListener('fullscreenchange', onFullscreenChange)
+    document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
+  },
+)
+
+// A crew changes all morning, and the roster channel was off while we were
+// away. The squad watcher below only reloads the dashboard when the crew or
+// its size actually changed, so an unchanged return costs one small query and
+// moves nothing on screen.
+onPageEnter(() => void squads.loadToday())
 
 // The map div only exists while you're IN a squad (the no-squad branch has
 // no map), so init keys off the element appearing — not off mount. Firing
@@ -2169,22 +2217,16 @@ watch(
   { flush: 'post' },
 )
 
+// Only the instance's own belongings are torn down here — the live things went
+// to whileOnPage above, which has already run its stop by the time this fires.
+// This is the eviction path: the page is genuinely being destroyed.
 onUnmounted(() => {
-  squads.unsubscribeFromRosters()
-  chat.preferredChatId = null
   scrollGuard?.dispose()
   scrollGuard = null
-  if (knockFeed) void supabase.removeChannel(knockFeed)
-  if (presenceFeed) void supabase.removeChannel(presenceFeed)
-  presenceFeed = null
-  clearInterval(presenceTimer)
-  presenceTimer = undefined
   doorLayer?.dispose()
   doorLayer = null
   for (const marker of markersByMember.values()) marker.map = null
   markersByMember.clear()
-  document.removeEventListener('fullscreenchange', onFullscreenChange)
-  document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
 })
 
 // Load once the squad appears and reload whenever the squad or its roster

@@ -1,10 +1,18 @@
 <script setup lang="ts">
-import { watch } from 'vue'
+import { computed, watch } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
+import { KEPT_PAGES, NEVER_KEPT } from '@/lib/pageState'
 
 const auth = useAuthStore()
 const theme = useThemeStore()
+
+// Keying the cache on WHO is signed in is how it gets emptied: changing a
+// KeepAlive's key unmounts it, and every page it was holding goes with it.
+// There is no other way to clear one — it exposes no API — and a cache of
+// rendered pages surviving a log out would hand the next person a screenful of
+// the last one's crew, knocks and messages.
+const cacheOwner = computed(() => auth.profile?.id ?? 'guest')
 
 theme.paintFromCache()
 watch(
@@ -19,8 +27,13 @@ watch(
 </script>
 
 <template>
+  <!-- Every page keeps its instance, most-recently-used first (src/lib/
+       pageState.ts explains why this is the whole mechanism). ONE keep-alive
+       that is always mounted, deliberately: wrapping only some routes in it
+       would unmount the cache itself the moment you visited an unwrapped one,
+       taking every page it held with it. Which routes opt out is `exclude`. -->
   <router-view v-if="auth.ready || !auth.isLoggedIn" v-slot="{ Component }">
-    <keep-alive include="CanvasserHomeView">
+    <keep-alive :key="cacheOwner" :max="KEPT_PAGES" :exclude="NEVER_KEPT">
       <component :is="Component" />
     </keep-alive>
   </router-view>

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import { usernameToEmail } from '@/lib/config'
+import { forgetPageState } from '@/lib/pageState'
 import type { AppRole, Profile } from '@/types'
 
 interface AuthState {
@@ -159,6 +160,10 @@ export const useAuthStore = defineStore('auth', {
       await supabase.auth.signOut()
       this.session = null
       this.profile = null
+      // Where each page was scrolled to. The cached PAGES themselves go with
+      // the profile id — App.vue keys the keep-alive on it — and this is the
+      // one piece of that memory living outside it.
+      forgetPageState()
       // Drop the offline turf copy on the way out (2026-07-26). It holds real
       // names and addresses for a few hundred doors, and once the cache became
       // automatic — no button, no Clear — signing out was the only moment left

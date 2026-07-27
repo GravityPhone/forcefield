@@ -11,6 +11,7 @@ import HelpTour from '@/components/ui/HelpTour.vue'
 import { hapticTap } from '@/lib/native'
 import { canvassGameOpen } from '@/lib/easterEgg'
 import { setChromeInsets } from '@/lib/appChrome'
+import { whileOnPage } from '@/lib/pageState'
 import { onAppResume } from '@/lib/appResume'
 import { syncTurfCache } from '@/lib/offlineCache'
 import { appointmentSettings, ensureAppointmentSettings } from '@/lib/appointments'
@@ -287,6 +288,16 @@ const tabBarEl = ref<HTMLElement | null>(null)
 let chromeResizeObserver: ResizeObserver | null = null
 
 function measureChrome() {
+  // EVERY CACHED PAGE HAS ITS OWN SHELL, AND ONLY ONE OF THEM IS ON SCREEN
+  // (2026-07-27). AppShell sits inside each view rather than around the router
+  // view, so with pages kept alive there are now several of these at once, and
+  // all but one live in the detached container KeepAlive parks hidden subtrees
+  // in. A detached element measures 0 in every direction, and these numbers are
+  // GLOBAL — one hidden shell answering its ResizeObserver would publish
+  // `--app-top-h: 0px` and drop the header out of every scroll calculation in
+  // the app. `isConnected` is exactly the question being asked: am I the shell
+  // that is actually on screen?
+  if (!headerEl.value?.isConnected) return
   const header = headerEl.value?.getBoundingClientRect().height ?? 0
   // The nav row sticks below the header, so the header's own height is what
   // it stops at — published separately for that.
@@ -325,6 +336,32 @@ onMounted(() => {
 // The tab bar and the desktop nav row both mount once the profile loads —
 // re-observe whenever either arrives or is replaced.
 watch([headerEl, navWrapEl, tabBarEl], observeChrome)
+
+/**
+ * Is THIS shell the one on screen? False for the shells belonging to pages
+ * sitting in the keep-alive cache (2026-07-27).
+ *
+ * It gates the app-wide chrome below — the chat drawer, the help tour, the
+ * easter-egg game — so exactly one of each exists no matter how many pages are
+ * cached. Their state all lives in stores, so the one that renders is the one
+ * that matters, and mounting five chat drawers (each able to pull in the
+ * ~400 kB chat widget, each with its own shadow-root MutationObserver) to keep
+ * four of them detached would be pure waste. This also keeps the behaviour
+ * identical to before pages were cached, when the shell was rebuilt on every
+ * navigation anyway.
+ */
+const onScreen = ref(false)
+whileOnPage(
+  () => {
+    onScreen.value = true
+    // Republish this shell's measurements: the numbers are global, and the
+    // shell that just went off screen was the one keeping them up to date.
+    void nextTick(measureChrome)
+  },
+  () => {
+    onScreen.value = false
+  },
+)
 
 // --- Keeping today's doors on the device ---
 //
@@ -462,10 +499,10 @@ onUnmounted(() => {
     <!-- User-to-user chat: a pull-out drawer on every screen, not a route.
          The right-edge handle opens it; the handle drags up/down to wherever
          the thumb likes. -->
-    <ChatDrawer />
+    <ChatDrawer v-if="onScreen" />
 
     <!-- Clipboard Canvass — the easter egg. Only mounts once discovered. -->
-    <CanvassGame v-if="canvassGameOpen" @close="canvassGameOpen = false" />
+    <CanvassGame v-if="onScreen && canvassGameOpen" @close="canvassGameOpen = false" />
 
     <!-- Phone bottom tab bar -->
     <nav v-if="auth.profile" ref="tabBarEl" class="tab-bar" aria-label="Primary">
@@ -548,7 +585,7 @@ onUnmounted(() => {
 
     <!-- Per-screen help ("?" in the header): a step-by-step walkthrough that
          rings the control each step is about. -->
-    <HelpTour v-model:open="helpOpen" :topic="activeHelp" />
+    <HelpTour v-if="onScreen" v-model:open="helpOpen" :topic="activeHelp" />
   </div>
 </template>
 

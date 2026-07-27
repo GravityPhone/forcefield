@@ -13,9 +13,10 @@
 // door inside the window means somebody went back. Everything else the row
 // says comes from the clock. `status` in the DB records only the one thing a
 // knock can't imply — that a human called it off.
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
+import { onPageEnter } from '@/lib/pageState'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { hapticTap } from '@/lib/native'
 import {
@@ -107,7 +108,11 @@ async function loadKnocks(appts: ApptRow[], since: Date) {
   knockTimes.value = by
 }
 
-onMounted(async () => {
+// On arrival, not just on mount: the page is kept alive (App.vue), and
+// somebody books a return at a door every few minutes. The reload swaps the
+// rows underneath and leaves the scroll position and the Upcoming/Today/Past
+// and Mine-only chips where they were.
+onPageEnter(async () => {
   await ensureAppointmentSettings()
   // Switched off campaign-wide: nothing to fetch, and the page says so.
   if (!appointmentSettings.value.enabled) {

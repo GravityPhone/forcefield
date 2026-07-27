@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
+import { onPageEnter } from '@/lib/pageState'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import { useTalkStore } from '@/stores/talk'
@@ -39,7 +40,11 @@ const query = ref('')
 type OutcomeFilter = 'all' | KnockOutcome
 const outcomeFilter = ref<OutcomeFilter>('all')
 
-onMounted(async () => {
+// Re-read on every arrival: this is your own history, and the reason to open
+// it is usually that you have just knocked some doors. The page is kept alive
+// (App.vue), so without this it would still be showing the list from the last
+// time you looked. Search text and the outcome chips survive the swap.
+onPageEnter(async () => {
   const me = auth.profile?.id
   if (!me) return
   const { data } = await supabase

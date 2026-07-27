@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { ref } from 'vue'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import AppShell from '@/components/AppShell.vue'
+import { onPageEnter, whileOnPage } from '@/lib/pageState'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
 import type { Bulletin } from '@/types'
@@ -70,21 +71,28 @@ function formatDate(iso: string): string {
   })
 }
 
-onMounted(() => {
-  void loadBulletins()
-  // Announcements are low-volume; a full refetch keeps the author embed
-  // correct without hand-stitching realtime payloads.
-  channel = supabase
-    .channel('bulletins')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'bulletins' }, () =>
-      void loadBulletins(),
-    )
-    .subscribe()
-})
+// Tied to being on screen rather than to mount: the page is kept alive
+// (App.vue), so navigating away no longer unmounts it and a channel opened in
+// onMounted would stay open for as long as the page sat in the cache.
+whileOnPage(
+  () => {
+    // Announcements are low-volume; a full refetch keeps the author embed
+    // correct without hand-stitching realtime payloads.
+    channel = supabase
+      .channel('bulletins')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bulletins' }, () =>
+        void loadBulletins(),
+      )
+      .subscribe()
+  },
+  () => {
+    if (channel) void supabase.removeChannel(channel)
+    channel = null
+  },
+)
 
-onUnmounted(() => {
-  if (channel) void supabase.removeChannel(channel)
-})
+// Anything posted while the channel was off has to be caught on arrival.
+onPageEnter(() => void loadBulletins())
 </script>
 
 <template>

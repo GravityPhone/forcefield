@@ -3,6 +3,7 @@
 // bottom edge (matching the original hand-rolled /admin/roles editor).
 // Reka UI supplies the behavior — focus trap, Esc/backdrop dismissal, aria
 // wiring, scroll lock — and every visual comes from the theme variables.
+import { onDeactivated } from 'vue'
 import {
   DialogClose,
   DialogContent,
@@ -19,6 +20,26 @@ defineProps<{
 }>()
 
 const open = defineModel<boolean>('open', { required: true })
+
+/**
+ * A SHEET DOES NOT TRAVEL WITH ITS PAGE, SO IT HAS TO CLOSE (2026-07-27).
+ *
+ * Reka renders this through a PORTAL: the backdrop and the sheet live in
+ * <body>, not inside this component's subtree. Keep-alive (src/lib/pageState.ts)
+ * moves a deactivated page's own DOM into a hidden container and leaves
+ * teleported content exactly where it is — so a sheet still open when you
+ * navigate would stay on screen, over the next page, holding the body scroll
+ * lock that makes the whole app unscrollable. That is the "the page freezes and
+ * only a route change gets you out" failure this codebase has already been bitten
+ * by twice, except a route change is what caused it.
+ *
+ * Closing is also simply what happened before pages were cached: leaving
+ * unmounted the view and took the sheet with it. A modal is a question being
+ * asked right now, not work in progress worth coming back to.
+ */
+onDeactivated(() => {
+  open.value = false
+})
 </script>
 
 <template>

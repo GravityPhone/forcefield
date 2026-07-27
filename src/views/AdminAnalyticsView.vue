@@ -14,8 +14,9 @@
 // stay at 2–3 word hints. (A logistic-regression "Predictor" tab existed
 // until 2026-07-14 — removed as more than managers needed; stats.ts keeps
 // the machinery if it ever comes back.)
-import { computed, onMounted, ref, shallowRef } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import AppShell from '@/components/AppShell.vue'
+import { onPageEnter } from '@/lib/pageState'
 import ChartCard from '@/components/charts/ChartCard.vue'
 import TimeSeriesChart from '@/components/charts/TimeSeriesChart.vue'
 import type { TimeSeries } from '@/components/charts/TimeSeriesChart.vue'
@@ -129,7 +130,18 @@ async function fetchAllPages<T>(
   return out.flat()
 }
 
-onMounted(async () => {
+// Throttled, because this is the most expensive read in the app — the whole
+// knock log and every address id, some thirty paged requests — and the page is
+// kept alive now (App.vue), so bouncing to /squad and back would otherwise pay
+// for it again. Three minutes is still strictly cheaper than before pages were
+// cached, when every single visit paid it.
+//
+// Nothing here touches the tab, the day chips, the custom range, the drill-down
+// focus or the folded cards: the reload swaps the DATA underneath a page that
+// otherwise stays exactly as it was. `loading` is deliberately not raised
+// either, so a refresh shows the old numbers until the new ones land rather
+// than blanking a report somebody is reading.
+onPageEnter(async () => {
   try {
     const [{ count: knockCount }, { count: addrCount }] = await Promise.all([
       supabase.from('knock_logs').select('id', { count: 'exact', head: true }),
@@ -214,7 +226,7 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-})
+}, 180_000)
 
 /** TWO tiers now, one word each (2026-07-27, user call: "we wanna call a not
  * home also an interaction. But then that means we also need to have another

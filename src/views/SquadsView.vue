@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import AddMembersSheet from '@/components/squads/AddMembersSheet.vue'
 import { fadeUp } from '@/lib/motion'
+import { onPageEnter, whileOnPage } from '@/lib/pageState'
 import { useSquadsStore, type SquadListItem } from '@/stores/squads'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
@@ -29,11 +30,17 @@ const squadName = ref('')
 const picked = ref<ChatProfile[]>([])
 const creating = ref(false)
 
-onMounted(() => {
-  void squads.loadToday()
-  squads.subscribeToRosters()
-})
-onUnmounted(() => squads.unsubscribeFromRosters())
+// On screen, not mounted: the page is kept alive (App.vue), so onUnmounted no
+// longer runs when you navigate away. The store's subscribe tears down any
+// previous channel first, so this page and /squad can never both hold one.
+whileOnPage(
+  () => squads.subscribeToRosters(),
+  () => squads.unsubscribeFromRosters(),
+)
+
+// Crews form and dissolve all morning, and the channel was off while we were
+// away.
+onPageEnter(() => void squads.loadToday())
 
 function openComposer() {
   composing.value = true
