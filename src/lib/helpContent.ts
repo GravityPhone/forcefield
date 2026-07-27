@@ -115,7 +115,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       },
       {
         heading: 'No signal',
-        body: 'Knocks queue on the phone and send themselves when signal returns.',
+        body: 'Knocks queue on the phone and send themselves when signal returns.\nYour crew’s doors, who lives at each, and recent visits are kept on the phone automatically — nothing to press.\nAppointments need signal. Book those before you lose it.',
       },
     ],
   },
@@ -157,11 +157,6 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         heading: 'Assign doors',
         target: 'squad-assign',
         body: 'Pick a person, then pick doors:\n• tap pins one at a time\n• ◯ Lasso: drag a loop\n• ☝ Streets: tap a door for its whole street\nAdd and Erase set direction. Undo reverts one sweep. Save.',
-      },
-      {
-        heading: 'Going offline',
-        target: 'squad-offline',
-        body: 'Downloads the crew’s doors, who lives at each, and recent visits.\nA door in a dead zone then opens for real instead of blank.\nKnocks already queue offline on their own. Appointments do not — book those with signal.\nSave again to refresh. Clear drops it.',
       },
       {
         heading: 'Sharing where you are',

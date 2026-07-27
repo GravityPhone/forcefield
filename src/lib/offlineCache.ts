@@ -1,5 +1,5 @@
 /**
- * Take today's turf with you (2026-07-26).
+ * The crew's turf, always on the phone (2026-07-26).
  *
  * Knocks have queued offline since the first week (lib/knockQueue.ts), but
  * everything you need in order to knock — the door, who lives there, what
@@ -7,9 +7,19 @@
  * path worked perfectly and the door opened blank, which is the half of
  * offline that actually loses conversations.
  *
- * This caches the crew's assignment before you walk out: the doors, their
- * rosters, and each door's recent history. Read-through only — nothing here
- * ever writes to the server, and `submitKnock` remains the single write path.
+ * This caches the crew's assignment: the doors, their rosters, and each door's
+ * recent history. Read-through only — nothing here ever writes to the server,
+ * and `submitKnock` remains the single write path.
+ *
+ * IT IS AUTOMATIC, AND THAT WAS A DELIBERATE CORRECTION. It shipped as a "Save
+ * today's turf for offline" button at the bottom of /squad and lasted a day
+ * (user call: "I just want regular offline/online syncing so the door is always
+ * saved on the client side for whatever turf we're currently in"). The reasoning
+ * is the button's own failure mode: it had to be pressed BEFORE losing signal,
+ * which is the one moment nobody is thinking about it — and a canvasser who
+ * forgets gets exactly the blank door this module exists to prevent. So
+ * `syncTurfCache` is kicked from AppShell instead, on load and on every resume,
+ * and there is no UI at all. Don't add one back.
  *
  * APPOINTMENTS ARE DELIBERATELY NOT CACHED OR QUEUED. That's a standing
  * decision from the appointments work: a knock can be replayed silently, but
@@ -31,37 +41,63 @@ const META_KEY = 'turf'
 /** Per door — enough to see the last few visits without hauling the whole
  *  history of a street that's been worked for a month. */
 const HISTORY_PER_DOOR = 8
+/** A cache of the same turf this recent is left alone. Doors and rosters barely
+ *  move; the only thing that ages is the visit history, and that's the least
+ *  load-bearing part of what's stored. Long enough that opening the app five
+ *  times in a morning costs one refill, short enough that turf handed over at
+ *  9am is on the phone before the crew reaches it. */
+const REFRESH_AFTER_MS = 15 * 60 * 1000
 
-export interface CacheState {
-  cachedAt: string | null
-  doors: number
-}
+/** One fill at a time, however many screens ask. */
+let inFlight: Promise<number | null> | null = null
 
-/** How many visits back each door keeps, and when the cache was filled. */
-export async function cacheState(): Promise<CacheState> {
-  try {
-    const meta = await db.cacheMeta.get(META_KEY)
-    return { cachedAt: meta?.cachedAt ?? null, doors: meta?.doors ?? 0 }
-  } catch {
-    return { cachedAt: null, doors: 0 }
-  }
+/**
+ * Make sure the crew's turf is on the device, refilling only when it's stale or
+ * the assignment has changed. Safe and cheap to call on every app load and
+ * resume — that's the intended use, and repeat calls share one fill.
+ *
+ * Returns the number of cached doors, or null when there's nothing to do (no
+ * turf today, or no signal to fetch with). Never throws.
+ */
+export function syncTurfCache(userId: string): Promise<number | null> {
+  if (inFlight) return inFlight
+  inFlight = (async () => {
+    try {
+      // Cheap first: which turf, and is what we hold still it?
+      const turf = await fetchMyTurf(userId)
+      const turfIds = [...turf.mine].sort()
+      // No turf today leaves the cache ALONE rather than clearing it. Every
+      // read is a per-door fallback behind the network, so a door still sitting
+      // there can only help someone who's lost signal; wiping it the moment a
+      // squad dissolves would take the ground away mid-shift.
+      if (!turfIds.length) return null
+      const meta = await db.cacheMeta.get(META_KEY).catch(() => undefined)
+      const sameTurf =
+        !!meta?.turfIds &&
+        meta.turfIds.length === turfIds.length &&
+        meta.turfIds.every((id, i) => id === turfIds[i])
+      const fresh = !!meta && Date.now() - Date.parse(meta.cachedAt) < REFRESH_AFTER_MS
+      if (sameTurf && fresh) return meta.doors
+      return await fillTurfCache(turfIds)
+    } catch {
+      return null
+    }
+  })().finally(() => {
+    inFlight = null
+  })
+  return inFlight
 }
 
 /**
- * Download the crew's turf for offline use. Returns how many doors landed, or
- * null if it couldn't (no turf today, or no signal to fetch with).
+ * Download a turf set for offline use. Returns how many doors landed.
  *
- * Scoped to `mine` — the CREW's whole assignment, the same set "My turf" means
+ * The set is `mine` — the CREW's whole assignment, the same set "My turf" means
  * everywhere else — not the narrower `own`. You walk your crew's ground and
  * pick up a neighbour's stretch all the time; caching only your own slice
  * would blank exactly those doors.
  */
-export async function cacheTodaysTurf(userId: string): Promise<number | null> {
+async function fillTurfCache(turfIds: string[]): Promise<number | null> {
   try {
-    const turf = await fetchMyTurf(userId)
-    const turfIds = [...turf.mine]
-    if (!turfIds.length) return null
-
     // Whole-set reads, so they page — PostgREST silently caps at 1000 rows and
     // a crew's turf is routinely several hundred doors.
     const doors = await fetchAllRows<Address>((from, to) =>
@@ -137,6 +173,9 @@ export async function cacheTodaysTurf(userId: string): Promise<number | null> {
           key: META_KEY,
           cachedAt: new Date().toISOString(),
           doors: doors.length,
+          // What this copy is OF — so the next sync can tell "same turf, still
+          // fresh" from "the crew's ground changed under us".
+          turfIds,
         })
       },
     )

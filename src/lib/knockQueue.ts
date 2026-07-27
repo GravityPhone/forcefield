@@ -60,6 +60,10 @@ export interface CacheMeta {
   key: string
   cachedAt: string
   doors: number
+  /** The turf ids this copy is of — how the auto-sync tells "still the same
+   *  assignment" from "the crew's ground changed". Only `key` is indexed, so
+   *  adding fields here needs no version bump. */
+  turfIds?: string[]
 }
 
 export const db = new KnockDb()

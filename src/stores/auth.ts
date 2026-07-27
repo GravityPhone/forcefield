@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import { usernameToEmail } from '@/lib/config'
+import { clearTurfCache } from '@/lib/offlineCache'
 import type { AppRole, Profile } from '@/types'
 
 interface AuthState {
@@ -159,6 +160,12 @@ export const useAuthStore = defineStore('auth', {
       await supabase.auth.signOut()
       this.session = null
       this.profile = null
+      // Drop the offline turf copy on the way out (2026-07-26). It holds real
+      // names and addresses for a few hundred doors, and once the cache became
+      // automatic — no button, no Clear — signing out was the only moment left
+      // that plainly means "this isn't my phone any more". Queued knocks are
+      // deliberately NOT touched: an unsent knock is somebody's work.
+      void clearTurfCache()
     },
   },
 })

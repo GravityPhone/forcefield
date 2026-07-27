@@ -80,14 +80,12 @@ export function scrollIntoSafeView(el: HTMLElement, behavior: ScrollBehavior = '
   window.scrollBy({ top: delta, behavior })
 }
 
-/** How long to let a smooth scroll run before judging where it landed. Chrome
- * and Safari both finish well inside this for a screenful or two; measuring
- * earlier just reads "not there yet" and cuts the animation off. */
-const SMOOTH_SETTLE_MS = 600
 /** Gap between verification passes. */
 const VERIFY_EVERY_MS = 120
 /** How long a still-locked page is waited out before giving up entirely. */
 const LOCK_GRACE_MS = 1500
+/** Anything from a real hand ends the hold — never fight a live gesture. */
+const HAND_BACK_EVENTS = ['touchstart', 'wheel', 'keydown'] as const
 
 /**
  * True while a modal has the page scroll-locked, which makes every
@@ -99,55 +97,76 @@ export function isScrollLocked(): boolean {
 }
 
 /**
- * Put `el` in the safe band and CHECK that it stayed — correcting instantly if
- * it didn't, for a short window.
+ * HOLD `el` inside the safe band for a moment — undoing anything that moves it
+ * out, and moving nothing when it's already there.
  *
- * One scroll is not enough when the thing that moved the page was a modal
- * closing (2026-07-26, second pass at the /squad assign landing). Measured on
- * /squad at 375×812: while a sheet is up, Reka's `body { overflow: hidden }`
- * collapses the document to the viewport and the page offset is CLAMPED TO 0 —
- * and it is **not** put back on unlock, so where the page IS by the time we get
- * to move it is not where the tap left it. Three more things can undo a single
- * scroll: the layout behind the sheet is often still settling (assign mode
- * inserts a bar INSIDE its target card, above the map, which shifts the target
- * down after the scroll has started), a smooth scroll is an animation any stray
- * touch cancels, and the unlock can simply be detected late.
+ * This is a hold, not a scroll, and that distinction is the whole third pass at
+ * the /squad assign landing (2026-07-26). What a sheet does to the page offset
+ * is engine-specific and can't be relied on either way: measured here in
+ * desktop Chrome, `body { overflow: hidden }` collapses the document and CLAMPS
+ * the offset to 0, and it stays at 0 on unlock — which happens to leave the map
+ * on screen, so nothing needs to move at all. On the reporter's phone the
+ * clamp happens too but the offset IS put back on unlock, so the page pans down
+ * to where the tap was and something has to put it back. Both were reported as
+ * bugs, in opposite directions: first "it snapped to the bottom" (the restore
+ * won a race against a one-shot scroll), then "it pans down to the bottom and
+ * back up" (the restore won, then a smooth correction visibly dragged the page
+ * up again).
  *
- * So the landing is verified rather than assumed, and a locked page is waited
- * out instead of scrolled at — an attempt made under the lock is not slow, it
- * is lost. The first real move animates (the page is usually a long way off and
- * a jump loses the reader) and every correction after it is instant, because a
- * second smooth scroll would only race the first. Corrections fire only when
- * the element is genuinely outside the band — `scrollDeltaInto` returns 0
- * otherwise — so a page that landed right the first time never moves twice.
+ * So: never animate — an animation IS the visible pan, and the page is usually
+ * already showing the target anyway. Correct inside the `scroll` event, which
+ * runs before the frame is painted, so a restore is undone without ever being
+ * seen. Keep a timer as well, because the target can move rather than the page
+ * (assign mode inserts its bar INSIDE the map card, above the map) and because
+ * an engine needn't fire a scroll event for a clamp — measured: this Chrome
+ * fires none for either the clamp or the unlock. A locked page is waited out
+ * rather than scrolled at; an attempt made under the lock isn't slow, it's lost.
+ *
+ * Corrections fire only when the element is genuinely outside the band
+ * (`scrollDeltaInto` returns 0 otherwise), so a page that was already right
+ * never moves — and any touch, wheel or key hands the page straight back.
  */
 export function keepInSafeView(el: HTMLElement, holdMs = 700): void {
-  let animated = false
-  const move = (): void => {
+  let finished = false
+  const correct = (): void => {
+    if (finished) return
     // Re-read the rect every time: the element may have moved rather than the
     // page, which is exactly the assign-bar case.
     const delta = scrollDeltaInto(el.getBoundingClientRect())
-    if (delta === 0) return
-    window.scrollBy({ top: delta, behavior: animated ? 'auto' : 'smooth' })
-    animated = true
+    // Instant, deliberately. Correcting inside the scroll event lands before
+    // paint, so the position being undone is never shown; a smooth scroll would
+    // put it on screen and then animate away from it. The correction settles on
+    // itself — the scroll it causes re-enters here with a delta of 0.
+    if (delta !== 0) window.scrollBy({ top: delta, behavior: 'auto' })
   }
-  if (!isScrollLocked()) move()
-  // The settle window opens on the first tick that can actually scroll, so a
-  // slow or stalled sheet close spends the grace period, not the window.
+  const finish = (): void => {
+    if (finished) return
+    finished = true
+    window.removeEventListener('scroll', correct)
+    for (const ev of HAND_BACK_EVENTS) window.removeEventListener(ev, finish)
+  }
+  window.addEventListener('scroll', correct, { passive: true })
+  for (const ev of HAND_BACK_EVENTS) window.addEventListener(ev, finish, { passive: true })
+
+  // The hold window opens on the first tick that can actually scroll, so a slow
+  // or stalled sheet close spends the grace period, not the window.
   let deadline = 0
-  const hardStop = performance.now() + SMOOTH_SETTLE_MS + holdMs + LOCK_GRACE_MS
+  const hardStop = performance.now() + holdMs + LOCK_GRACE_MS
   const tick = (): void => {
+    if (finished) return
     const now = performance.now()
-    if (now > hardStop) return
+    if (now > hardStop) return finish()
     if (isScrollLocked()) {
       setTimeout(tick, VERIFY_EVERY_MS)
       return
     }
     if (!deadline) deadline = now + holdMs
-    move()
+    correct()
     if (now < deadline) setTimeout(tick, VERIFY_EVERY_MS)
+    else finish()
   }
-  setTimeout(tick, SMOOTH_SETTLE_MS)
+  if (!isScrollLocked()) correct()
+  setTimeout(tick, VERIFY_EVERY_MS)
 }
 
 /**

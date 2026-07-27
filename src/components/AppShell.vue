@@ -11,6 +11,8 @@ import HelpTour from '@/components/ui/HelpTour.vue'
 import { hapticTap } from '@/lib/native'
 import { canvassGameOpen } from '@/lib/easterEgg'
 import { setChromeInsets } from '@/lib/appChrome'
+import { onAppResume } from '@/lib/appResume'
+import { syncTurfCache } from '@/lib/offlineCache'
 import { appointmentSettings, ensureAppointmentSettings } from '@/lib/appointments'
 import { helpFor, type HelpTopic } from '@/lib/helpContent'
 
@@ -324,7 +326,31 @@ onMounted(() => {
 // re-observe whenever either arrives or is replaced.
 watch([headerEl, navWrapEl, tabBarEl], observeChrome)
 
+// --- Keeping today's doors on the device ---
+//
+// The shell is the one thing mounted on every logged-in screen, which is why
+// this lives here rather than on /squad or /canvass: the cache is meant to be
+// there whatever you were looking at when the signal went (2026-07-26 — it
+// replaced a "Save today's turf for offline" button, see lib/offlineCache.ts for
+// why a button was the wrong shape). Fire-and-forget, and cheap on repeat: the
+// sync does one small turf query and returns early unless the assignment
+// changed or the copy has gone stale.
+//
+// Admins never knock, so they never need the doors.
+function kickTurfCache() {
+  const p = auth.profile
+  if (!p || p.role === 'admin') return
+  void syncTurfCache(p.id)
+}
+
+// The profile arrives after mount on a cold load, so watch rather than call.
+watch(() => auth.profile?.id, kickTurfCache, { immediate: true })
+// And again whenever the app comes back — a phone that slept through the drive
+// to the turf should not still be holding yesterday's ground.
+const stopResumeSync = onAppResume(kickTurfCache)
+
 onUnmounted(() => {
+  stopResumeSync()
   navResizeObserver?.disconnect()
   chromeResizeObserver?.disconnect()
   window.removeEventListener('resize', updateNavScrollHints)

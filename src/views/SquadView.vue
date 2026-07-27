@@ -25,7 +25,7 @@ import type { CanvasDoor, DoorBadge, DoorPaintState } from '@/lib/doorCanvas'
 import { createBadgeFactory } from '@/lib/doorBadges'
 import { attachMapScrollGuard } from '@/lib/mapScroll'
 import type { MapScrollGuard } from '@/lib/mapScroll'
-import { afterScrollUnlock, keepInSafeView } from '@/lib/appChrome'
+import { afterScrollUnlock, keepInSafeView, scrollIntoSafeView } from '@/lib/appChrome'
 import {
   OUTCOME_HEX,
   OUTCOME_SHORT,
@@ -37,7 +37,6 @@ import {
 } from '@/lib/outcomes'
 import OutcomeSquare from '@/components/canvass/OutcomeSquare.vue'
 import { avatarUrl } from '@/lib/avatars'
-import { cacheState, cacheTodaysTurf, clearTurfCache, type CacheState } from '@/lib/offlineCache'
 import {
   fetchSquadPings,
   isExpired,
@@ -936,48 +935,13 @@ async function openDoor(addressId: string) {
   await router.push({ name: 'canvass' })
 }
 
-// --- Taking the turf offline ---
-//
-// Knocks have always queued offline; the door itself didn't. This downloads
-// the crew's assignment — doors, rosters, recent history — so a dead zone
-// opens a real door instead of a blank one. Appointments are deliberately not
-// included (lib/offlineCache.ts says why).
-const cacheInfo = ref<CacheState>({ cachedAt: null, doors: 0 })
-const cacheBusy = ref(false)
-const cacheMsg = ref('')
-
-async function refreshCacheState() {
-  cacheInfo.value = await cacheState()
-}
-
-async function downloadTurf() {
-  const me = auth.profile?.id
-  if (!me || cacheBusy.value) return
-  cacheBusy.value = true
-  cacheMsg.value = ''
-  const n = await cacheTodaysTurf(me)
-  cacheBusy.value = false
-  await refreshCacheState()
-  cacheMsg.value =
-    n === null
-      ? 'Couldn’t download — no turf today, or no signal.'
-      : n === 0
-        ? 'No doors on your turf yet.'
-        : ''
-}
-
-async function forgetTurf() {
-  if (cacheBusy.value) return
-  cacheBusy.value = true
-  await clearTurfCache()
-  cacheBusy.value = false
-  cacheMsg.value = ''
-  await refreshCacheState()
-}
-
-function cachedAtLabel(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-}
+// Taking the turf offline used to be a "Save today's turf for offline" button
+// here, with a saved-at line and a Clear (2026-07-26, gone the same day at the
+// user's call — "I don't want the save today's turf for offline, I just want
+// regular offline/online syncing so the door is always saved on the client side
+// for whatever turf we're currently in"). It's automatic now and lives in
+// lib/offlineCache.ts, kicked from AppShell: nothing to press, nothing to
+// forget to press before walking into a dead zone.
 
 const shareBusy = ref(false)
 
@@ -1161,6 +1125,12 @@ function fitToSquad() {
  *  - The landing is verified for a moment afterwards. Assign mode inserts the
  *    assign bar INSIDE this card, above the map, so the target moves after the
  *    scroll starts; and a smooth scroll dies to any stray touch.
+ *
+ * Since the third pass this is the BACKSTOP, not the fix: `openMemberSheet`
+ * scrolls the map up before the sheet's lock lands, so by the time Assign is
+ * tapped the page is normally already right and `keepInSafeView` moves nothing.
+ * It still matters for the ways in that skip the member sheet (the map's own
+ * Assign button and its picker) and for whatever the lock did to the offset.
  */
 function scrollMapIntoView() {
   void nextTick(() => {
@@ -1960,6 +1930,22 @@ function showMemberOnMap() {
 }
 
 async function openMemberSheet(memberId: string) {
+  // Bring the map up NOW, while the page can still be scrolled — before the
+  // sheet's scroll lock lands on the next tick (2026-07-26, user call: "when I
+  // click on a name, it's already bringing me to the top anyways, and that's
+  // fine. It just needs to stay there").
+  //
+  // This is the fix, and scrollMapIntoView is only the backstop. A sheet
+  // mangles the page offset in engine-specific ways — clamped to 0 here, put
+  // back where the tap was on the reporter's phone — so anything that waits
+  // until Assign to move the page is correcting after the fact, which is a
+  // visible pan whichever direction it goes. Move first and there is nothing
+  // left to correct: the offset the lock captures already shows the map, so
+  // restoring it is harmless and clamping it to 0 also shows the map.
+  //
+  // Instant, not smooth: an animation would still be running when the lock
+  // lands, and the lock would capture some arbitrary midpoint of it.
+  if (mapCardEl.value) scrollIntoSafeView(mapCardEl.value, 'auto')
   sheetMemberId.value = memberId
   // Frame OUR TURF, not their last stop (2026-07-25, user call): tapping a
   // person is the first move of handing them doors, so the map underneath the
@@ -2155,7 +2141,6 @@ onMounted(async () => {
   squads.subscribeToRosters()
   document.addEventListener('fullscreenchange', onFullscreenChange)
   document.addEventListener('webkitfullscreenchange', onFullscreenChange)
-  void refreshCacheState()
   await squads.loadToday()
   subscribeToKnocks()
 })
@@ -2676,24 +2661,6 @@ watch(
           <span class="add-mark" aria-hidden="true">+</span>
           <span class="add-label">Add someone</span>
         </button>
-      </div>
-
-      <!-- Take the ground with you before you lose signal. -->
-      <div class="share-card" data-help="squad-offline">
-        <button type="button" class="share-btn" :disabled="cacheBusy" @click="downloadTurf">
-          <span class="share-box" aria-hidden="true">{{ cacheInfo.doors ? '✓' : '' }}</span>
-          <span>{{ cacheBusy ? 'Downloading…' : 'Save today’s turf for offline' }}</span>
-        </button>
-        <p v-if="cacheMsg" class="muted share-note">{{ cacheMsg }}</p>
-        <div v-else-if="cacheInfo.cachedAt" class="cache-row">
-          <span class="muted share-note">
-            {{ cacheInfo.doors.toLocaleString() }} doors · saved
-            {{ cachedAtLabel(cacheInfo.cachedAt) }}
-          </span>
-          <button type="button" class="btn btn-sm" :disabled="cacheBusy" @click="forgetTurf">
-            Clear
-          </button>
-        </div>
       </div>
 
       <!-- Sharing where you are, with this crew only. Off unless you switch
@@ -3219,14 +3186,6 @@ watch(
 .share-err {
   margin: 0;
   font-size: 0.78rem;
-}
-
-.cache-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.4rem;
 }
 
 /* --- "Squad members claim their own doors": one button, bottom of the page.
