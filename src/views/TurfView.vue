@@ -1,3 +1,38 @@
+<script lang="ts">
+/**
+ * Where the map was left, remembered for the life of the page (2026-07-27,
+ * user call: going to Canvass and back, "it's not staying on the same part of
+ * the map, and it does that just fine in Scout").
+ *
+ * Scout stays put because App.vue's `<keep-alive>` names CanvasserHomeView and
+ * nothing else, so Scout is never torn down. /turf is remounted on every visit:
+ * a fresh map at the fallback centre, then a flight to geolocation, which threw
+ * away the view the canvasser had deliberately set, every single trip.
+ *
+ * THIS BLOCK EXISTS BECAUSE `<script setup>` IS NOT MODULE SCOPE. Everything
+ * declared at the top of a `<script setup>` compiles INTO the setup function,
+ * so it is per instance and a remount starts it over — a `let` up there would
+ * read exactly like this and do nothing at all. A plain `<script>` alongside it
+ * runs once, in the real module scope, and its bindings are visible to the
+ * setup block below.
+ *
+ * Module scope and NOT localStorage, deliberately: it then lasts exactly as
+ * long as keep-alive would, so this behaves like Scout rather than merely near
+ * it. A fresh page load has no memory and still opens on where the canvasser is
+ * standing, which is what `zoomToMe` is for and is right at the start of a
+ * shift. Persisting it across loads would strand somebody who drove to another
+ * town on yesterday's view, and this page has no locate button to escape with.
+ */
+export let lastCamera: { lat: number; lng: number; zoom: number } | null = null
+
+export function rememberCameraOf(map: google.maps.Map | null) {
+  const c = map?.getCenter()
+  const z = map?.getZoom()
+  if (!c || z == null) return
+  lastCamera = { lat: c.lat(), lng: c.lng(), zoom: z }
+}
+</script>
+
 <script setup lang="ts">
 // Turf cutter, SEARCH-FIRST (2026-07-24 rework): the flow is type a street
 // name, tap a match (the map zooms to it), then tap "Add to turf" on the
@@ -1328,8 +1363,8 @@ async function initialize() {
   }
 
   map = new google.maps.Map(mapEl.value, {
-    center: FALLBACK_CENTER,
-    zoom: 15,
+    center: lastCamera ? { lat: lastCamera.lat, lng: lastCamera.lng } : FALLBACK_CENTER,
+    zoom: lastCamera?.zoom ?? 15,
     mapId: GOOGLE_MAPS_MAP_ID,
     renderingType: MAP_RENDERING_TYPE,
     streetViewControl: false,
@@ -1367,6 +1402,9 @@ async function initialize() {
   // stretches via its CSS transform).
   map.addListener('idle', () => {
     doorLayer?.checkView()
+    // Every pan, zoom, turf focus and street locate ends in an idle, so this is
+    // the one place that needs to record where the map came to rest.
+    rememberCamera()
     // A cold load reads the doors on screen directly (no-op otherwise), so the
     // flight to the user's own location lands on painted ground.
     void loadViewportDoors()
@@ -1376,8 +1414,11 @@ async function initialize() {
   if (showCity.value) void cityLayer.setVisible(true)
 
   // Fly to where the user is standing — cutting usually starts on the
-  // ground — while the street data streams in behind the map.
-  void zoomToMe()
+  // ground — while the street data streams in behind the map. ONLY when there
+  // is nowhere to go back to: a remembered view is where this canvasser put the
+  // map on purpose, and flying off it was the bug. Safe to test here because
+  // the first 'idle' (which sets lastCamera) can't have fired yet.
+  if (!lastCamera) void zoomToMe()
 
   // The map exists now, so the doors on screen can be read directly. On a warm
   // load this is disarmed and does nothing.
@@ -1388,6 +1429,13 @@ async function initialize() {
  * to their own location — demo visitors across the country stay on the
  * fallback view instead of landing on an empty map. */
 const NEAR_CAMPAIGN_METERS = 60000
+
+/** Record where the map came to rest, so the next visit opens there. The store
+ * itself lives in the plain `<script>` block at the top of this file, which is
+ * the only part of an SFC that survives a remount. */
+function rememberCamera() {
+  rememberCameraOf(map)
+}
 
 /** Rough planar distance — plenty at county scale. */
 function roughMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
