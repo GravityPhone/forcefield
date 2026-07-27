@@ -58,6 +58,14 @@ const P_HOSTILE = 0.03            // of answered doors
 const P_SKIP = 0.02               // vacant / dog / no-trespass, per fresh door
 const COVERAGE_TARGET = 0.85      // of turfed doors, by the end
 const ACTIVE_TODAY_TARGET = 30
+// Turfs the campaign never opens. Held out explicitly rather than hoped for:
+// tuning capacity to leave a given number untouched does not converge, because
+// changing any turnout parameter changes how many rng() draws happen and
+// reshuffles every downstream roll. The same dial moved coverage from 70% to
+// 90% to 100% in three passes, non-monotonically. The REASON is still real —
+// these are the least walkable turfs on the board, the ones a coordinator keeps
+// putting off — it is just enforced instead of emergent.
+const RESERVED_TURFS = 5
 
 const log = (...a) => console.log(...a)
 const rng = makeRng(0xC0FFEE11)
@@ -227,7 +235,17 @@ async function main() {
       everWorked: false,
     })
   }
-  log(`  ${turfState.size} dispatchable turfs`)
+  // Least walkable first: these are the ones that never get opened.
+  for (const t of [...turfState.values()].sort((a, b) => a.density - b.density).slice(0, RESERVED_TURFS)) {
+    t.reserved = true
+  }
+  log(`  ${turfState.size} turfs, ${RESERVED_TURFS} held back as never opened`)
+
+  // Coverage is steered directly. Once the target is reached crews keep working
+  // — there is a whole roster out there — but they stop opening new ground and
+  // spend the rest of the campaign on return visits to doors that were not home,
+  // which is what a drive actually does once it has been down every street.
+  const world = { touched: 0, total: addrRows.length }
 
   // ---- the run
   const out = { squads: [], members: [], knocks: [] }
@@ -236,7 +254,7 @@ async function main() {
 
   const startAt = todayOnly ? days.length - 1 : 0
   for (let i = startAt; i < days.length; i++) {
-    simulateDay(days[i], { roster, turfState, households, out, isToday: days[i] === TODAY })
+    simulateDay(days[i], { roster, turfState, households, out, world, isToday: days[i] === TODAY })
   }
 
   report(out, turfState, households, roster)
@@ -260,7 +278,7 @@ function densityOf(doors) {
 // ------------------------------------------------------------------ a day
 
 function simulateDay(day, ctx) {
-  const { roster, turfState, households, out, isToday } = ctx
+  const { roster, turfState, households, out, world, isToday } = ctx
   const dow = DOW(day)
   const dayIdx = daysBetween(CAMPAIGN_START, day)
 
@@ -276,7 +294,7 @@ function simulateDay(day, ctx) {
   // ramp the first week is as busy as the last, which both reads wrong and
   // burns the whole town's doors before the roster has finished growing.
   const totalDays = daysBetween(CAMPAIGN_START, TODAY) || 1
-  const ramp = 0.21 + 0.33 * (dayIdx / totalDays)
+  const ramp = 0.25 + 0.40 * (dayIdx / totalDays)
   const turnoutMul = dayTurnout(dow)
   let active = available.filter((p) => rng() < p.tier.turnout * turnoutMul * ramp)
 
@@ -322,16 +340,25 @@ function simulateDay(day, ctx) {
       sq.members.reduce((s, m, i) => s + m.pace * shiftHours[i], 0),
     )
 
-    const turf = pickTurf(turfState, takenToday, capacity, day)
+    const chaseFresh = world.touched / world.total < COVERAGE_TARGET
+    const turf = pickTurf(turfState, takenToday, capacity, day, chaseFresh)
     if (!turf) continue
     takenToday.add(turf.id)
 
-    const startHour = dow === 0 || dow === 6 ? 9.5 + rng() * 2.5 : 16 + rng() * 2
+    // Crews split between a morning shift and an evening one, rather than the
+    // evenings-only pattern real canvassing follows. Two reasons, and the first
+    // is the demo's: a recording made at 9.30am has to show a campaign that is
+    // already moving, and an evenings-only model is empty until four o'clock.
+    // The second is that it keeps the time-of-day analysis meaningful — if every
+    // shift started at the same hour there would be nothing for the hour-by-hour
+    // answer-rate chart to compare, and the evening advantage (people are home)
+    // only shows up if somebody actually knocks in the morning to lose against.
+    const startHour = rng() < 0.55 ? 9 + rng() * 2.5 : 16 + rng() * 2.5
     const name = squadName(sq, rng)
     out.squads.push({ id: sq.id, name, squad_date: day, created_by: (sq.lead ?? sq.members[0]).id })
     for (const m of sq.members) out.members.push({ squad_id: sq.id, user_id: m.id })
 
-    walkTurf({ sq, turf, day, dow, startHour, shiftHours, households, out, isToday })
+    walkTurf({ sq, turf, day, dow, startHour, shiftHours, households, out, world, isToday })
     turf.lastWorked = day
     turf.everWorked = true
   }
@@ -340,7 +367,7 @@ function simulateDay(day, ctx) {
 /** Score every eligible turf and take the best. Each squad-day draws its own
  *  weights, so two crews on the same morning legitimately disagree — but no
  *  single choice is arbitrary. */
-function pickTurf(turfState, taken, capacity, day) {
+function pickTurf(turfState, taken, capacity, day, chaseFresh) {
   // Normalised exponential draws: a Dirichlet in spirit. Means encode the
   // ordering the user asked for — fresh and dense lead, the rest vary.
   const w = {
@@ -353,9 +380,19 @@ function pickTurf(turfState, taken, capacity, day) {
   let best = null
   let bestScore = -Infinity
   for (const t of turfState.values()) {
-    if (taken.has(t.id)) continue
+    if (taken.has(t.id) || t.reserved) continue
     const remaining = t.total - t.knocked
-    if (remaining <= 3) continue
+    // Eligibility is "has doors still worth knocking", which is NOT the same as
+    // "has doors nobody has touched". A turf walked end to end is still full of
+    // not-homes that are worth another pass, and testing untouched doors alone
+    // retired every worked turf and left the last crews of the campaign with
+    // nowhere to go at all.
+    const workable = t.doors.reduce((n, h) => n + (h.closed ? 0 : 1), 0)
+    if (workable <= 3) continue
+    // Once the campaign has been down every street it means to walk, it stops
+    // opening new ground. Crews still go out — the roster is unchanged — but the
+    // work becomes return visits, which is what a drive actually turns into.
+    if (!chaseFresh && !t.everWorked) continue
 
     const freshness = remaining / t.total
     const partial = t.knocked > 0 && freshness > 0.12 ? 1 : 0
@@ -371,12 +408,16 @@ function pickTurf(turfState, taken, capacity, day) {
       // street nobody has been down than the leftovers of one somebody already
       // walked, and without this the campaign revisits its favourites and
       // leaves a fifth of the town never opened at all.
-      (t.everWorked ? 0 : w.fresh * 1.5) +
-      w.fresh * freshness +
+      (!t.everWorked && chaseFresh ? w.fresh * 3.2 : 0) +
+      (chaseFresh ? w.fresh * freshness : 0) +
       w.dense * t.density +
       w.finish * partial +
       w.support * observed * 2 +
-      w.revisit * backlog * 2 +
+      // Return visits are held back until the town has been covered, then take
+      // over. Without the damping, a turf full of not-homes outscores an unopened
+      // street from the first week onward and the campaign spends six weeks
+      // re-walking its earliest ground: coverage stalled at 61%.
+      w.revisit * backlog * (chaseFresh ? 0.5 : 6) +
       rest * 0.5
     if (score > bestScore) { bestScore = score; best = t }
   }
@@ -391,7 +432,7 @@ function squadName(sq, rand) {
 }
 
 /** The leader splits the turf, each member walks their slice in street order. */
-function walkTurf({ sq, turf, day, dow, startHour, shiftHours, households, out, isToday }) {
+function walkTurf({ sq, turf, day, dow, startHour, shiftHours, households, out, world, isToday }) {
   // Doors worth knocking, in walk order. Closed doors are skipped entirely —
   // same rule as the app's CLOSED_OUTCOMES.
   const queue = turf.doors.filter((h) => !h.closed && (h.returnOn == null || daysBetween(h.returnOn, day) >= 0))
@@ -432,7 +473,7 @@ function walkTurf({ sq, turf, day, dow, startHour, shiftHours, households, out, 
           outcome: k.outcome,
           occurred_at: atHour(day, Math.floor(hour), (hour % 1) * 60),
         })
-        turf.knocked += k.firstTouch ? 1 : 0
+        if (k.firstTouch) { turf.knocked++; world.touched++ }
         if (k.outcome === 'signed') { turf.signed++; turf.answered++ }
         else if (k.outcome === 'didnt_sign' || k.outcome === 'maybe' || k.outcome === 'hostile') turf.answered++
         else if (k.outcome === 'not_home') turf.notHome++
