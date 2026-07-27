@@ -2,7 +2,9 @@
 // Themed replacement for native <select>: same job, but the options render
 // as a real on-brand menu with 44px touch rows instead of the OS widget.
 // Reka UI handles keyboard nav, typeahead, aria, and positioning.
+import { onBeforeUnmount } from 'vue'
 import type { StyleValue } from 'vue'
+import { pinScrollThroughLock } from '@/lib/appChrome'
 import {
   SelectContent,
   SelectItem,
@@ -39,10 +41,32 @@ defineProps<{
 }>()
 
 const model = defineModel<string>({ required: true })
+
+/**
+ * Reka's SelectContent scroll-locks the body, which clamps the page offset to
+ * 0 — and this menu is anchored to its TRIGGER, so on a long page the trigger
+ * falls off screen and takes the open menu with it, unreachable, on a page
+ * that can no longer scroll. Hold the page still across the lock instead; see
+ * pinScrollThroughLock for the measurements.
+ *
+ * This runs on `update:open`, which Vue emits synchronously while the state
+ * changes — before the render effect that mounts the content and applies the
+ * lock. Capturing the offset any later would capture the clamped 0.
+ */
+let releasePin: (() => void) | null = null
+
+function onOpenChange(open: boolean) {
+  releasePin?.()
+  releasePin = open ? pinScrollThroughLock() : null
+}
+
+// A route change can unmount this with the menu still up; the pin must not
+// outlive it or the page is left fixed at a negative offset.
+onBeforeUnmount(() => releasePin?.())
 </script>
 
 <template>
-  <SelectRoot v-model="model">
+  <SelectRoot v-model="model" @update:open="onOpenChange">
     <SelectTrigger class="sel-trigger" :class="{ 'sel-small': small }" v-bind="$attrs">
       <SelectValue class="sel-value" />
       <svg class="sel-chevron" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">

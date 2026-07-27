@@ -209,3 +209,64 @@ export function afterScrollUnlock(cb: () => void, timeoutMs = 900): void {
   }
   setTimeout(tick, 24)
 }
+
+/**
+ * HOLD THE PAGE STILL across a Reka scroll lock, and put the offset back after.
+ * Call the instant something opens, BEFORE the lock lands; call the returned
+ * release when it closes.
+ *
+ * The lock is `body { overflow: hidden }`, which collapses the document to
+ * viewport height and therefore CLAMPS the scroll offset to 0. For a sheet
+ * that's survivable — it's anchored to the bottom of the screen either way.
+ * For anything anchored to its TRIGGER it is fatal, and that's what this is
+ * for: measured live on /appearance at a 593px viewport, opening the font
+ * dropdown 2015px down the page moved its trigger from viewport top 268 to
+ * top 2282, so the menu rendered at 1955..2269 with exactly ZERO pixels on
+ * screen — while the same lock made it impossible to scroll to. It reads as
+ * the page freezing, and only a route change (which unmounts the lock) gets
+ * you out. That is one tap on the longest page in the app.
+ *
+ * `position: fixed` with a negative `top` is the classic answer and the point
+ * is that it changes nothing visually: the offset still clamps, but the page
+ * has been lifted by exactly the amount it is about to lose, so the trigger
+ * keeps its place on screen and the menu opens under the finger. Body being
+ * fixed does NOT reparent the app's fixed chrome, which stays viewport-
+ * relative absent a transform on the ancestor.
+ *
+ * Reka's own `padding-right` scrollbar compensation is deliberately left
+ * alone: the scrollbar really does go away here, so that padding is
+ * preventing a shift rather than causing one.
+ *
+ * Restoring waits out the lock, because a scroll issued under it is not
+ * delayed, it is lost. Removing the pin and restoring the offset happen in
+ * one synchronous block so no frame is ever painted between them.
+ */
+export function pinScrollThroughLock(): () => void {
+  // Already locked means a sheet owns the page and the offset is already
+  // clamped: there is no true position to capture and nothing to put back.
+  // A select inside a sheet takes this path.
+  if (isScrollLocked()) return () => {}
+
+  const y = window.scrollY
+  const s = document.body.style
+  const prev = { position: s.position, top: s.top, left: s.left, right: s.right }
+  s.position = 'fixed'
+  s.top = `-${y}px`
+  s.left = '0'
+  s.right = '0'
+
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    const restore = () => {
+      s.position = prev.position
+      s.top = prev.top
+      s.left = prev.left
+      s.right = prev.right
+      window.scrollTo(0, y)
+    }
+    if (isScrollLocked()) afterScrollUnlock(restore)
+    else restore()
+  }
+}
