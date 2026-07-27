@@ -34,7 +34,7 @@ import {
   windowLabel,
 } from '@/lib/appointments'
 import { useChartPalette, ordinalRamp, fmtPct, fmtCount } from '@/lib/chartTheme'
-import { wilson, linearRegression, rollingMean } from '@/lib/stats'
+import { wilson, linearRegression } from '@/lib/stats'
 import { ANALYTICS_TAB_HELP } from '@/lib/helpContent'
 import type { KnockOutcome } from '@/types'
 
@@ -450,20 +450,27 @@ function clearFocus() {
   else if (tab.value === 'canvassers') canvasserFocus.value = ''
 }
 
-const focusKnocks = computed<Knock[]>(() => {
+/** Which knocks belong to the focused entity, as a predicate rather than a
+ * list: the trend needs the same entity scope over TWO different time spans,
+ * the visible window and the days behind it. */
+const focusPick = computed<((k: Knock) => boolean) | null>(() => {
   const f = focus.value
-  if (!f) return []
-  const src = filtered.value
+  if (!f) return null
   switch (f.kind) {
     case 'area':
-      return src.filter((k) => k.city === f.label)
+      return (k) => k.city === f.label
     case 'turf':
-      return src.filter((k) => k.turf === f.label)
+      return (k) => k.turf === f.label
     case 'squad':
-      return src.filter((k) => k.squad === f.label)
+      return (k) => k.squad === f.label
     case 'canvasser':
-      return src.filter((k) => k.canvasser === canvasserFocus.value)
+      return (k) => k.canvasser === canvasserFocus.value
   }
+})
+
+const focusKnocks = computed<Knock[]>(() => {
+  const pick = focusPick.value
+  return pick ? filtered.value.filter(pick) : []
 })
 
 // Cross-tab jumps: rankings inside a focus panel open THEIR entity's tab.
@@ -534,6 +541,61 @@ function dailyFor(sub: Knock[]) {
     if (k.signed) sigsPerDay[i]++
   }
   return { axis, knocksPerDay, sigsPerDay }
+}
+
+/** Per-day totals keyed by local day, over a knock list that is deliberately
+ * NOT time-filtered. `firstDay` is where the data itself begins. */
+function dayTotals(sub: Knock[]) {
+  const knocksByDay = new Map<string, number>()
+  const sigsByDay = new Map<string, number>()
+  for (const k of sub) {
+    knocksByDay.set(k.day, (knocksByDay.get(k.day) ?? 0) + 1)
+    if (k.signed) sigsByDay.set(k.day, (sigsByDay.get(k.day) ?? 0) + 1)
+  }
+  // `knocks` is sorted ascending by timestamp and every filter here preserves
+  // that order, so the first row is the earliest day.
+  return { knocksByDay, sigsByDay, firstDay: sub.length ? sub[0].day : null }
+}
+
+/** Trailing `win`-day mean for each day on `axis`, read out of `byDay`, which
+ * covers every day LOADED rather than every day shown.
+ *
+ * Reaching back past the start of the window is the whole point (2026-07-27,
+ * user call). The average used to be taken over the visible series alone, so
+ * a window shorter than the window of the average had nothing to draw: the
+ * "7 days" chip produced exactly one point, which renders as no line at all,
+ * and "3 days" produced none. The line the page is read for disappeared on
+ * precisely the ranges somebody checking on today's push would pick, and the
+ * six days behind it were in memory the whole time.
+ *
+ * A day's seven-day average is a fact about that day, not about which chip is
+ * selected. So it stays null only where the DATA runs out, never where the
+ * window does: the first six days of a campaign have no seven-day average and
+ * never will. Days inside the span with no knocks count as zero, exactly as
+ * they did before, since the axis has always been contiguous.
+ *
+ * Day steps go through dayStrMs, never by subtracting 86.4M ms: across a DST
+ * boundary that arithmetic lands at 23:00 or 01:00 of the intended day and
+ * would silently double-count one day and skip another.
+ */
+function trailingMean(
+  axis: string[],
+  byDay: Map<string, number>,
+  firstDay: string | null,
+  win = 7,
+): (number | null)[] {
+  if (firstDay == null) return axis.map(() => null)
+  return axis.map((day) => {
+    let sum = 0
+    for (let back = 0; back < win; back++) {
+      const ms = back === 0 ? dayStrMs(day) : dayStrMs(day, -back)
+      if (ms == null) return null
+      const d = isoDayOf(ms)
+      if (d < firstDay) return null // ISO days sort lexicographically
+      sum += byDay.get(d) ?? 0
+    }
+    return sum / win
+  })
 }
 
 // Charts use OUTCOMES[].short, not .label — a bar's name lives in a 130px
@@ -654,8 +716,14 @@ const kpis = computed<Tile[]>(() => {
 })
 
 const overviewDaily = computed(() => dailyFor(filtered.value))
-const sigAvg = computed(() => rollingMean(overviewDaily.value.sigsPerDay, 7))
-const knockAvg = computed(() => rollingMean(overviewDaily.value.knocksPerDay, 7))
+// Totals over the WHOLE loaded set, not the window: see trailingMean.
+const allDayTotals = computed(() => dayTotals(knocks.value))
+const sigAvg = computed(() =>
+  trailingMean(overviewDaily.value.axis, allDayTotals.value.sigsByDay, allDayTotals.value.firstDay),
+)
+const knockAvg = computed(() =>
+  trailingMean(overviewDaily.value.axis, allDayTotals.value.knocksByDay, allDayTotals.value.firstDay),
+)
 
 // Signatures and knocks each get their OWN chart and scale — on a shared
 // axis the knock line (10× bigger) squashed the signature series and its
@@ -1253,7 +1321,15 @@ const apptRows = computed(() =>
 // the outcome mix.
 
 const focusDaily = computed(() => dailyFor(focusKnocks.value))
-const focusSigAvg = computed(() => rollingMean(focusDaily.value.sigsPerDay, 7))
+// Same entity, every day loaded — the trend's average reaches back past the
+// window exactly as the overview's does.
+const focusDayTotals = computed(() => {
+  const pick = focusPick.value
+  return dayTotals(pick ? knocks.value.filter(pick) : [])
+})
+const focusSigAvg = computed(() =>
+  trailingMean(focusDaily.value.axis, focusDayTotals.value.sigsByDay, focusDayTotals.value.firstDay),
+)
 const focusTrend = computed<TimeSeries[]>(() => [
   { name: 'Signatures', color: cat.value[0], values: focusDaily.value.sigsPerDay, area: true },
   { name: '7-day average', color: cat.value[1], values: focusSigAvg.value, width: 3.5, dash: true },

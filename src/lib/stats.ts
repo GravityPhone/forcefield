@@ -247,13 +247,10 @@ export function calibration(
     .map((b) => ({ predicted: b.sumP / b.n, observed: b.sumY / b.n, n: b.n }))
 }
 
-/** Trailing moving average, window centered on nothing fancy — used for the
- * 7-day signature trend line. */
-export function rollingMean(values: number[], window: number): (number | null)[] {
-  return values.map((_, i) => {
-    if (i < window - 1) return null
-    let s = 0
-    for (let j = i - window + 1; j <= i; j++) s += values[j]
-    return s / window
-  })
-}
+/* `rollingMean` lived here and is deliberately gone (2026-07-27). It averaged
+ * a series over ITSELF, so the 7-day trend line vanished on any window
+ * shorter than 7 days — the days behind the window were loaded and simply not
+ * consulted. Its replacement is `trailingMean` in AdminAnalyticsView, which
+ * reads day totals out of the whole set and is keyed by calendar day rather
+ * than by array index; that's what lets it reach back. Don't reintroduce the
+ * index-based version, it is the bug. */

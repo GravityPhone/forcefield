@@ -237,6 +237,19 @@ export function afterScrollUnlock(cb: () => void, timeoutMs = 900): void {
  * alone: the scrollbar really does go away here, so that padding is
  * preventing a shift rather than causing one.
  *
+ * `height: auto` is the other half and it is NOT optional — without it the
+ * page behind the menu goes completely blank. style.css sets
+ * `html, body { height: 100% }`, and the moment body is `position: fixed`
+ * that 100% resolves against the VIEWPORT instead of the document; Reka's
+ * `overflow: hidden` then turns that short box into a CLIP RECT, and the pin
+ * has just lifted it off screen. Measured at 375x812 with the font menu open
+ * 1731px down: body's clip rect ran -1731..-919 against a 0..812 viewport, so
+ * nothing whatsoever was painted, the app reappearing only once the menu
+ * closed. It never bit before the pin because an in-flow body's 812px box sat
+ * at document y 0 and the lock clamped the scroll to 0, so box and viewport
+ * coincided. Auto is safe to hand back on close, and is always at least the
+ * viewport's height, since `#app` carries `min-height: 100dvh`.
+ *
  * Restoring waits out the lock, because a scroll issued under it is not
  * delayed, it is lost. Removing the pin and restoring the offset happen in
  * one synchronous block so no frame is ever painted between them.
@@ -249,11 +262,18 @@ export function pinScrollThroughLock(): () => void {
 
   const y = window.scrollY
   const s = document.body.style
-  const prev = { position: s.position, top: s.top, left: s.left, right: s.right }
+  const prev = {
+    position: s.position,
+    top: s.top,
+    left: s.left,
+    right: s.right,
+    height: s.height,
+  }
   s.position = 'fixed'
   s.top = `-${y}px`
   s.left = '0'
   s.right = '0'
+  s.height = 'auto'
 
   let released = false
   return () => {
@@ -264,6 +284,7 @@ export function pinScrollThroughLock(): () => void {
       s.top = prev.top
       s.left = prev.left
       s.right = prev.right
+      s.height = prev.height
       window.scrollTo(0, y)
     }
     if (isScrollLocked()) afterScrollUnlock(restore)
