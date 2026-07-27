@@ -26,8 +26,9 @@ export class KnockDb extends Dexie {
   cachedPersons!: Table<CachedPerson, string>
   cachedVisits!: Table<CachedVisit, string>
   cacheMeta!: Table<CacheMeta, string>
-  // v3 — the county street table, in a handful of chunks (lib/addressCache.ts).
-  cachedAddresses!: Table<AddressChunk, number>
+  // v4 — cached door sets, in a handful of chunks each (lib/addressCache.ts).
+  // One named set per map, because the three maps select different columns.
+  cachedDoorSets!: Table<DoorChunk, [string, number]>
 
   constructor() {
     super('forcefield')
@@ -53,6 +54,23 @@ export class KnockDb extends Dexie {
       // queued knocks in pendingKnocks are somebody's real work.
       cachedAddresses: 'seq',
     })
+    this.version(4).stores({
+      pendingKnocks: 'client_id',
+      cachedDoors: 'id',
+      cachedPersons: 'id, household_id',
+      cachedVisits: 'id, household_id',
+      cacheMeta: 'key',
+      // v3's single address cache became one cache PER MAP: Scout, Squad and
+      // the cutter select different columns, so they cannot share rows. A
+      // store's primary key can't be widened in place, so v3's is dropped and
+      // this one replaces it — the cost is one cold load per device, which is
+      // exactly what a cache is allowed to cost. Every other store, including
+      // the queued knocks, is untouched.
+      cachedAddresses: null,
+      // Compound primary key so chunks of different sets can't collide, plus a
+      // plain index on the set name so one cache reads (and clears) on its own.
+      cachedDoorSets: '[cache+seq], cache',
+    })
   }
 }
 
@@ -70,7 +88,9 @@ export interface CachedVisit {
   household_id: string
   row: unknown
 }
-export interface AddressChunk {
+export interface DoorChunk {
+  /** Which cached set this belongs to (lib/addressCache.ts names them). */
+  cache: string
   seq: number
   rows: unknown[]
 }
@@ -78,7 +98,7 @@ export interface CacheMeta {
   key: string
   cachedAt: string
   doors: number
-  /** Row-shape stamp, for the address cache: a copy written by an older build
+  /** Row-shape stamp, for the door caches: a copy written by an older build
    *  whose select listed fewer columns is discarded rather than served with a
    *  field silently missing. */
   shape?: number

@@ -9,6 +9,7 @@ import AddMembersSheet from '@/components/squads/AddMembersSheet.vue'
 import { fadeUp } from '@/lib/motion'
 import { startOfLocalDayISO } from '@/lib/day'
 import { fetchAllRows, supabase } from '@/lib/supabase'
+import { fetchDoors } from '@/lib/doorData'
 import { attachPoiTapGuard, loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
@@ -415,16 +416,14 @@ async function loadDashboard() {
   // (a plain .limit() above that silently truncates). Best-effort: a failed
   // page just means fewer doors/knocks this refresh, same as before.
   const [doorsData, knocksData, ...recentRes] = await Promise.all([
-    turfIds.length
-      ? fetchAllRows<TurfDoor>((from, to) =>
-          supabase
-            .from('addresses')
-            .select('id, street, unit, city, zip, lat, lng, turf_id')
-            .in('turf_id', turfIds)
-            .order('id')
-            .range(from, to),
-        ).catch(() => [] as TurfDoor[])
-      : Promise.resolve([] as TurfDoor[]),
+    // Crew-scoped, so this is a few hundred rows, not the county — and
+    // deliberately NOT cached (lib/addressCache.ts): its key would be the
+    // day's turf ids, which change every morning, and a third stored copy of
+    // the county on a phone is not worth a read this small.
+    fetchDoors<TurfDoor>({
+      select: 'id, street, unit, city, zip, lat, lng, turf_id',
+      turfIds,
+    }).catch(() => [] as TurfDoor[]),
     turfIds.length
       ? fetchAllRows<{ household_id: string; canvasser_id: string; occurred_at: string }>(
           (from, to) =>
@@ -676,14 +675,11 @@ async function ensureOrgDoors(): Promise<void> {
   if (orgDoorsLoaded) return
   if (!orgDoorsLoading) {
     orgDoorsLoading = Promise.all([
-      fetchAllRows<OrgDoor>((from, to) =>
-        supabase
-          .from('addresses')
-          .select('id, street, lat, lng, turf_id')
-          .not('lat', 'is', null)
-          .order('id')
-          .range(from, to),
-      ),
+      // Only doors this map can draw — it paints the campaign's ground, it
+      // never indexes streets, so the ungeocoded half would be dead weight.
+      // Uncached for the same reason as the crew read above: background and
+      // unawaited, so it is never what anyone is waiting on.
+      fetchDoors<OrgDoor>({ select: 'id, street, lat, lng, turf_id', located: true }),
       // Statuses for those doors too — a door painted with no status would
       // read as "nobody's been here", which is a lie about someone else's
       // ground. Same one-shot deal the turf cutter makes.

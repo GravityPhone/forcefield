@@ -92,7 +92,15 @@ import {
   doorStatusOutcome,
 } from '@/lib/outcomes'
 import { fetchAllRows, supabase } from '@/lib/supabase'
-import { readCachedAddresses, whenIdle, writeCachedAddresses } from '@/lib/addressCache'
+import { doorCache, whenIdle } from '@/lib/addressCache'
+import {
+  fetchDoors,
+  fetchDoorsInBox,
+  fetchDoorsStaged,
+  fetchStreetSummaries,
+  type DoorBox,
+  type StreetSummary,
+} from '@/lib/doorData'
 import { houseNumber, streetNameOf, titleCase } from '@/lib/streetWalk'
 import { decodeTurfPlan } from '@/lib/turfPlan'
 import { useRoute, useRouter } from 'vue-router'
@@ -166,11 +174,32 @@ const squadsStore = useSquadsStore()
 
 const mapEl = ref<HTMLElement | null>(null)
 const pinsLoading = ref(false)
-/** True only while the county table is being pulled from the network for want
- * of a stored copy — the one load that genuinely takes a while. Worth saying so
- * out loud, because the answer is "once": every visit after this one indexes
- * from the device. */
-const firstEverLoad = ref(false)
+
+/** How long this page is allowed to present itself as loading (2026-07-27, user
+ * call: "a cold load stops at four seconds, just so that it's not taking
+ * forever").
+ *
+ * It is a cap on the WAITING, not on the fetching. The county keeps arriving
+ * quietly behind it, because the alternative — abandoning the read — would
+ * leave the street index permanently short and every door count on the page
+ * wrong for the rest of the session. What the canvasser gets in those four
+ * seconds is the part that matters: the streets, from the database, and the
+ * doors in front of them. Door counts keep saying "counting…" until they can
+ * be right, which is the one thing that must not be hurried. */
+const LOAD_BADGE_MS = 4000
+let loadBadgeTimer: ReturnType<typeof setTimeout> | null = null
+
+function stopLoadBadge() {
+  pinsLoading.value = false
+  if (loadBadgeTimer) clearTimeout(loadBadgeTimer)
+  loadBadgeTimer = null
+}
+
+function startLoadBadge() {
+  pinsLoading.value = true
+  if (loadBadgeTimer) clearTimeout(loadBadgeTimer)
+  loadBadgeTimer = setTimeout(stopLoadBadge, LOAD_BADGE_MS)
+}
 const loadError = ref('')
 const saveError = ref('')
 const saving = ref(false)
@@ -322,8 +351,11 @@ const addressById = new Map<string, AddressLite>()
 const streetsByKey = new Map<string, AddressLite[]>()
 /** `NAME` -> rows across all cities, for city-less segment lookups. */
 const streetsByName = new Map<string, AddressLite[]>()
-/** Prebuilt search list: one row per street+city with count and span. */
-let streetSummaries: { street_name: string; city: string; count: number; lo: number; hi: number }[] = []
+/** Prebuilt search list: one row per street+city with count and span. Built
+ * from whatever is indexed so far, so it is only the whole county once
+ * `indexComplete` says so — until then the search box prefers the server's
+ * list (see searchSummaries below). */
+let streetSummaries: StreetSummary[] = []
 /** Normalized name -> streets bearing it, for matching reverse-geocoded
  * route names ("South Clinton Street") to voter-file streets ("S CLINTON ST"). */
 const streetsByNorm = new Map<string, { name: string; city: string }[]>()
@@ -385,10 +417,7 @@ const staleDaysLabel = computed(() => {
 
 /** Street summaries accumulate across pages (see addToIndex), so the map they
  * are built in outlives any single call. */
-const streetSummaryByKey = new Map<
-  string,
-  { street_name: string; city: string; count: number; lo: number; hi: number }
->()
+const streetSummaryByKey = new Map<string, StreetSummary>()
 
 /** Bumped whenever the address index changes.
  *
@@ -405,9 +434,37 @@ const streetSummaryByKey = new Map<
  * this. Bump it wherever the Map is written. */
 const addressIndexVersion = ref(0)
 
+/** Is the index the WHOLE county, or only as much of it as has arrived?
+ *
+ * Every door count on this page is a tally over the index, so a partial index
+ * doesn't make them approximate, it makes them wrong — and a number that is
+ * quietly climbing reads exactly like a number that has finished. The cold load
+ * now also paints the viewport first, so a partial index is geographically
+ * lopsided too: the turf on screen would show its real count while one across
+ * the county showed nothing. So counts say "counting…" until this is true,
+ * which on every visit after the first is immediately (the device's own copy
+ * arrives complete). */
+const indexComplete = ref(false)
+
 /** Has the street index actually loaded? Until it has, a door count isn't zero,
  *  it's unknown, and the difference matters on a page about who holds what. */
-const addressesReady = computed(() => addressIndexVersion.value > 0 && addressById.size > 0)
+const addressesReady = computed(() => indexComplete.value && addressById.size > 0)
+
+/** The street list from the database (migration 20260727120000): the search box
+ * is usable in two requests instead of twenty-three, because searching streets
+ * never needed the doors underneath them. DISPLAY ONLY — see lib/doorData.ts.
+ * Superseded by the client's own summaries the moment the index is complete, so
+ * the two can only ever disagree during a first load. */
+const serverSummaries = ref<StreetSummary[]>([])
+
+/** What the search box actually searches. Client-computed once the whole county
+ * is indexed (the authority, and the same objects the rest of the page reasons
+ * about); the server's list before that; the partial client one if the server's
+ * never arrived. */
+function searchSummaries(): StreetSummary[] {
+  if (indexComplete.value) return streetSummaries
+  return serverSummaries.value.length ? serverSummaries.value : streetSummaries
+}
 
 function resetIndex() {
   addressById.clear()
@@ -416,6 +473,7 @@ function resetIndex() {
   streetsByNorm.clear()
   streetSummaryByKey.clear()
   streetSummaries = []
+  indexComplete.value = false
   addressIndexVersion.value++
 }
 
@@ -427,6 +485,12 @@ function resetIndex() {
 function addToIndex(rows: AddressLite[]) {
   const summaries = streetSummaryByKey
   for (const a of rows) {
+    // Paged reads are disjoint, but the viewport-first read and the on-demand
+    // single-street read both overlap them BY DESIGN — so a door already in the
+    // index is skipped rather than pushed into its street's array a second
+    // time, which would double that street's door count and its segments.
+    // (Wholesale replacements go through indexAddresses, which resets first.)
+    if (addressById.has(a.id)) continue
     addressById.set(a.id, a)
     const name = streetNameOf(a.street)
     if (!name) continue
@@ -463,6 +527,41 @@ function addToIndex(rows: AddressLite[]) {
 function indexAddresses(rows: AddressLite[]) {
   resetIndex()
   addToIndex(rows)
+  indexComplete.value = true
+}
+
+/** One street's doors, pulled on demand.
+ *
+ * The search list can name a street before the county has finished arriving
+ * (it comes from the database, not the index), and a row you can see but can't
+ * act on is worse than one that isn't there yet. So locating a street the index
+ * doesn't hold yet fetches just that street: one small query, folded in, and
+ * everything downstream — ranges, counts, claiming — works off the real rows as
+ * usual. Once the whole table is in, there is by definition nothing to fetch. */
+async function ensureStreetRows(name: string, city: string | null): Promise<void> {
+  if (indexComplete.value || streetRows(name, city).length) return
+  try {
+    const rows = await fetchDoors<AddressLite>({
+      select: ADDRESS_COLUMNS,
+      streetEndsWith: name,
+    })
+    if (unmounted) return
+    // The query matches any street ENDING in this name ("MAIN ST" also catches
+    // "N MAIN ST"), so the client's own parsing decides what actually belongs.
+    const exact = rows.filter(
+      (a) =>
+        streetNameOf(a.street) === name &&
+        (!city || a.city.toUpperCase() === city.toUpperCase()),
+    )
+    if (!exact.length) return
+    addToIndex(exact)
+    for (const a of exact) {
+      if (a.lat != null && a.lng != null) doorLayer?.upsertDoor(canvasDoorOf(a))
+    }
+    doorLayer?.requestRepaint()
+  } catch {
+    // No signal: the street stays unlocatable until the county load catches up.
+  }
 }
 
 /** Every row on a street — from memory, never the network. City given =
@@ -1008,35 +1107,26 @@ function* locatedCanvasDoors() {
 /** The columns the in-memory index is built from. `unit` and `zip` are load-
  * bearing despite nothing on screen showing them: geocodeCapturedStreets feeds
  * these very rows to the geocoder, and without the zip the query line silently
- * loses it. Anything added here needs a SHAPE bump in lib/addressCache.ts. */
+ * loses it. Anything added here needs a bump of CACHE_SHAPE below. */
 const ADDRESS_COLUMNS = 'id, street, unit, city, zip, lat, lng, turf_id'
+
+/** Bump when ADDRESS_COLUMNS changes: a copy stored by an older build is then
+ *  discarded instead of served with a field silently missing. */
+const CACHE_SHAPE = 1
+
+/** This page's own stored copy of the county. Named separately from Scout's
+ *  because the two select different columns (lib/addressCache.ts). */
+const cache = doorCache('cutter', CACHE_SHAPE)
 
 /** The WHOLE address table, ungeocoded rows included — street sweeps, door
  * counts, and search all run from memory so no gesture ever waits on the
  * network. ~23k slim rows ≈ a small map tile's worth of JSON.
  *
- * `geocoded` splits the table the way Scout's fetchMapData does. A door with no
- * coordinates cannot be painted, so it must not sit in the queue in front of
- * one that can: pulling the located rows first puts every pin the map can draw
- * on screen after ~14 pages instead of all 23. Pass nothing for the whole
- * table in one pass (the post-save reload, where nobody is watching it fill).
- */
-async function fetchAddresses(
-  onPage?: (rows: AddressLite[]) => void,
-  geocoded?: boolean,
-): Promise<AddressLite[]> {
-  // 8 concurrent pages: ~23 pages of 1000 land in 3 round trips instead of 6.
-  return fetchAllRows<AddressLite>(
-    (from, to) => {
-      const q = supabase.from('addresses').select(ADDRESS_COLUMNS)
-      const scoped =
-        geocoded === undefined ? q : geocoded ? q.not('lat', 'is', null) : q.is('lat', null)
-      return scoped.order('id').range(from, to)
-    },
-    1000,
-    8,
-    onPage,
-  )
+ * One undivided pass, for the post-save reload where nobody is watching it
+ * fill. The staged version the cold path uses lives in lib/doorData.ts, which
+ * owns the load order for all three maps. */
+function fetchAddresses(): Promise<AddressLite[]> {
+  return fetchDoors<AddressLite>({ select: ADDRESS_COLUMNS })
 }
 
 async function fetchTurfs() {
@@ -1164,17 +1254,25 @@ async function computeLeaderlessSquads() {
 // else — the county address table, turfs, squads, people — streams in behind
 // it while the user is already looking at (and panning) their neighborhood.
 async function initialize() {
-  pinsLoading.value = true
+  startLoadBadge()
+  // The street data does not need the map, so it must not queue behind it
+  // (2026-07-27). This used to run after loadMaps() resolved, which meant the
+  // whole county read started only once the Maps SDK had downloaded, parsed and
+  // built a map — measured here as seconds of doing nothing before the first
+  // address request even went out. Now both start at once and meet in the
+  // middle: the fetches tolerate a doorLayer that doesn't exist yet (pages are
+  // upserted when it does, and the final setDoors sweeps up either way).
+  void loadCutterData()
   try {
     await loadMaps()
   } catch {
     loadError.value = 'Could not load the map. Check your connection.'
     initStarted = false
-    pinsLoading.value = false
+    stopLoadBadge()
     return
   }
   if (!mapEl.value) {
-    pinsLoading.value = false
+    stopLoadBadge()
     return
   }
 
@@ -1204,7 +1302,12 @@ async function initialize() {
   // Settled pan/zoom: repaint only if the view outgrew the painted canvas
   // (or the zoom landed somewhere new — mid-animation the canvas just
   // stretches via its CSS transform).
-  map.addListener('idle', () => doorLayer?.checkView())
+  map.addListener('idle', () => {
+    doorLayer?.checkView()
+    // A cold load reads the doors on screen directly (no-op otherwise), so the
+    // flight to the user's own location lands on painted ground.
+    void loadViewportDoors()
+  })
 
   cityLayer = new CityLimitsLayer(map)
   if (showCity.value) void cityLayer.setVisible(true)
@@ -1213,7 +1316,9 @@ async function initialize() {
   // ground — while the street data streams in behind the map.
   void zoomToMe()
 
-  void loadCutterData()
+  // The map exists now, so the doors on screen can be read directly. On a warm
+  // load this is disarmed and does nothing.
+  void loadViewportDoors()
 }
 
 /** How far from the campaign's ground the user can be and still get flown
@@ -1258,8 +1363,92 @@ let addressGeneration = 0
 function cacheLater(rows: AddressLite[]) {
   const gen = addressGeneration
   whenIdle(() => {
-    if (gen === addressGeneration) void writeCachedAddresses(rows)
+    if (gen === addressGeneration) void cache.write(rows)
   })
+}
+
+// --- Viewport-first cold load ---
+// Only ever a REORDERING: the whole county still loads behind this, so panning
+// away from the opening view works exactly as before and no new failure mode is
+// introduced. All this buys is that the doors somebody is looking at arrive in
+// one request instead of scattered across twenty-three.
+
+/** How many box reads a single cold load may spend. More than one because the
+ *  opening frame moves: the map starts on the fallback centre and flies to the
+ *  user's own location when geolocation answers, and a canvasser may pan while
+ *  the county is still arriving. Small because each one is a whole extra query
+ *  for rows the paged read is already fetching. */
+let viewportFetchesLeft = 0
+/** Boxes already read, so settling back over the same ground costs nothing. */
+let viewportBoxes: DoorBox[] = []
+
+function armViewportFirst() {
+  viewportFetchesLeft = 3
+  viewportBoxes = []
+  void loadViewportDoors()
+}
+
+function disarmViewportFirst() {
+  viewportFetchesLeft = 0
+}
+
+function boxOf(b: google.maps.LatLngBounds): DoorBox {
+  const sw = b.getSouthWest()
+  const ne = b.getNorthEast()
+  return { south: sw.lat(), north: ne.lat(), west: sw.lng(), east: ne.lng() }
+}
+
+function boxCovered(box: DoorBox): boolean {
+  return viewportBoxes.some(
+    (b) => b.south <= box.south && b.north >= box.north && b.west <= box.west && b.east >= box.east,
+  )
+}
+
+async function loadViewportDoors() {
+  if (viewportFetchesLeft <= 0 || !map) return
+  const bounds = map.getBounds()
+  if (!bounds) return
+  const box = boxOf(bounds)
+  // A box straddling the antimeridian would read as an empty range. Nothing in
+  // Ohio does, but a bad box should skip rather than silently return nothing.
+  if (box.west > box.east || box.south > box.north) return
+  if (boxCovered(box)) return
+  viewportFetchesLeft--
+  viewportBoxes.push(box)
+  try {
+    const rows = await fetchDoorsInBox<AddressLite>({
+      select: ADDRESS_COLUMNS,
+      located: true,
+      box,
+    })
+    // The paged read may have finished (and reset the index) while this was in
+    // flight; then these rows are already there and folding them in is at best
+    // a no-op, at worst a duplicate. addToIndex skips known ids, but bailing
+    // here says why.
+    if (unmounted || indexComplete.value || !rows.length) return
+    addToIndex(rows)
+    for (const a of rows) {
+      if (a.lat != null && a.lng != null) doorLayer?.upsertDoor(canvasDoorOf(a))
+    }
+    doorLayer?.requestRepaint()
+  } catch {
+    // The county load behind this is the real one; losing a head start is fine.
+  }
+}
+
+/** The street search list, straight from the database, so the box works long
+ * before the doors do. Best-effort: without it the search simply falls back to
+ * whatever the index holds so far, which is what it did before. */
+async function seedStreetSummaries() {
+  try {
+    const rows = await fetchStreetSummaries()
+    if (unmounted || indexComplete.value || !rows.length) return
+    serverSummaries.value = rows
+    // A query typed before this landed re-runs against the fuller list.
+    if (streetQuery.value.trim().length >= 2) onStreetInput(streetQuery.value)
+  } catch {
+    /* the index's own summaries stand */
+  }
 }
 
 /** Publish a complete address table: replace the index, the canvas and the
@@ -1310,20 +1499,29 @@ async function loadCutterData() {
     // The device's own copy first, if there is one: one IndexedDB read against
     // 23 network round trips, and the page is fully usable the moment it lands.
     // The whole table is refetched behind it either way, further down.
-    const cached = await readCachedAddresses<AddressLite>()
+    const cached = await cache.read<AddressLite>()
     if (unmounted) return
     if (cached?.length) {
       addressGeneration++
       indexAddresses(cached)
       doorLayer?.setDoors(locatedCanvasDoors())
       doorLayer?.requestRepaint()
-      pinsLoading.value = false
+      stopLoadBadge()
     } else {
-      // Nothing stored: the long way round, exactly as before. Index and paint
-      // each page as it lands instead of holding all 23 back for the last one,
-      // and take the rows that CAN be drawn first (see fetchAddresses).
-      firstEverLoad.value = true
+      // Nothing stored: the long way round. Three reads overlap here, and they
+      // are complementary rather than alternatives — in the order somebody
+      // actually needs them.
       resetIndex()
+      // 1. The doors ON SCREEN, in one request. The paged read below comes back
+      //    ordered by id, which is scattered geographically, so the few hundred
+      //    doors in front of the canvasser would otherwise dribble in across
+      //    every page of it. Armed before anything else so the first thing the
+      //    map can draw is the neighbourhood it is already showing.
+      armViewportFirst()
+      // 2. The street list, without any doors under it at all — searching
+      //    streets never needed them (migration 20260727120000).
+      void seedStreetSummaries()
+      // 3. The county, streaming, behind both.
       const stream = (page: AddressLite[]) => {
         if (unmounted) return
         addToIndex(page)
@@ -1335,17 +1533,17 @@ async function loadCutterData() {
         // rather than sitting on whatever the index held when it was typed.
         if (streetQuery.value.trim().length >= 2) onStreetInput(streetQuery.value)
       }
-      const located = await fetchAddresses(stream, true)
+      const { located, unlocated } = await fetchDoorsStaged<AddressLite>(
+        { select: ADDRESS_COLUMNS },
+        stream,
+      )
       if (unmounted) return
-      // Pins are up; the streets nobody has geocoded yet still have to join the
-      // index, because they're exactly the ones somebody looks up by name.
-      const unlocated = await fetchAddresses(stream, false)
-      if (unmounted) return
-      firstEverLoad.value = false
+      disarmViewportFirst()
       // Belt and braces: the streaming upserts above skip any page that landed
       // before the layer existed, and this also drops doors that are no longer
       // in the table on a re-run. One pass over an already-built index.
       addressGeneration++
+      indexComplete.value = true
       doorLayer?.setDoors(locatedCanvasDoors())
       cacheLater([...located, ...unlocated])
     }
@@ -1373,8 +1571,7 @@ async function loadCutterData() {
   } catch {
     loadError.value = 'Could not load the street data. Check your connection and reload.'
   } finally {
-    pinsLoading.value = false
-    firstEverLoad.value = false
+    stopLoadBadge()
   }
 }
 
@@ -1874,15 +2071,16 @@ function applyIncomingStreet() {
   if (typeof raw !== 'string' || !raw.trim()) return
   const wanted = normalizeStreetName(raw.trim().slice(0, 80))
   void router.replace({ path: '/turf', query: {} })
+  const list = searchSummaries()
   const hit =
-    streetSummaries.find((s) => s.street_name === wanted) ??
-    streetSummaries.find((s) => s.street_name.includes(wanted))
+    list.find((s) => s.street_name === wanted) ??
+    list.find((s) => s.street_name.includes(wanted))
   if (!hit) {
     flash(`No street called ${titleCase(wanted)} in the address list.`)
     return
   }
   onStreetInput(titleCase(hit.street_name))
-  locateStreet(hit)
+  void locateStreet(hit)
 }
 
 /** /turf?assignee=<profile id> — the way in from a person's page now that
@@ -2030,7 +2228,7 @@ async function materializeStreetPins(
 // spans. ---
 
 const streetQuery = ref('')
-const streetMatches = ref<{ street_name: string; city: string; count: number; lo: number; hi: number }[]>([])
+const streetMatches = ref<StreetSummary[]>([])
 
 function onStreetInput(value: string) {
   streetQuery.value = value
@@ -2040,7 +2238,7 @@ function onStreetInput(value: string) {
     locatedStreet.value = null
     return
   }
-  streetMatches.value = streetSummaries
+  streetMatches.value = searchSummaries()
     .filter((s) => s.street_name.includes(q))
     .sort((a, b) => b.count - a.count)
     .slice(0, 8)
@@ -2082,11 +2280,17 @@ const locatedRangeCount = computed(() => {
 /** Tapping a search result LOCATES the street: zooms the map to it and
  * paints its doors (geocoding a capped batch of unmapped ones). Taking it
  * is the explicit Add button that appears on the located row. */
-function locateStreet(m: { street_name: string; city: string; lo: number; hi: number }) {
+async function locateStreet(m: { street_name: string; city: string; lo: number; hi: number }) {
   locatedStreet.value = { name: m.street_name, city: m.city }
   locatedFrom.value = m.lo
   locatedTo.value = m.hi
   scrollMapIntoView()
+  // During a first load the list can name a street the index hasn't reached
+  // yet — the summaries come from the database, the doors are still arriving.
+  // Fetch just that street so the range controls, the count and Add all work
+  // off real rows rather than an empty street. No-op once the county is in.
+  await ensureStreetRows(m.street_name, m.city)
+  if (unmounted) return
   void materializeStreetPins(m.street_name, m.city, true)
 }
 
@@ -3307,7 +3511,10 @@ function focusTurf(turfId: string) {
     }
   }
   if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
-  else if (pinsLoading.value) flash('Still loading street data. Try that again in a moment.')
+  // Keyed on the index, not the badge: the badge now gives up after four
+  // seconds while the county is still arriving, so it no longer answers "could
+  // this turf's doors simply not be here yet?".
+  else if (!indexComplete.value) flash('Still loading street data. Try that again in a moment.')
 }
 
 /** Opening a draft keeps you AT THE TOP — on the map, with Save / Start over
@@ -3778,10 +3985,7 @@ onUnmounted(() => {
              things that do from covering each other. -->
         <div v-if="pinsLoading" class="pins-loading" role="status" aria-live="polite">
           <span class="pins-loading-spinner" aria-hidden="true"></span>
-          <span class="pins-loading-text">
-            Loading streets…
-            <small v-if="firstEverLoad">First load only. Next time it is instant.</small>
-          </span>
+          <span class="pins-loading-text">Loading streets…</span>
         </div>
         <!-- Per-gesture feedback ("Added WALNUT ST, 41 doors"), and only
              while a flash is up — no standing instructions. It lives ON the

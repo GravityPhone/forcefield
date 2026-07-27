@@ -26,6 +26,8 @@ import { safeViewport, topInset } from '@/lib/appChrome'
 import { geocodeAndCache, normalizeStreetName, streetAtPoint } from '@/lib/geocode'
 import { avatarUrl } from '@/lib/avatars'
 import { fetchAllRows, supabase } from '@/lib/supabase'
+import { doorCache, whenIdle } from '@/lib/addressCache'
+import { fetchDoors } from '@/lib/doorData'
 import { fetchMyTurf } from '@/lib/myTurf'
 import type { TurfLite } from '@/lib/myTurf'
 import { startOfLocalDayISO } from '@/lib/day'
@@ -197,6 +199,11 @@ let searchTimer: ReturnType<typeof setTimeout> | undefined
  * is already reading. */
 let userMovedMap = false
 
+/** Set on teardown, so a cache read or a still-paging fetch stops writing to a
+ * disposed map. This tab lives inside <keep-alive>, so it survives navigation
+ * and this fires rarely — but the reads it guards outlast a route change. */
+let unmounted = false
+
 watch(
   () => talk.activeTab,
   (tab) => {
@@ -217,22 +224,27 @@ watch(
 // guard's job (src/lib/mapScroll.ts): the first touch on a partly-visible map
 // brings it into view instead of panning it.
 
+/** The columns this map's rows carry. Heavier than the turf cutter's slim
+ * eight — Talk needs the whole address row and the pins need the roster count —
+ * which is exactly why the two keep separate caches (lib/addressCache.ts).
+ * Bump CACHE_SHAPE if this changes. */
+const ADDRESS_SELECT = '*, persons(count)'
+const CACHE_SHAPE = 1
+const cache = doorCache('scout', CACHE_SHAPE)
+
 /** Only geocoded addresses get pins — a growing-over-time set (Talk mode,
  * Hunt's "locate", and turf cutting all geocode on demand). Now ~10k doors
  * and climbing, so every query here pages past PostgREST's 1000-row cap.
  * The doors WITHOUT coordinates come later and separately, in
  * loadRemainingAddresses — they can't be painted, so they must not sit in
- * front of the ones that can. */
-async function fetchMapData() {
+ * front of the ones that can (lib/doorData.ts owns that order for all three
+ * maps now).
+ *
+ * `onPage` paints each page of pins as it lands rather than holding all
+ * fourteen back for the last one. */
+async function fetchMapData(onPage?: (rows: AddressWithRoster[]) => void) {
   const [addresses, statusRows, summaryRows, todayRes] = await Promise.all([
-    fetchAllRows<AddressWithRoster>((from, to) =>
-      supabase
-        .from('addresses')
-        .select('*, persons(count)')
-        .not('lat', 'is', null)
-        .order('id')
-        .range(from, to),
-    ),
+    fetchDoors<AddressWithRoster>({ select: ADDRESS_SELECT, located: true }, onPage),
     fetchAllRows<HouseholdLatestKnock>((from, to) =>
       supabase.from('household_latest_knock').select('*').order('household_id').range(from, to),
     ),
@@ -761,11 +773,31 @@ async function initialize() {
 /** Everything the map needs that isn't the map — fetched behind a basemap
  * that's already interactive. */
 async function loadMapData() {
+  // The device's own copy of the county first, if there is one: pins and the
+  // street index are up before the first network round trip comes back, and the
+  // fetch below replaces them either way. A head start, never an authority —
+  // turf_id is rewritten server-side whenever anyone saves a turf.
+  const cached = await cache.read<AddressWithRoster>()
+  if (unmounted) return
+  if (cached?.length && map) {
+    for (const a of cached) registerDoor(a)
+    indexStreets(cached)
+    doorLayer?.requestRepaint()
+    pinsLoading.value = false
+  }
+
   let mapAddresses: AddressWithRoster[] = []
   let lastCenter: { lat: number; lng: number } | null = null
   try {
     ;[mapAddresses, lastCenter] = await Promise.all([
-      fetchMapData(),
+      // Each page of pins paints as it lands. The opening frame still waits for
+      // the whole located set below, because it is a decision about all of it.
+      fetchMapData((page) => {
+        if (unmounted || !map) return
+        for (const a of page) registerDoor(a)
+        indexStreets([...addressById.values()])
+        doorLayer?.requestRepaint()
+      }),
       lastKnockCenter(),
       fetchTurfs(),
     ])
@@ -787,7 +819,7 @@ async function loadMapData() {
     if (a.lat == null || a.lng == null) continue
     bounds.extend({ lat: a.lat, lng: a.lng })
   }
-  indexStreets(mapAddresses)
+  indexStreets([...addressById.values()])
   doorLayer?.requestRepaint()
   // Opening frame, best anchor first: your (and your today-squad's) turf —
   // the biggest connected patch of it, same best-fit the "My turf" button
@@ -822,17 +854,16 @@ async function loadMapData() {
  * them, so the map fills in from the search. */
 async function loadRemainingAddresses() {
   try {
-    const rows = await fetchAllRows<AddressWithRoster>((from, to) =>
-      supabase
-        .from('addresses')
-        .select('*, persons(count)')
-        .is('lat', null)
-        .order('id')
-        .range(from, to),
-    )
-    if (!rows.length) return
-    for (const a of rows) registerDoor(a)
-    indexStreets([...addressById.values()])
+    const rows = await fetchDoors<AddressWithRoster>({ select: ADDRESS_SELECT, located: false })
+    if (unmounted) return
+    if (rows.length) {
+      for (const a of rows) registerDoor(a)
+      indexStreets([...addressById.values()])
+    }
+    // The table is complete now, so this is the moment to store it — the whole
+    // county, so next time the street index is there without the network. Idle
+    // and fire-and-forget: nothing on screen is waiting on ~5 MB of writing.
+    whenIdle(() => void cache.write([...addressById.values()]))
   } catch {
     // Street search stays limited to streets that already have pins.
   }
@@ -1715,6 +1746,7 @@ onActivated(() => {
 })
 
 onUnmounted(() => {
+  unmounted = true
   stopResumeWatch?.()
   stopResumeWatch = null
   scrollGuard?.dispose()
