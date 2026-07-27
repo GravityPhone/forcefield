@@ -85,7 +85,7 @@ async function save() {
     .eq('id', k.id)
   busy.value = false
   if (err) {
-    error.value = 'Couldn’t save the change — try again.'
+    error.value = 'Couldn’t save the change. Try again.'
     return
   }
   hapticNotify('success')
@@ -110,7 +110,7 @@ async function remove() {
   const { error: err } = await supabase.from('knock_logs').delete().eq('id', k.id)
   busy.value = false
   if (err) {
-    error.value = 'Couldn’t delete it — try again.'
+    error.value = 'Couldn’t delete it. Try again.'
     return
   }
   hapticNotify('success')
@@ -158,7 +158,7 @@ async function remove() {
             :class="{ on: personId === null }"
             @click="pickPerson(null)"
           >
-            Nobody — the household
+            Nobody, the household
           </button>
           <button
             v-for="p in roster"

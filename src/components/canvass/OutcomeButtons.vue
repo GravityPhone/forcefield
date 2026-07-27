@@ -145,10 +145,10 @@ function disabledReason(requiresPerson: boolean): string {
           :disabled="!haveMyTurf"
           :title="
             !haveMyTurf
-              ? 'No turf is yours today — a manager sends turf out to each day’s crews'
+              ? 'No turf is yours today. A manager sends turf out to each day’s crews'
               : talk.myDoorsOnly
-                ? 'Only walking your crew’s turf — tap for every door'
-                : 'Walking every door — tap to stick to your turf'
+                ? 'Only walking your crew’s turf. Tap for every door'
+                : 'Walking every door. Tap to stick to your turf'
           "
           @click="toggleMyDoors"
         >

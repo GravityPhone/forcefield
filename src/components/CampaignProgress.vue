@@ -158,7 +158,7 @@ onMounted(async () => {
           <span class="sub muted">+{{ stats.doors_7d.toLocaleString() }} this week</span>
         </div>
         <div class="tile">
-          <span class="num">{{ signRate === null ? '—' : `${signRate}%` }}</span>
+          <span class="num">{{ signRate === null ? 'none yet' : `${signRate}%` }}</span>
           <span class="lbl">Sign rate</span>
           <span class="sub muted">of doors knocked</span>
         </div>

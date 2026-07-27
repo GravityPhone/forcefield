@@ -165,7 +165,7 @@ const PARTLY_SIGNED_OPTIONS = [
             <span class="history-main">
               <span class="history-what">
                 <strong>{{ OUTCOME_LABELS[h.outcome] }}</strong>
-                <template v-if="h.person?.name"> — {{ h.person.name }}</template>
+                <template v-if="h.person?.name"> · {{ h.person.name }}</template>
               </span>
               <span class="muted history-meta">{{ historyWho(h) }} · {{ historyWhen(h.occurred_at) }}</span>
               <span v-if="h.notes" class="muted history-notes">“{{ h.notes }}”</span>

@@ -154,7 +154,7 @@ export const useChatStore = defineStore('chat', {
       if (error || !data) {
         this.chatsError = error
           ? `Couldn't load chats: ${error.message}`
-          : "Couldn't load chats — check your connection."
+          : "Couldn't load chats. Check your connection."
         return
       }
       this.chatsError = ''
@@ -459,7 +459,7 @@ export const useChatStore = defineStore('chat', {
       const id = crypto.randomUUID()
       const uploaded = files.length ? await this.uploadFiles(chatId, id, files) : []
       if (files.length && !uploaded.length) {
-        this.sendError = 'Attachment upload failed — check your connection.'
+        this.sendError = 'Attachment upload failed. Check your connection.'
         if (!text) return
       }
 
@@ -478,7 +478,7 @@ export const useChatStore = defineStore('chat', {
       const { error } = await supabase.from('chat_messages').insert(payload)
       if (error) {
         this.messages = this.messages.filter((m) => m.id !== message.id)
-        this.sendError = 'Message failed to send — check your connection.'
+        this.sendError = 'Message failed to send. Check your connection.'
         return
       }
       // Row is stored with object paths; sign the optimistic copy for display.
@@ -506,7 +506,7 @@ export const useChatStore = defineStore('chat', {
       const { error } = await supabase.from('chat_messages').insert(payload)
       if (error) {
         this.messages = this.messages.filter((m) => m.id !== message.id)
-        this.sendError = 'GIF failed to send — check your connection.'
+        this.sendError = 'GIF failed to send. Check your connection.'
       }
     },
 
@@ -534,7 +534,7 @@ export const useChatStore = defineStore('chat', {
         .select('*')
         .single()
       if (error || !chat) {
-        this.sendError = 'Could not start that chat — try again.'
+        this.sendError = 'Could not start that chat. Try again.'
         return
       }
 

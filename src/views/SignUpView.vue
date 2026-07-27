@@ -17,7 +17,7 @@ async function submit() {
   error.value = ''
   const name = username.value.trim().toLowerCase()
   if (!USERNAME_RE.test(name)) {
-    error.value = 'Username must be 3–20 characters: letters, numbers, _ or -.'
+    error.value = 'Username must be 3 to 20 characters: letters, numbers, _ or the hyphen key.'
     return
   }
   if (password.value.length < 10) {

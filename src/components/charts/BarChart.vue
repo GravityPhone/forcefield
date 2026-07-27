@@ -4,6 +4,23 @@
 // target, and bars stay ≤18px thick with square baselines / rounded data-ends.
 // With `selectable`, rows are tap targets (the Analytics drill-down); with
 // `refValue`, a dashed marker shows the campaign-wide average for context.
+//
+// TOUCH (2026-07-26, reported from an Android phone: "I hold the button and
+// it's making me copy some text instead of showing what's under my finger").
+// Two separate causes, both fixed here and mirrored in every other chart:
+//
+//   1. A long press over SVG <text> is a TEXT SELECTION gesture — Chrome
+//      raises its selection handles and the copy/share bar. `user-select` and
+//      `-webkit-touch-callout` off the whole chart is the only thing that
+//      stops it; nothing about the JS mattered.
+//   2. Per-row `pointerenter`/`pointerleave` can't track a finger. Touch gets
+//      an IMPLICIT pointer capture on whatever received `pointerdown`, so
+//      moving to another row never fires that row's enter. The row is
+//      resolved from the pointer's y against the SVG box instead, which works
+//      for mouse and finger alike.
+//
+// The readout is STICKY after a finger lifts. There is no hover on a phone,
+// so clearing on release would flash the answer and take it away again.
 import { computed, ref } from 'vue'
 import { fmtCount, fmtPct } from '@/lib/chartTheme'
 import { useChartWidth } from './useChartWidth'
@@ -15,8 +32,10 @@ export interface BarItem {
   lo?: number
   hi?: number
   color?: string
-  /** shown in the tooltip, e.g. "412 knocks" */
+  /** Tooltip line 2: what the number is made of, e.g. "412 of 900 knocks". */
   detail?: string
+  /** Tooltip line 3: the caveat, e.g. how sure a small sample lets us be. */
+  note?: string
   /** opaque handle for select handlers (e.g. a profile id behind a name) */
   id?: string
 }
@@ -34,8 +53,11 @@ const props = withDefaults(
     /** dashed reference marker (campaign average) across the rows */
     refValue?: number
     refLabel?: string
+    /** What the bar length MEANS, named at the top of the tooltip so a finger
+     * on a bar answers "information on what?" without leaving the chart. */
+    measure?: string
   }>(),
-  { percent: false, selectable: false, refLabel: 'avg' },
+  { percent: false, selectable: false, refLabel: 'average' },
 )
 
 const emit = defineEmits<{ (e: 'select', item: BarItem): void }>()
@@ -58,12 +80,46 @@ const w = (v: number) => (Math.min(v, axisMax.value) / axisMax.value) * plotW.va
 const height = computed(() => props.items.length * ROW_H + 4 + (props.refValue != null ? 14 : 0))
 
 const hover = ref<number | null>(null)
+const held = ref(false)
 const fmt = (v: number) => (props.percent ? fmtPct(v, 1) : fmtCount(v))
+
+function rowAt(ev: PointerEvent): number | null {
+  const rect = (ev.currentTarget as SVGElement).getBoundingClientRect()
+  const i = Math.floor((ev.clientY - rect.top) / ROW_H)
+  return i >= 0 && i < props.items.length ? i : null
+}
+function onDown(ev: PointerEvent) {
+  held.value = true
+  hover.value = rowAt(ev)
+}
+function onMove(ev: PointerEvent) {
+  // A mouse reads on hover; a finger only while it's down, or the synthetic
+  // move a tap leaves behind would drag the readout to a row nobody touched.
+  if (ev.pointerType === 'mouse' || held.value) hover.value = rowAt(ev)
+}
+function onLeave(ev: PointerEvent) {
+  held.value = false
+  if (ev.pointerType === 'mouse') hover.value = null
+}
+
+/** Tooltip sits just off the touched row, flipping above it in the bottom
+ * half so it never runs off the card. */
+const tipRow = computed(() => (hover.value ?? 0) * ROW_H)
+const tipAbove = computed(() => hover.value != null && hover.value > props.items.length / 2)
 </script>
 
 <template>
   <div ref="el" class="bars">
-    <svg :width="width" :height="height" role="img">
+    <svg
+      :width="width"
+      :height="height"
+      role="img"
+      @pointerdown="onDown"
+      @pointermove="onMove"
+      @pointerup="held = false"
+      @pointercancel="held = false"
+      @pointerleave="onLeave"
+    >
       <!-- reference marker sits under the rows so it never steals their taps -->
       <g v-if="refValue != null" class="ref">
         <line
@@ -82,12 +138,18 @@ const fmt = (v: number) => (props.percent ? fmtPct(v, 1) : fmtCount(v))
         class="row"
         :class="{ sel: selectable }"
         :opacity="hover === null || hover === i ? 1 : 0.55"
-        @pointerenter="hover = i"
-        @pointerleave="hover = null"
         @click="selectable && emit('select', it)"
       >
-        <!-- full-row hit target -->
-        <rect :x="0" :y="i * ROW_H" :width="width" :height="ROW_H" fill="transparent" />
+        <!-- full-row hit target, lit while it's the one being read -->
+        <rect
+          :x="0"
+          :y="i * ROW_H"
+          :width="width"
+          :height="ROW_H"
+          rx="4"
+          :class="{ lit: hover === i }"
+          class="hit"
+        />
         <text class="label" :x="LABEL_W - 8" :y="i * ROW_H + ROW_H / 2 + 4" text-anchor="end">
           {{ it.label }}
         </text>
@@ -122,19 +184,41 @@ const fmt = (v: number) => (props.percent ? fmtPct(v, 1) : fmtCount(v))
         </text>
       </g>
     </svg>
-    <div v-if="hover !== null && items[hover]?.detail" class="detail muted">
-      {{ items[hover].label }}: {{ items[hover].detail }}
+    <!-- Names the measure first, so a finger on a bar answers "this is what
+         you're looking at" before it answers "and here's the number". -->
+    <div
+      v-if="hover !== null"
+      class="tip"
+      :class="{ above: tipAbove }"
+      :style="{ top: tipRow + 'px' }"
+    >
+      <div v-if="measure" class="tip-measure muted">{{ measure }}</div>
+      <div class="tip-head">
+        <span class="tip-name">{{ items[hover].label }}</span>
+        <strong class="tip-value">{{ fmt(items[hover].value) }}</strong>
+      </div>
+      <div v-if="items[hover].detail" class="tip-detail muted">{{ items[hover].detail }}</div>
+      <div v-if="items[hover].note" class="tip-note muted">{{ items[hover].note }}</div>
     </div>
+    <p v-else class="tip-hint muted">Hold a bar for the numbers behind it</p>
   </div>
 </template>
 
 <style scoped>
 .bars {
   min-width: 0;
+  position: relative;
 }
 svg {
   display: block;
   max-width: 100%;
+  /* A long press must read the bar out, not select the axis labels. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  /* pan-y, not none: a bar chart can be taller than the screen, so a drag
+     still has to scroll the page. Holding still is what reads a row. */
+  touch-action: pan-y;
 }
 .label {
   fill: var(--text);
@@ -150,10 +234,60 @@ svg {
   stroke-width: 1.5;
   opacity: 0.75;
 }
-.detail {
-  font-size: 0.78rem;
-  min-height: 1.2em;
-  margin-top: 0.2rem;
+.hit {
+  fill: transparent;
+}
+.hit.lit {
+  fill: var(--surface-2);
+}
+.tip-hint {
+  font-size: 0.74rem;
+  margin: 0.25rem 0 0;
+}
+.tip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin-top: calc(30px + 6px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 0.6);
+  box-shadow: var(--shadow), 0 6px 20px rgba(0, 0, 0, 0.16);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.8rem;
+  pointer-events: none;
+  z-index: 3;
+}
+.tip.above {
+  margin-top: -6px;
+  transform: translateY(-100%);
+}
+.tip-measure {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+.tip-name {
+  font-weight: 700;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tip-value {
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.tip-detail,
+.tip-note {
+  font-size: 0.75rem;
+  line-height: 1.35;
 }
 .row {
   transition: opacity 0.1s ease;

@@ -70,12 +70,12 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Outcomes',
         target: 'talk-outcomes',
-        body: 'Signed: pick a person first.\nAll others: the person picked, or the household if none.\nReturn: offers a window to come back in, when the campaign has appointments on. Optional — close it and the knock still logged.',
+        body: 'Signed: pick a person first.\nAll others: the person picked, or the household if none.\nReturn: offers a window to come back in, when the campaign has appointments on. Optional: close it and the knock still logged.',
       },
       {
         heading: 'Wants to volunteer',
         target: 'talk-volunteer',
-        body: 'Marks the picked person as willing to knock doors. Press again to remove.\nNeeds a person picked, like Signed.\nYes only — nothing is recorded for a no.\nThe list is under More → Volunteers, for managers.',
+        body: 'Marks the picked person as willing to knock doors. Press again to remove.\nNeeds a person picked, like Signed.\nYes only. Nothing is recorded for a no.\nThe list is under More → Volunteers, for managers.',
       },
       {
         heading: 'Their number',
@@ -120,7 +120,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       },
       {
         heading: 'No signal',
-        body: 'Knocks queue on the phone and send themselves when signal returns.\nYour crew’s doors, who lives at each, and recent visits are kept on the phone automatically — nothing to press.\nAppointments need signal. Book those before you lose it.',
+        body: 'Knocks queue on the phone and send themselves when signal returns.\nYour crew’s doors, who lives at each, and recent visits are kept on the phone automatically. Nothing to press.\nAppointments need signal. Book those before you lose it.',
       },
     ],
   },
@@ -166,7 +166,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Sharing where you are',
         target: 'squad-share',
-        body: 'Off until you switch it on. Your squad only — nobody else, ever.\nRuns while this app is open and in front. Not in a pocket, not with the screen off.\nGreen ring: a fresh position. Faded: over 5 minutes old. Gone after 20 — the pin falls back to your last knocked door.\nBattery saver 3 min · Balanced 1 min · Precise 20 sec.\nSwitching off deletes your position.',
+        body: 'Off until you switch it on. Your squad only. Nobody else, ever.\nRuns while this app is open and in front. Not in a pocket, not with the screen off.\nGreen ring: a fresh position. Faded: over 5 minutes old. Gone after 20. The pin falls back to your last knocked door.\nBattery saver 3 min · Balanced 1 min · Precise 20 sec.\nSwitching off deletes your position.',
       },
       {
         heading: 'Claiming',
@@ -279,7 +279,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'volunteers-count',
-        body: 'Signers marked with Talk’s Wants to volunteer button.\nYes only — a missing name means no answer or no, which read the same.',
+        body: 'Signers marked with Talk’s Wants to volunteer button.\nYes only. A missing name means no answer or no, which read the same.',
       },
       {
         target: 'volunteers-list',
@@ -374,17 +374,17 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Map tools',
         target: 'turf-tools',
-        body: 'A turf only changes through a tool. Arm one first.\n◯ Lasso: drag a loop — catches dots inside it or under the line. Tap a single dot for that one door.\n☝ Streets: tap a road to take or drop the whole street.\nAdd and Erase set direction, on the row underneath.\nTake shows while a tool is set to Add: sweeps pull doors out of whoever holds them, with no prompt. The old turf gives them up when you save.\nTake stays on until you turn it off, from its button or the red chip at the top. Doors already taken stay taken.\nUndo steps back one gesture.',
+        body: 'A turf only changes through a tool. Arm one first.\n◯ Lasso: drag a loop. Catches dots inside it or under the line. Tap a single dot for that one door.\n☝ Streets: tap a road to take or drop the whole street.\nAdd and Erase set direction, on the row underneath.\nTake shows while a tool is set to Add: sweeps pull doors out of whoever holds them, with no prompt. The old turf gives them up when you save.\nTake stays on until you turn it off, from its button or the red chip at the top. Doors already taken stay taken.\nUndo steps back one gesture.',
       },
       {
         heading: 'Streets',
         target: 'turf-streets',
-        body: 'One line per street: name, door count. A red count means the range matched no doors.\nTap a street for the rest — its stretches, from and to, both/even/odd, and Remove street.\nAn open street is the map’s trim target: its doors paint, and a map tap drops or restores a house.',
+        body: 'One line per street: name, door count. A red count means the range matched no doors.\nTap a street for the rest: its stretches, from and to, both/even/odd, and Remove street.\nAn open street is the map’s trim target: its doors paint, and a map tap drops or restores a house.',
       },
       {
         heading: 'Reading the map',
         target: 'turf-map',
-        body: 'Every door shows from the moment the page opens, colored by knock status.\nThe Turf layer adds ownership on top: one ring per door, in its turf’s color. Same in overview and while cutting.\nOne turf, one color — per-member shares are a Squad page matter and don’t show here.\nThe turf being cut rings its doors in its own color.\nTap a door at any zoom for its turf, residents and recent knocks. Taps never move a door — that takes a tool.',
+        body: 'Every door shows from the moment the page opens, colored by knock status.\nThe Turf layer adds ownership on top: one ring per door, in its turf’s color. Same in overview and while cutting.\nOne turf, one color. Per member shares are a Squad page matter and don’t show here.\nThe turf being cut rings its doors in its own color.\nTap a door at any zoom for its turf, residents and recent knocks. Taps never move a door. That takes a tool.',
         swatches: DOOR_COLORS,
       },
       {
@@ -400,7 +400,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'One turf at a time',
         target: 'turf-list',
-        body: 'The picker lists whole turfs. Per-member shares are cut on the Squad page.\nTo see one person’s doors, open them from the roster and tap View their doors.\nCombine moves this turf’s doors into another and deletes this one.',
+        body: 'The picker lists whole turf. Per member shares are cut on the Squad page.\nTo see one person’s doors, open them from the roster and tap View their doors.\nCombine moves this turf’s doors into another and deletes this one.',
       },
     ],
   },
@@ -467,7 +467,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       { target: 'aichat-suggestions', body: 'Three follow-ups after each answer. Tap to send.' },
       {
         target: 'aichat-history',
-        body: 'Chats are kept, and this is the list of them — yours only, newest first.\nTap one to reopen it. ✎ renames. ✕ twice deletes.',
+        body: 'Chats are kept, and this is the list of them: yours only, newest first.\nTap one to reopen it. ✎ renames. ✕ twice deletes.',
       },
       { target: 'aichat-new', body: 'Empty chat. The one you were in stays in the list.' },
     ],
@@ -482,31 +482,58 @@ export function helpFor(path: string): HelpTopic | null {
  * Per-TAB help for /admin/analytics. The Analytics view passes the active
  * tab's topic into AppShell (helpTopic prop), so the header "?" always
  * teaches the tab on screen. This is the ONLY place analytics gets explained:
- * chart subtitles stay at two or three word hints, never sentences. Same dry
- * register as above, definitions and interactions, no coaching.
+ * chart subtitles stay at two or three word hints, never sentences.
+ *
+ * REGISTER, and it differs from the rest of this file (2026-07-26, user call:
+ * "really clear, simple tutorials for all of these that doesn't assume
+ * understanding of statistics… plain English instead of technical terms, but
+ * have the plain English be technically correct, and maybe a little
+ * technical"). So: still dry and still fragments, but every term that carries
+ * a number gets DEFINED rather than assumed, and nothing is described in
+ * words a stats class owns. "Whisker: how sure the number is" beats "95%
+ * confidence interval", and it is not less true.
+ *
+ * The definitions below are load-bearing and repeat across tabs on purpose:
+ * a walkthrough starts on whichever tab you're standing on, so a term left
+ * defined only under Overview is a term most readers never meet.
  */
+
+/** Written once because it appears on four tabs. A rate chart is the shape
+ * this page uses most, and neither of these two marks is guessable. */
+const READING_A_RATE =
+  'Hold a bar for the numbers behind it.\nWhisker, the thin line through a bar: how sure the number is. Short means plenty of knocks behind it. Long means few, so treat it as a guess.\nTwo bars whose whiskers overlap are not really different.\nDashed line: the whole campaign, for comparison.'
+
+/** The one paragraph the whole page rests on. */
+const WHAT_COUNTS =
+  'Knock: one logged visit. The same door twice is two knocks.\nDoor: one household, counted once however often it is knocked.\nInteraction: a knock where somebody came to the door. Signed, Not Interested, Return and Hostile count. Not Home and Skip do not.'
+
 export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
   overview: {
     title: 'Overview tab',
     sections: [
       {
         target: 'analytics-tabs',
-        body: 'Six cuts of the same knocks. Every tab carries its own help.',
+        body: 'The same knocks, cut seven ways. Each tab has its own help under this button.',
       },
       {
-        heading: 'Tiles',
+        heading: 'What counts as what',
         target: 'analytics-tiles',
-        body: 'Doors: households, counted once.\nKnocks: every attempt.\nAnswer rate: knocks that opened.\nClose rate: conversations that signed.',
+        body: WHAT_COUNTS,
       },
       {
-        heading: 'Bold dashed line',
-        target: 'overview-trend',
-        body: '7-day average. Needs a week of history, so it starts six days into any window.',
+        heading: 'The two rates',
+        target: 'analytics-tiles',
+        body: 'Answer rate: out of 100 knocks, how many had somebody come to the door.\nSign rate: out of 100 interactions, how many signed.\nSo answer rate is how often you get a conversation. Sign rate is what you do with one.',
       },
       {
-        heading: 'Interactions',
+        heading: 'Setting the window',
         target: 'analytics-scope',
-        body: 'Day chips re-cut the tab.\nTap a legend name to hide that series. The chart re-scales.\nTable: the exact numbers.',
+        body: 'The day chips re-cut every number on the tab. All time is the whole campaign.\nThe count on the right is how many knocks are in view.',
+      },
+      {
+        heading: 'Reading a line chart',
+        target: 'overview-trend',
+        body: 'Hold anywhere on the chart for that day, every line at once.\nThe bold dashed line is the average of the last 7 days. It smooths out big Saturdays and quiet Tuesdays. It cannot start until there are 7 days, so the first six of any window are blank.\nTap a name in the legend to hide that line. The chart rescales to what is left.\nTable swaps any chart for the exact numbers.',
       },
     ],
   },
@@ -515,36 +542,49 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     title: 'Areas tab',
     sections: [
       {
+        heading: 'Areas',
         target: 'analytics-areachips',
-        body: 'Tap a chip or a bar to focus one area. Turfs and canvassers inside link to their own tabs.',
+        body: 'An area is a town or village, taken from the address. Not turf and not a crew.\nPick one from the dropdown, or tap any bar, to see that area alone. Turf and canvassers inside it link on to their own tabs.',
       },
+      { heading: 'What counts as what', target: 'areas-rate', body: WHAT_COUNTS },
+      { heading: 'Reading these charts', target: 'areas-rate', body: READING_A_RATE },
       {
-        heading: 'Whiskers and marker',
+        heading: 'Out of what',
         target: 'areas-rate',
-        body: 'Whisker: 95% confidence range. Long whisker means a small sample.\nDashed line: campaign average.\nAreas below the knock floor are off the charts, on the table.',
+        body: 'Per interaction: out of the doors that opened, how many signed. How persuasive the conversations are.\nPer door knocked: out of every door walked up to, how many produced a signature. What an hour of knocking there is worth.\nThe chips switch every sign rate chart on the page together.',
       },
       {
-        heading: 'The two rates',
+        heading: 'Coverage',
         target: 'areas-coverage',
-        body: 'Sign rate: signatures ÷ conversations.\nCoverage: doors knocked ÷ doors in the area.',
+        body: 'Share of the addresses on file in that area knocked at least once. How much ground is left, not how well it went.',
+      },
+      {
+        heading: 'Missing areas',
+        target: 'areas-rate',
+        body: 'An area with too few knocks to say anything is left off the charts and kept in the table.',
       },
     ],
   },
 
   turfs: {
-    title: 'Turfs tab',
+    title: 'Turf tab',
     sections: [
       {
+        heading: 'How turf is counted',
         target: 'turfs-table',
-        body: 'Each knock is stamped with the turf it sat in at the time. "No turf" is table-only.',
+        body: 'Every knock is stamped with the turf it sat in at the time, so re cutting turf later never rewrites history.\nSub turf cut for one crew member counts under its parent turf.\n"No turf" is knocks on ground nobody had cut yet. Table only, since it would dwarf every real bar.',
       },
+      { heading: 'What counts as what', target: 'turfs-rate', body: WHAT_COUNTS },
+      { heading: 'Reading these charts', target: 'turfs-rate', body: READING_A_RATE },
       {
+        heading: 'Coverage',
         target: 'turfs-coverage',
-        body: 'Coverage: doors knocked ÷ doors in the turf as cut today.\nWhiskers are 95% confidence ranges.',
+        body: 'Share of the doors currently in that turf knocked at least once.\nMeasured against the turf as it is cut today, so a turf re cut since is measured against its new size.',
       },
       {
+        heading: 'Going deeper',
         target: 'turfs-rate',
-        body: 'Tap a bar or row for one turf: crews, canvassers, daily signatures.',
+        body: 'Tap a bar or a table row for one turf on its own: which crews worked it, who knocked it, signatures by day.',
       },
     ],
   },
@@ -553,12 +593,16 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     title: 'Squads tab',
     sections: [
       {
+        heading: 'How squads are counted',
         target: 'squads-table',
-        body: 'One row per squad name, across every day it ran. "No squad" means solo knocking.\nTap a row for its run, turf and members.',
+        body: 'A squad lasts one day, but a crew that goes out under the same name day after day adds up here as one row.\n"Days out" is how many days that name ran.\n"No squad" is somebody knocking on their own.',
       },
+      { heading: 'What counts as what', target: 'squads-chart', body: WHAT_COUNTS },
+      { heading: 'Reading these charts', target: 'squads-chart', body: READING_A_RATE },
       {
-        target: 'squads-chart',
-        body: 'Close rate: signatures ÷ conversations.\nAnswer rate: opens ÷ knocks.\nWhiskers are 95% confidence ranges.',
+        heading: 'Going deeper',
+        target: 'squads-table',
+        body: 'Tap a bar or a row for one crew: the turf it worked, its members, its signatures by day.',
       },
     ],
   },
@@ -567,16 +611,20 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     title: 'Appointments tab',
     sections: [
       {
+        heading: 'What each word means',
         target: 'appt-tiles',
-        body: 'Kept: a knock landed at that door inside its window.\nBack late: the return came after the window closed.\nMissed: nobody ever went back.\nKept rate counts closed windows only — what is still to come can’t be missed yet.',
+        body: 'Kept: somebody knocked that door inside the promised window.\nBack late: somebody went back, after the window closed.\nMissed: nobody ever went back.\nStill to come: the window has not opened or closed yet.\nKept rate counts closed windows only. Something still to come cannot have been missed.',
       },
       {
+        heading: 'Which windows work',
         target: 'appt-windows',
-        body: 'Kept rate by time of day, in clock order. Whisker: 95% confidence range. Dashed line: overall kept rate.',
+        body: 'Kept rate by time of day, in clock order. The window people actually get back to is the one worth offering.\n' +
+          READING_A_RATE,
       },
       {
+        heading: 'Where this comes from',
         target: 'appt-trend',
-        body: 'Booked runs into the future; kept can’t. Nothing here is stored — it is read off the knock history.',
+        body: 'None of it is recorded by anyone. Kept and missed are worked out by checking the knock history against each promised window.\nBooked runs into the future. Kept cannot.',
       },
     ],
   },
@@ -585,16 +633,25 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     title: 'Odds tab',
     sections: [
       {
+        heading: 'Visit numbers',
         target: 'odds-attempts',
-        body: 'Attempt N: the door’s Nth visit. Knocks within ten minutes count as one.\nAnswer odds usually rise with attempts. Dashed line: overall average.',
+        body: 'A visit is one trip to a door. Several knocks there within ten minutes count as one visit, so a couple both signing is not two visits.\nEach bar counts only what happened ON that visit. It is not a running total.\nSo "3rd visit, 54%" means: of the interactions that happened on a third visit, 54% signed. It does not mean 54% of doors have signed by the third visit.',
       },
       {
+        heading: 'What to do with it',
+        target: 'odds-attempts',
+        body: 'Answer rate usually climbs with each visit: the people who are never in at 6pm are still never in, so the ones you do reach are the reachable ones.\n' +
+          READING_A_RATE,
+      },
+      {
+        heading: 'When doors answer',
         target: 'odds-heatmap',
-        body: 'Answer rate by weekday and hour. Tap a cell for its rate and sample size. Under 15 knocks: blank.',
+        body: 'Answer rate by day of the week and hour. Darker means more doors opened.\nHold a square for its rate and how many knocks it is based on.\nA square with under 15 knocks is left blank rather than guessed at.',
       },
       {
+        heading: 'How far doors get',
         target: 'odds-funnel',
-        body: 'Unique doors per stage: knocked, answered, conversation, signed. Each percentage is of the stage before it.',
+        body: 'Doors, counted once each, at three stages: knocked, somebody came out, somebody signed.\nHold a bar for what share of the stage above it reached that stage.\nThe drop between two bars is where the campaign is losing doors.',
       },
     ],
   },
@@ -602,13 +659,21 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
   canvassers: {
     title: 'Canvassers tab',
     sections: [
+      { heading: 'What counts as what', target: 'canvassers-table', body: WHAT_COUNTS },
       {
+        heading: 'The dot chart',
         target: 'canvassers-scatter',
-        body: 'One dot per canvasser. Right: more knocks. Up: better close rate.\nFaint line: team trend. Floor: 20 or more conversations. The table has everyone.',
+        body: 'One dot per canvasser. Further right: more knocks. Higher up: a better sign rate.\nTop right is both. Bottom right is somebody knocking plenty and closing little, which is usually a coaching conversation, not a numbers one.\nThe faint line is the campaign trend across everybody.\nOnly people with 20 or more interactions are plotted. Fewer than that and the dot would move on one good afternoon. The table has everyone.',
       },
       {
+        heading: 'Going deeper',
         target: 'canvassers-table',
-        body: 'Tap a dot, bar or row for one person: daily signatures, outcome mix, turf and crews.',
+        body: 'Tap a dot, a bar or a row for one person: signatures by day, what their knocks turned into, the turf and crews they worked.',
+      },
+      {
+        heading: 'A fair reading',
+        target: 'canvassers-scatter',
+        body: 'Sign rate depends heavily on the ground. Somebody sent to a hostile street will trail somebody sent to a friendly one, whoever they are.\nCompare people against the turf they walked, on the Turf tab, before drawing conclusions.',
       },
     ],
   },

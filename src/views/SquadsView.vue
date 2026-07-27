@@ -96,7 +96,7 @@ function memberNames(squad: SquadListItem): string {
         <div class="squad-info">
           <span class="squad-name">👥 {{ s.name }}</span>
           <span class="muted squad-members">
-            {{ s.members.length }} member{{ s.members.length === 1 ? '' : 's' }} —
+            {{ s.members.length }} member{{ s.members.length === 1 ? '' : 's' }} ·
             {{ memberNames(s) }}
           </span>
         </div>

@@ -138,7 +138,7 @@ async function save() {
   const p = phone.value.trim()
   const digits = p.replace(/\D/g, '').length
   if (p && (!PHONE_RE.test(p) || digits < 7 || digits > 15)) {
-    error.value = 'That phone number doesn’t look right — at least 7 digits, plus spaces and ( ) . - if you like.'
+    error.value = 'That phone number doesn’t look right. At least 7 digits, plus spaces and ( ) . if you like.'
     return
   }
   saving.value = true
@@ -188,10 +188,10 @@ async function save() {
   if (profileError || phoneError) {
     error.value =
       profileError && phoneError
-        ? 'Could not save — check your connection and try again.'
+        ? 'Could not save. Check your connection and try again.'
         : profileError
-          ? 'Saved your phone number, but the intro didn’t go through — try again.'
-          : 'Saved your intro, but the phone number didn’t go through — try again.'
+          ? 'Saved your phone number, but the intro didn’t go through. Try again.'
+          : 'Saved your intro, but the phone number didn’t go through. Try again.'
   } else {
     savedFlash.value = true
     setTimeout(() => (savedFlash.value = false), 2000)
@@ -233,7 +233,7 @@ async function save() {
           <span class="picker-copy">
             <span class="picker-title">Pick my emoji</span>
             <span class="muted picker-sub">
-              {{ auth.profile.avatar ? avatarName(auth.profile.avatar) : 'None yet — go grab one' }}
+              {{ auth.profile.avatar ? avatarName(auth.profile.avatar) : 'None yet, go grab one' }}
             </span>
           </span>
           <span class="muted picker-chevron" aria-hidden="true">›</span>

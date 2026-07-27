@@ -584,7 +584,7 @@ async function addPeople() {
           <button class="btn btn-sm" @click="chat.loadChats()">Try again</button>
         </div>
         <p v-else-if="!myRooms.length && !chat.loadingChats" class="muted room-empty">
-          No chats yet — start one below.
+          No chats yet. Start one below.
         </p>
         <button class="btn btn-primary btn-block new-chat-btn" @click="openComposer">
           + New chat or squad

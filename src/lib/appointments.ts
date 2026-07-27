@@ -78,8 +78,8 @@ export function windowLabel(start: Date, end: Date): string {
   const sameHalf = start.getHours() < 12 === end.getHours() < 12
   // Both labels end in " AM"/" PM" in en-US; other locales just keep both.
   const suffix = b.slice(-3)
-  if (sameHalf && a.endsWith(suffix)) return `${a.slice(0, -3).trim()}–${b}`
-  return `${a}–${b}`
+  if (sameHalf && a.endsWith(suffix)) return `${a.slice(0, -3).trim()} to ${b}`
+  return `${a} to ${b}`
 }
 
 /** YYYY-MM-DD (local) for a Date — matches lib/day.ts's localToday(). */

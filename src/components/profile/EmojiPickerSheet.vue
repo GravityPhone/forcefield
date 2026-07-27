@@ -51,14 +51,14 @@ async function pick(slug: string | null) {
 <template>
   <BottomSheet v-model:open="open" title="Pick my emoji">
     <p class="muted intro">
-      {{ totalCount }} to choose from — it shows next to your name everywhere.
+      {{ totalCount }} to choose from. It shows next to your name everywhere.
     </p>
 
     <input
       v-model="query"
       class="search"
       type="search"
-      placeholder="Search — dragon, taco, disco…"
+      placeholder="Search: dragon, taco, disco…"
       aria-label="Search emoji"
     />
 
@@ -80,7 +80,7 @@ async function pick(slug: string | null) {
         </div>
       </section>
       <p v-if="!shownGroups.length" class="muted empty">
-        Nothing called “{{ query }}” in here — try another word.
+        Nothing called “{{ query }}” in here. Try another word.
       </p>
     </div>
 

@@ -52,7 +52,7 @@ function bubbleStyle(personId: string): Record<string, string> | undefined {
   <div class="roster">
     <div class="roster-label muted">
       At this address ({{ talk.roster.length }})
-      <span v-if="talk.selectedPerson">— talking to {{ talk.selectedPerson.name }}</span>
+      <span v-if="talk.selectedPerson">· talking to {{ talk.selectedPerson.name }}</span>
     </div>
     <button
       v-for="p in talk.roster"

@@ -37,7 +37,7 @@ function friendlyAuthError(message: string): string {
   if (m.includes('already registered'))
     return "Couldn't create that account. Try a different username, or log in if it's yours."
   if (m.includes('provider is not enabled'))
-    return 'Google sign-in is not enabled yet — ask your admin, or use a username and password.'
+    return 'Google sign-in is not enabled yet. Ask your admin, or use a username and password.'
   if (m.includes('rate limit'))
     return 'Supabase is still requiring email confirmation, which blocks username-only signups. Turn off "Confirm email" in Supabase Auth settings.'
   if (m.includes('email not confirmed'))
@@ -116,7 +116,7 @@ export const useAuthStore = defineStore('auth', {
         this.session = data.session
         await this.fetchProfile()
         if (!this.profile) {
-          return { error: 'Signed up, but no profile was created — has the database schema been applied?' }
+          return { error: 'Signed up, but no profile was created. Has the database schema been applied?' }
         }
         return {}
       } finally {
@@ -137,7 +137,7 @@ export const useAuthStore = defineStore('auth', {
         if (!this.profile) {
           await supabase.auth.signOut()
           this.session = null
-          return { error: 'Logged in, but no profile found — has the database schema been applied?' }
+          return { error: 'Logged in, but no profile found. Has the database schema been applied?' }
         }
         return {}
       } finally {

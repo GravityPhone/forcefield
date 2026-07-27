@@ -54,7 +54,7 @@ function configure() {
   ;(window as Window & { gm_authFailure?: () => void }).gm_authFailure = () => {
     mapsAuthError.value = true
     console.error(
-      'Forcefield: Google Maps rejected the API key — see the error code logged above ' +
+      'Forcefield: Google Maps rejected the API key. See the error code logged above ' +
         '(quota/billing/referrer restriction) and check the key in Google Cloud Console.',
     )
   }

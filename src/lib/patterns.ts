@@ -46,7 +46,7 @@ export const PATTERNS: PatternDef[] = [
   {
     id: 'jazz',
     label: 'Jazz Cup',
-    blurb: 'Torn brush streaks with a loose scribble — straight off the 90s solo cup.',
+    blurb: 'Torn brush streaks with a loose scribble, straight off the 90s solo cup.',
     a: svgMask(
       260,
       220,
@@ -68,7 +68,7 @@ export const PATTERNS: PatternDef[] = [
   {
     id: 'memphis',
     label: 'Memphis',
-    blurb: 'Design-school confetti — triangles, squiggles, crosses, dots.',
+    blurb: 'Design-school confetti: triangles, squiggles, crosses, dots.',
     a: svgMask(
       280,
       280,
@@ -133,7 +133,7 @@ export const PATTERNS: PatternDef[] = [
   {
     id: 'scanlines',
     label: 'Scanlines',
-    blurb: 'Thin horizontal lines — pairs well with the CRT schemes.',
+    blurb: 'Thin horizontal lines. Pairs well with the CRT schemes.',
     b: {
       mask: 'repeating-linear-gradient(to bottom, black 0 1.5px, transparent 1.5px 5px)',
       size: 'auto',

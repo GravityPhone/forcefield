@@ -1690,7 +1690,7 @@ function applySweep(ids: string[], what: string) {
       if (next.delete(id)) removed++
     }
     if (!removed) {
-      flashSweep('Nothing of theirs there — Erase takes doors back out of the pile.')
+      flashSweep('Nothing of theirs there. Erase takes doors back out of the pile.')
       return
     }
     snapshotAssign()
@@ -1714,7 +1714,7 @@ function applySweep(ids: string[], what: string) {
   if (!added) {
     flashSweep(
       skipped
-        ? `${what}: nothing to take — ${skipped} door${skipped === 1 ? '' : 's'} belong to turf you can't divide.`
+        ? `${what}: nothing to take. ${skipped} door${skipped === 1 ? '' : 's'} belong to turf you can't divide.`
         : `${what}: those doors are already in the pile.`,
     )
     return
@@ -1870,7 +1870,7 @@ async function saveAssignment() {
     sweepFlash.value = ''
     await loadDashboard()
   } catch {
-    assignError.value = "Couldn't save that assignment — try again."
+    assignError.value = "Couldn't save that assignment. Try again."
   } finally {
     assignSaving.value = false
   }
@@ -2216,7 +2216,7 @@ watch(
         <div class="join-info">
           <span class="join-name">👥 {{ s.name }}</span>
           <span class="muted join-members">
-            {{ s.members.length }} member{{ s.members.length === 1 ? '' : 's' }} —
+            {{ s.members.length }} member{{ s.members.length === 1 ? '' : 's' }} ·
             {{ s.members.map(memberName).join(', ') }}
           </span>
         </div>
@@ -2281,7 +2281,7 @@ watch(
           <p v-if="assignError" class="error assign-error">{{ assignError }}</p>
         </div>
         <p v-if="mapsAuthError || mapFailed" class="error map-error">
-          Couldn't load Google Maps — check the connection and reload.
+          Couldn't load Google Maps. Check the connection and reload.
         </p>
         <div
           v-else

@@ -1414,7 +1414,7 @@ async function locateMe() {
     map.panTo(loc)
     map.setZoom(Math.max(map.getZoom() ?? DEFAULT_ZOOM, 17))
   } catch {
-    locateError.value = 'Could not get your location — check location permission for this app.'
+    locateError.value = 'Could not get your location. Check location permission for this app.'
   } finally {
     locatingMe.value = false
   }
@@ -1934,7 +1934,7 @@ onUnmounted(() => {
     <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
     <p v-if="locateError" class="muted map-error">{{ locateError }}</p>
     <p v-if="mapsAuthError" class="muted map-error">
-      Google rejected the Maps API key — usually quota, billing, or a referrer restriction on the
+      Google rejected the Maps API key. Usually quota, billing, or a referrer restriction on the
       key. The exact reason is logged in the browser console. Search and knock logging still work.
     </p>
     <p v-if="locating" class="muted map-error">Locating nearby doors…</p>

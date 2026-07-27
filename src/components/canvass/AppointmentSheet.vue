@@ -124,7 +124,7 @@ async function save() {
   if (error) {
     // No offline queue here on purpose (unlike knocks): a promise to come
     // back is worth saying out loud when it didn't save.
-    saveError.value = 'Couldn’t save — try again.'
+    saveError.value = 'Couldn’t save. Try again.'
     return
   }
   hapticNotify('success')
@@ -143,7 +143,7 @@ async function cancelExisting() {
     .eq('id', existing.id)
   saving.value = false
   if (error) {
-    saveError.value = 'Couldn’t remove it — try again.'
+    saveError.value = 'Couldn’t remove it. Try again.'
     return
   }
   await talk.reloadAppointments()

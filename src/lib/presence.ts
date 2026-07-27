@@ -149,7 +149,7 @@ async function pingOnce(): Promise<boolean> {
   } catch {
     // Denied, unavailable, or timed out. On a LAN IP this is also just "not a
     // secure context" — the browser blocks geolocation outright there.
-    shareError.value = 'Location unavailable — check the permission.'
+    shareError.value = 'Location unavailable. Check the permission.'
     return false
   }
 }

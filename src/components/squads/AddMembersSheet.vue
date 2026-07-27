@@ -92,7 +92,7 @@ async function save() {
     <UserPicker v-model="picked" :exclude="exclude" />
 
     <p v-for="p in moving" :key="p.id" class="muted move-note">
-      {{ nameOf(p) }} is out with {{ crewByUser.get(p.id) }} — adding them here moves them.
+      {{ nameOf(p) }} is out with {{ crewByUser.get(p.id) }}. Adding them here moves them.
     </p>
 
     <p v-if="error" class="error">{{ error }}</p>

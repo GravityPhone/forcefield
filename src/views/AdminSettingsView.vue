@@ -36,7 +36,7 @@ onMounted(async () => {
     .maybeSingle()
   loading.value = false
   if (error) {
-    loadError.value = 'Could not load saved key — try reloading.'
+    loadError.value = 'Could not load saved key. Try reloading.'
     return
   }
   if (data?.anthropic_api_key) {
@@ -62,7 +62,7 @@ async function saveKey() {
     .upsert({ owner_id: ownerId, anthropic_api_key: key, updated_at: new Date().toISOString() })
   saving.value = false
   if (error) {
-    loadError.value = 'Could not save the key — try again.'
+    loadError.value = 'Could not save the key. Try again.'
     return
   }
   localStorage.removeItem(LEGACY_KEY_STORAGE)
@@ -120,7 +120,7 @@ async function saveAppointments() {
     .eq('id', true)
   apptSaving.value = false
   if (error) {
-    apptError.value = 'Could not save — try again.'
+    apptError.value = 'Could not save. Try again.'
     return
   }
   await refreshAppointmentSettings()
@@ -134,7 +134,7 @@ async function saveAppointments() {
   <AppShell title="Admin Settings">
     <div class="stack">
       <div class="card" data-help="settings-key">
-        <h3>AI Assistant — Anthropic API Key</h3>
+        <h3>AI Assistant: Anthropic API Key</h3>
         <form v-if="!loading" @submit.prevent="saveKey">
           <div class="field">
             <label for="anthropic-key">API key</label>

@@ -87,7 +87,7 @@ export const useSquadsStore = defineStore('squads', {
         squad_day: localToday(),
       })
       if (error || !data) {
-        this.actionError = 'Could not create the squad — try again.'
+        this.actionError = 'Could not create the squad. Try again.'
         return null
       }
       await this.loadToday()
@@ -123,7 +123,7 @@ export const useSquadsStore = defineStore('squads', {
     async joinSquad(squadId: string) {
       this.actionError = ''
       const { error } = await supabase.rpc('join_squad', { target_squad_id: squadId })
-      if (error) this.actionError = 'Could not join that squad — try again.'
+      if (error) this.actionError = 'Could not join that squad. Try again.'
       await this.loadToday()
     },
 
@@ -142,7 +142,7 @@ export const useSquadsStore = defineStore('squads', {
       })
       if (error) {
         if (squad) squad.member_claim = before
-        this.actionError = "Couldn't change who can claim doors — try again."
+        this.actionError = "Couldn't change who can claim doors. Try again."
         return false
       }
       return true
@@ -151,7 +151,7 @@ export const useSquadsStore = defineStore('squads', {
     async leaveSquad(squadId: string) {
       this.actionError = ''
       const { error } = await supabase.rpc('leave_squad', { target_squad_id: squadId })
-      if (error) this.actionError = 'Could not leave that squad — try again.'
+      if (error) this.actionError = 'Could not leave that squad. Try again.'
       await this.loadToday()
     },
 

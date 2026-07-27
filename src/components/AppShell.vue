@@ -181,7 +181,7 @@ const moreActive = computed(() => moreItems.value.some((i) => route.path === i.t
 const DEMO_ROLES: { role: AppRole; blurb: string }[] = [
   {
     role: 'canvasser',
-    blurb: 'Knock doors — Scout map, Talk mode, your squad, boards and bulletin.',
+    blurb: 'Knock doors: Scout map, Talk mode, your squad, boards and bulletin.',
   },
   {
     role: 'team_lead',
@@ -189,7 +189,7 @@ const DEMO_ROLES: { role: AppRole; blurb: string }[] = [
   },
   {
     role: 'campaign_manager',
-    blurb: 'The command center — dashboard, turf cutting, analytics, roles, and the AI chat.',
+    blurb: 'The command center: dashboard, turf cutting, analytics, roles, and the AI chat.',
   },
 ]
 
@@ -371,7 +371,7 @@ onUnmounted(() => {
           <span class="brand-name">Forcefield</span>
           <!-- Everyone touring the app should know none of this is a real
                campaign — the chip is part of the brand block on purpose. -->
-          <span class="demo-chip" title="This is a demo — the campaign data is simulated">DEMO</span>
+          <span class="demo-chip" title="This is a demo. The campaign data is simulated">DEMO</span>
         </div>
         <div class="user-area" v-if="auth.profile">
           <button
@@ -403,7 +403,7 @@ onUnmounted(() => {
           <router-link
             to="/profile"
             class="username"
-            :title="`${headerNameFull} — About me`"
+            :title="`${headerNameFull}: About me`"
           >{{ headerName }}</router-link>
           <button class="btn btn-ghost btn-sm logout-top" @click="handleLogout">Log out</button>
         </div>
@@ -523,7 +523,7 @@ onUnmounted(() => {
     <!-- Demo role switcher (the role badge in the header) -->
     <BottomSheet v-model:open="roleSwitchOpen" title="Try another role" aria-label="Demo role switcher">
       <p class="role-demo-note">
-        This switcher is here <strong>for the demo</strong> — it lets you see what each role gets
+        This switcher is here <strong>for the demo</strong>. It lets you see what each role gets
         without waiting on anyone. In a real campaign, roles are assigned by campaign staff.
       </p>
       <div class="role-options">

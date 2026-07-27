@@ -143,7 +143,7 @@ async function setRole(user: Profile, role: AppRole) {
   if (user.role === role) return
   error.value = ''
   const { error: err } = await supabase.from('profiles').update({ role }).eq('id', user.id)
-  if (err) return fail(`Could not change ${user.username}'s role — try again.`)
+  if (err) return fail(`Could not change ${user.username}'s role. Try again.`)
   user.role = role
   flashSaved('role')
 }
@@ -155,7 +155,7 @@ async function setTeam(user: Profile, teamId: string | null) {
     .from('profiles')
     .update({ team_id: teamId })
     .eq('id', user.id)
-  if (err) return fail(`Could not move ${user.username} — try again.`)
+  if (err) return fail(`Could not move ${user.username}. Try again.`)
   user.team_id = teamId
   flashSaved('team')
 }
@@ -174,7 +174,7 @@ async function setSquad(user: Profile, squadId: string | null) {
       .delete()
       .eq('squad_id', s.id)
       .eq('user_id', user.id)
-    if (err) return fail(`Could not move ${user.username} out of ${s.name} — try again.`)
+    if (err) return fail(`Could not move ${user.username} out of ${s.name}. Try again.`)
     if (s.chat_id) {
       await supabase.from('chat_members').delete().eq('chat_id', s.chat_id).eq('user_id', user.id)
     }
@@ -185,7 +185,7 @@ async function setSquad(user: Profile, squadId: string | null) {
     const { error: err } = await supabase
       .from('squad_members')
       .insert({ squad_id: target.id, user_id: user.id })
-    if (err) return fail(`Could not add ${user.username} to ${target.name} — try again.`)
+    if (err) return fail(`Could not add ${user.username} to ${target.name}. Try again.`)
     if (target.chat_id) {
       await supabase
         .from('chat_members')
@@ -381,7 +381,7 @@ const FILTERS: { value: RoleFilter; label: string }[] = [
               </button>
             </div>
             <p v-else class="muted hint">
-              No squads yet today — they form on the
+              No squads yet today. They form on the
               <router-link to="/squads">Squads</router-link> page and reset at midnight.
             </p>
           </div>

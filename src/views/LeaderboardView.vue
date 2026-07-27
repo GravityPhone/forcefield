@@ -51,7 +51,7 @@ async function saveOptions() {
     .eq('id', true)
   optionsSaving.value = false
   if (error) {
-    optionsError.value = 'Could not save — try again.'
+    optionsError.value = 'Could not save. Try again.'
     return
   }
   optionsSaved.value = true
@@ -171,10 +171,10 @@ const showDoorsBoard = computed(
 
 const canvassers = computed(() => (selectedDate.value ? canvassersForDay.value : canvassersAllTime.value))
 
-const dateSuffix = computed(() => (selectedDate.value ? ` — ${formatDay(selectedDate.value)}` : ''))
+const dateSuffix = computed(() => (selectedDate.value ? `: ${formatDay(selectedDate.value)}` : ''))
 
 const squadsTitle = computed(() =>
-  selectedDate.value ? `Squads — ${formatDay(selectedDate.value)}` : 'Squads — today',
+  selectedDate.value ? `Squads: ${formatDay(selectedDate.value)}` : 'Squads today',
 )
 const squadsEmptyNote = computed(() =>
   selectedDate.value ? 'No squads that day.' : 'No squads yet today.',
@@ -331,7 +331,7 @@ onUnmounted(() => {
 
         <div class="card" data-board="primary" data-help="board-canvassers">
           <div class="board-head">
-            <h3>Canvassers — {{ METRIC_LABELS[primaryMetric] }}{{ dateSuffix }}</h3>
+            <h3>Canvassers: {{ METRIC_LABELS[primaryMetric] }}{{ dateSuffix }}</h3>
             <button
               v-if="myCanvasserStanding"
               class="standing"
@@ -369,7 +369,7 @@ onUnmounted(() => {
 
         <div v-if="showDoorsBoard" class="card" data-board="doors">
           <div class="board-head">
-            <h3>Canvassers — Doors knocked{{ dateSuffix }}</h3>
+            <h3>Canvassers: Doors knocked{{ dateSuffix }}</h3>
             <button v-if="myDoorsStanding" class="standing" @click="jumpToMyRow('doors')">
               You: #{{ myDoorsStanding.rank }} of {{ myDoorsStanding.total }}
             </button>

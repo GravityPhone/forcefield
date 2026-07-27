@@ -102,7 +102,7 @@ function greeting(): ChatMessage {
     role: 'assistant',
     text:
       "Hi! I'm the Forcefield assistant. I can query the live canvassing data, use Google Maps, " +
-      'search the web, and draw charts. Tap a question below to see what I can do — or ask ' +
+      'search the web, and draw charts. Tap a question below to see what I can do, or ask ' +
       'anything in your own words. (Tap ✎ on one of your messages to edit it and re-run.)',
   }
 }
@@ -419,7 +419,7 @@ async function send() {
     messages.value.push({
       id: nextId++,
       role: 'assistant',
-      text: 'Your session expired — please sign in again.',
+      text: 'Your session expired. Please sign in again.',
       error: true,
     })
     loading.value = false
@@ -494,7 +494,7 @@ async function send() {
     messages.value.push({
       id: nextId++,
       role: 'assistant',
-      text: 'The assistant took too many steps — try a narrower question.',
+      text: 'The assistant took too many steps. Try a narrower question.',
       error: true,
     })
   } catch {

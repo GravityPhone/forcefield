@@ -34,13 +34,47 @@ const height = computed(() => props.rowLabels.length * (CELL_H + GAP) + 24)
 const fill = (v: number | null) =>
   v == null ? 'transparent' : sequentialColor(v / maxRate.value, props.dark)
 
+// Cells are resolved from the pointer's position rather than per-rect
+// `pointerenter`, so a finger can slide across the grid: touch gets an
+// implicit capture on whatever it first pressed, and every other cell's enter
+// never fires. See the BarChart header for the whole story.
 const hover = ref<{ r: number; c: number } | null>(null)
+const held = ref(false)
+function cellAt(ev: PointerEvent): { r: number; c: number } | null {
+  const rect = (ev.currentTarget as SVGElement).getBoundingClientRect()
+  const r = Math.floor((ev.clientY - rect.top) / (CELL_H + GAP))
+  const c = Math.floor((ev.clientX - rect.left - LABEL_W) / (cellW.value + GAP))
+  if (r < 0 || r >= props.rowLabels.length) return null
+  if (c < 0 || c >= props.colLabels.length) return null
+  return { r, c }
+}
+function onDown(ev: PointerEvent) {
+  held.value = true
+  hover.value = cellAt(ev)
+}
+function onMove(ev: PointerEvent) {
+  if (ev.pointerType === 'mouse' || held.value) hover.value = cellAt(ev)
+}
+function onLeave(ev: PointerEvent) {
+  held.value = false
+  if (ev.pointerType === 'mouse') hover.value = null
+}
+
 const legendStops = Array.from({ length: 9 }, (_, i) => i / 8)
 </script>
 
 <template>
   <div ref="el" class="hm-wrap">
-    <svg :width="width" :height="height" role="img">
+    <svg
+      :width="width"
+      :height="height"
+      role="img"
+      @pointerdown="onDown"
+      @pointermove="onMove"
+      @pointerup="held = false"
+      @pointercancel="held = false"
+      @pointerleave="onLeave"
+    >
       <g v-for="(rl, r) in rowLabels" :key="rl">
         <text class="tick" :x="LABEL_W - 8" :y="r * (CELL_H + GAP) + CELL_H / 2 + 4" text-anchor="end">
           {{ rl }}
@@ -55,8 +89,6 @@ const legendStops = Array.from({ length: 9 }, (_, i) => i / 8)
           rx="3"
           :fill="fill(values[r]?.[c] ?? null)"
           :class="{ empty: (values[r]?.[c] ?? null) == null, lifted: hover?.r === r && hover?.c === c }"
-          @pointerenter="hover = { r, c }"
-          @pointerleave="hover = null"
         />
       </g>
       <text
@@ -72,12 +104,16 @@ const legendStops = Array.from({ length: 9 }, (_, i) => i / 8)
     </svg>
 
     <div v-if="hover && (values[hover.r]?.[hover.c] ?? null) != null" class="detail">
-      <strong>{{ fmtPct(values[hover.r][hover.c]!, 1) }}</strong>
+      <strong>{{ rowLabels[hover.r] }} at {{ colLabels[hover.c] }}</strong>
       <span class="muted">
-        {{ rowLabels[hover.r] }} {{ colLabels[hover.c] }} · {{ counts[hover.r][hover.c] }} knocks</span
+        {{ fmtPct(values[hover.r][hover.c]!, 1) }} answered, out of
+        {{ counts[hover.r][hover.c] }} knocks</span
       >
     </div>
-    <div v-else class="detail muted">Tap any cell</div>
+    <div v-else-if="hover" class="detail muted">
+      {{ rowLabels[hover.r] }} at {{ colLabels[hover.c] }}: too few knocks to say
+    </div>
+    <div v-else class="detail muted">Hold a square to read it</div>
 
     <div class="scale">
       <span class="muted">0%</span>
@@ -101,6 +137,11 @@ const legendStops = Array.from({ length: 9 }, (_, i) => i / 8)
 svg {
   display: block;
   max-width: 100%;
+  /* A long press reads the cell out; it must never start a text selection. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: pan-y;
 }
 .tick {
   fill: var(--text-muted);

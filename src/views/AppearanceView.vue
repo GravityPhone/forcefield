@@ -138,7 +138,7 @@ function previewCss(p: PatternDef, layer: 'a' | 'b'): string {
         <span class="pattern-preview" aria-hidden="true">
           <span v-if="p.a" class="pattern-layer" :style="previewCss(p, 'a')"></span>
           <span v-if="p.b" class="pattern-layer" :style="previewCss(p, 'b')"></span>
-          <span v-if="!p.a && !p.b" class="pattern-none">—</span>
+          <span v-if="!p.a && !p.b" class="pattern-none">None</span>
         </span>
         <span class="pattern-label">
           {{ p.label }}

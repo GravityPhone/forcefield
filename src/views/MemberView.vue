@@ -169,7 +169,7 @@ function doorLine(v: VisitRow): string {
           </div>
         </div>
         <p v-else class="muted empty">
-          No intro yet{{ member.id === auth.profile?.id ? ' — add one on the About me page.' : '.' }}
+          No intro yet{{ member.id === auth.profile?.id ? '. Add one on the About me page.' : '.' }}
         </p>
 
         <!-- Recent knocks, same visual language as Talk mode's door history. -->
@@ -189,7 +189,7 @@ function doorLine(v: VisitRow): string {
                   <template v-if="v.addresses?.city"> · {{ v.addresses.city }}</template>
                 </span>
                 <span class="muted visit-meta">
-                  {{ OUTCOME_LABELS[v.outcome] }}<template v-if="v.person?.name"> — {{ v.person.name }}</template>
+                  {{ OUTCOME_LABELS[v.outcome] }}<template v-if="v.person?.name"> · {{ v.person.name }}</template>
                   · {{ visitWhen(v.occurred_at) }}
                 </span>
               </span>

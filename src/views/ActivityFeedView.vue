@@ -135,7 +135,7 @@ async function saveOptions() {
     .eq('id', true)
   optionsSaving.value = false
   if (error) {
-    optionsError.value = 'Could not save — try again.'
+    optionsError.value = 'Could not save. Try again.'
     return
   }
   optionsSaved.value = true
@@ -293,7 +293,7 @@ function processRow(row: FeedRow): FeedItem[] {
           scope: 'squad',
           emoji: '🚀',
           strong: row.squad_name,
-          rest: `is cooking — ${q.size} doors today`,
+          rest: `is cooking, ${q.size} doors today`,
         })
       }
     }
@@ -521,10 +521,10 @@ function whoIdOf(item: FeedItem): string | null {
 
       <p v-if="loading" class="muted state">Loading today's activity…</p>
       <p v-else-if="loadError" class="error state">
-        Couldn't load the feed — check the connection and reload.
+        Couldn't load the feed. Check the connection and reload.
       </p>
       <p v-else-if="!visible.length" class="muted state">
-        Nothing yet today — the first knock lights this up.
+        Nothing yet today. The first knock lights this up.
       </p>
 
       <ul v-else class="feed" data-help="feed-list">
@@ -565,7 +565,7 @@ function whoIdOf(item: FeedItem): string | null {
                 <span class="outcome-chip" :style="{ color: OUTCOME_HEX[item.outcome] }">
                   <span class="outcome-dot" :style="{ background: OUTCOME_HEX[item.outcome] }"></span>
                   {{ OUTCOME_SHORT[item.outcome] }}</span
-                >{{ item.personName ? ' — ' + item.personName : '' }}
+                >{{ item.personName ? ' · ' + item.personName : '' }}
               </span>
               <span class="muted row-meta">
                 {{ item.street ? item.street + ' · ' : '' }}{{ timeOf(item.at) }}

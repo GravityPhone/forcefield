@@ -73,8 +73,13 @@ function nearestIdx(ev: { clientX: number; clientY: number; currentTarget: Event
   })
   return best >= 0 && bestD < 48 ** 2 ? best : null
 }
+// `pointerdown` too, and the tooltip survives the finger lifting: a phone
+// fires no move for a press held still. See the BarChart header.
 function onMove(ev: PointerEvent) {
   hover.value = nearestIdx(ev)
+}
+function onLeave(ev: PointerEvent) {
+  if (ev.pointerType === 'mouse') hover.value = null
 }
 function onClick(ev: MouseEvent) {
   if (!props.selectable) return
@@ -96,8 +101,9 @@ const tooltipLeft = computed(() => {
       :height="height"
       role="img"
       :class="{ sel: selectable && hover != null }"
+      @pointerdown="onMove"
       @pointermove="onMove"
-      @pointerleave="hover = null"
+      @pointerleave="onLeave"
       @click="onClick"
     >
       <g v-for="t in yTicks" :key="'y' + t">
@@ -149,6 +155,10 @@ svg {
   display: block;
   max-width: 100%;
   touch-action: none;
+  /* A long press reads the dot out; never a text selection. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 svg.sel {
   cursor: pointer;

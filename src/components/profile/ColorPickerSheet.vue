@@ -173,7 +173,7 @@ async function save(hex: string | null) {
       Back to automatic color
     </button>
     <p v-else-if="auth.profile" class="muted small auto-hint">
-      No pick yet — you’re showing as
+      No pick yet. You’re showing as
       <span class="auto-dot" :style="{ background: memberColor(auth.profile) }" aria-hidden="true"></span>
       (assigned automatically).
     </p>

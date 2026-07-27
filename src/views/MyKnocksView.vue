@@ -211,7 +211,7 @@ function onDeleted(id: string) {
 
       <p v-if="loading" class="muted empty">Loading your history…</p>
       <p v-else-if="!visits.length" class="muted empty">
-        No doors yet — every knock you log will show up here.
+        No doors yet. Every knock you log will show up here.
       </p>
       <p v-else-if="!filtered.length" class="muted empty">No visits match.</p>
 
@@ -242,7 +242,7 @@ function onDeleted(id: string) {
                   <template v-if="v.addresses?.city"> · {{ v.addresses.city }}</template>
                 </span>
                 <span class="muted visit-meta">
-                  {{ OUTCOME_LABELS[v.outcome] }}<template v-if="v.person?.name"> — {{ v.person.name }}</template>
+                  {{ OUTCOME_LABELS[v.outcome] }}<template v-if="v.person?.name"> · {{ v.person.name }}</template>
                   · {{ visitTime(v.occurred_at) }}
                 </span>
               </span>

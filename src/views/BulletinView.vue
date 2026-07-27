@@ -43,7 +43,7 @@ async function post() {
   })
   posting.value = false
   if (error) {
-    postError.value = 'Could not post the announcement — try again.'
+    postError.value = 'Could not post the announcement. Try again.'
     return
   }
   title.value = ''
@@ -99,7 +99,7 @@ onUnmounted(() => {
               id="bulletin-title"
               v-model="title"
               maxlength="200"
-              placeholder="e.g. Saturday canvass launch — meet at the library, 10am"
+              placeholder="e.g. Saturday canvass launch, meet at the library, 10am"
             />
           </div>
           <div class="field">
@@ -123,7 +123,7 @@ onUnmounted(() => {
         <span class="spinner" aria-hidden="true"></span> Loading announcements…
       </p>
       <p v-else-if="!bulletins.length" class="muted">
-        No announcements yet{{ canPost ? ' — post the first one above.' : '.' }}
+        No announcements yet{{ canPost ? '. Post the first one above.' : '.' }}
       </p>
 
       <article v-for="b in bulletins" :key="b.id" class="card bulletin" data-help="bulletin-post">

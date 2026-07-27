@@ -93,6 +93,10 @@ function areaFor(values: (number | null)[]): string {
 }
 
 // --- crosshair
+// `pointerdown` matters as much as `pointermove` on a phone: a finger held
+// still fires no move at all, so without it a press read nothing. And the
+// crosshair STAYS after a finger lifts, since there is no hover to fall back
+// on. See the BarChart header for the rest of the touch story.
 const hoverIdx = ref<number | null>(null)
 function onMove(ev: PointerEvent) {
   const rect = (ev.currentTarget as SVGElement).getBoundingClientRect()
@@ -101,6 +105,9 @@ function onMove(ev: PointerEvent) {
   if (n === 0) return
   const t = (px - PAD.left) / Math.max(1, plotW.value)
   hoverIdx.value = Math.min(n - 1, Math.max(0, Math.round(t * (n - 1))))
+}
+function onLeave(ev: PointerEvent) {
+  if (ev.pointerType === 'mouse') hoverIdx.value = null
 }
 const fmt = (v: number) => (props.percent ? fmtPct(v, 1) : fmtCount(v))
 const tooltipLeft = computed(() => {
@@ -116,8 +123,9 @@ const tooltipLeft = computed(() => {
       :width="width"
       :height="height"
       role="img"
+      @pointerdown="onMove"
       @pointermove="onMove"
-      @pointerleave="hoverIdx = null"
+      @pointerleave="onLeave"
     >
       <!-- grid + y ticks -->
       <g v-for="t in ticks" :key="t">
@@ -180,7 +188,7 @@ const tooltipLeft = computed(() => {
       <div class="tt-label">{{ labels[hoverIdx] }}</div>
       <div v-for="s in shown" :key="s.name" class="tt-row">
         <span class="key" :style="{ background: s.color }" />
-        <strong>{{ s.values[hoverIdx] != null ? fmt(s.values[hoverIdx]!) : '—' }}</strong>
+        <strong>{{ s.values[hoverIdx] != null ? fmt(s.values[hoverIdx]!) : 'none' }}</strong>
         <span class="muted">{{ s.name }}</span>
       </div>
     </div>
@@ -210,6 +218,10 @@ svg {
   display: block;
   max-width: 100%;
   touch-action: none;
+  /* A long press reads the day out; it must never start a text selection. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 .grid {
   stroke: var(--border);

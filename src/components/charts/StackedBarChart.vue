@@ -53,11 +53,17 @@ function segments(i: number): { color: string; name: string; y: number; h: numbe
   return out
 }
 
+// `pointerdown` as well as `pointermove`, and the readout survives the finger
+// lifting: a phone fires no move for a press held still, and has no hover to
+// fall back on. See the BarChart header.
 const hover = ref<number | null>(null)
 function onMove(ev: PointerEvent) {
   const rect = (ev.currentTarget as SVGElement).getBoundingClientRect()
   const i = Math.floor((ev.clientX - rect.left - PAD.left) / Math.max(1, slot.value))
   hover.value = i >= 0 && i < props.labels.length ? i : null
+}
+function onLeave(ev: PointerEvent) {
+  if (ev.pointerType === 'mouse') hover.value = null
 }
 const tooltipLeft = computed(() => {
   if (hover.value == null) return 0
@@ -68,7 +74,14 @@ const tooltipLeft = computed(() => {
 
 <template>
   <div ref="el" class="sb-wrap">
-    <svg :width="width" :height="height" role="img" @pointermove="onMove" @pointerleave="hover = null">
+    <svg
+      :width="width"
+      :height="height"
+      role="img"
+      @pointerdown="onMove"
+      @pointermove="onMove"
+      @pointerleave="onLeave"
+    >
       <g v-for="t in ticks" :key="t">
         <line
           class="grid"
@@ -138,6 +151,10 @@ svg {
   display: block;
   max-width: 100%;
   touch-action: none;
+  /* A long press reads the column out; never a text selection. */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 .grid {
   stroke: var(--border);

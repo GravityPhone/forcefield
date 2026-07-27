@@ -25,6 +25,7 @@ import Heatmap from '@/components/charts/Heatmap.vue'
 import ScatterChart from '@/components/charts/ScatterChart.vue'
 import type { BarItem } from '@/components/charts/BarChart.vue'
 import type { ScatterPoint } from '@/components/charts/ScatterChart.vue'
+import AppSelect from '@/components/ui/AppSelect.vue'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { OUTCOMES } from '@/lib/outcomes'
 import {
@@ -68,8 +69,8 @@ interface Knock {
   attempt: number
   priorNotHomes: number
   experience: number // canvasser's knocks before this one
-  answered: boolean
-  conversation: boolean
+  /** Somebody came to the door. See INTERACTION below. */
+  interacted: boolean
   signed: boolean
 }
 
@@ -216,8 +217,23 @@ onMounted(async () => {
   }
 })
 
-const ANSWERED = new Set<KnockOutcome>(['signed', 'didnt_sign', 'maybe', 'hostile'])
-const CONVERSATION = new Set<KnockOutcome>(['signed', 'didnt_sign', 'maybe'])
+/** ONE word for "somebody came to the door" (2026-07-26, user call: "can we
+ * make the paradigm be interactions instead of conversations… every time
+ * someone logs anything is an interaction, aside from logging a not home or
+ * logging something on just a door").
+ *
+ * This page used to carry TWO overlapping sets: `answered` (which counted
+ * Hostile) and `conversation` (which didn't), with sign rate taken over the
+ * narrower one. Nothing on screen ever explained the difference, and a
+ * campaign manager reading "close rate: signed ÷ conversations" had no way to
+ * know Hostile had been quietly dropped from the denominator. They are now the
+ * same set under one name, which is also the honest one: a door slammed in
+ * your face is an interaction that didn't sign, not an interaction that never
+ * happened.
+ *
+ * Out: Not Home (nobody there) and Skip (a door-level pass, no person). Both
+ * are exactly what the user named as not counting. */
+const INTERACTION = new Set<KnockOutcome>(['signed', 'didnt_sign', 'maybe', 'hostile'])
 
 function enrich(rows: KnockRow[], cityOf: Map<string, string>): Knock[] {
   const parsed = rows
@@ -238,8 +254,7 @@ function enrich(rows: KnockRow[], cityOf: Map<string, string>): Knock[] {
         attempt: 0,
         priorNotHomes: 0,
         experience: 0,
-        answered: ANSWERED.has(r.outcome),
-        conversation: CONVERSATION.has(r.outcome),
+        interacted: INTERACTION.has(r.outcome),
         signed: r.outcome === 'signed',
       }
     })
@@ -286,10 +301,13 @@ const filtered = computed(() => knocks.value.filter((k) => k.ts >= rangeCutoff.v
 
 // ---------------------------------------------------------------- tabs
 
+// "Turf" is singular everywhere it's user-facing (2026-07-26, user call:
+// "wherever we're selecting it, they're both plural in reality"). The tab id
+// stays `turfs` — it keys ANALYTICS_TAB_HELP and the focus switch.
 const ALL_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'areas', label: 'Areas' },
-  { id: 'turfs', label: 'Turfs' },
+  { id: 'turfs', label: 'Turf' },
   { id: 'squads', label: 'Squads' },
   { id: 'appointments', label: 'Appointments' },
   { id: 'odds', label: 'Odds' },
@@ -328,7 +346,7 @@ const focus = computed<Focus | null>(() => {
     case 'areas':
       return areaFocus.value ? { kind: 'area', label: areaFocus.value, all: 'All areas' } : null
     case 'turfs':
-      return turfFocus.value ? { kind: 'turf', label: turfFocus.value, all: 'All turfs' } : null
+      return turfFocus.value ? { kind: 'turf', label: turfFocus.value, all: 'All turf' } : null
     case 'squads':
       return squadFocus.value ? { kind: 'squad', label: squadFocus.value, all: 'All squads' } : null
     case 'canvassers':
@@ -443,15 +461,23 @@ function dailyFor(sub: Knock[]) {
 function mixFor(sub: Knock[]): BarItem[] {
   const counts = new Map<KnockOutcome, number>()
   for (const k of sub) counts.set(k.outcome, (counts.get(k.outcome) ?? 0) + 1)
-  return OUTCOMES.map((o) => ({
-    label: o.short,
-    value: counts.get(o.value) ?? 0,
-    color: o.hex,
-    detail: `${fmtPct((counts.get(o.value) ?? 0) / Math.max(1, sub.length), 1)} of all knocks`,
-  }))
+  return OUTCOMES.map((o) => {
+    const n = counts.get(o.value) ?? 0
+    return {
+      label: o.short,
+      value: n,
+      color: o.hex,
+      detail: `${fmtPct(n / Math.max(1, sub.length), 1)} of the ${fmtCount(sub.length)} knocks logged`,
+    }
+  })
 }
 
-const fmtAvg = (v: number | null): string => (v == null ? '—' : v.toFixed(1))
+const fmtAvg = (v: number | null): string => (v == null ? 'none yet' : v.toFixed(1))
+
+/** How sure the number is, said the way a person would say it. The stats are
+ * unchanged (Wilson, 95%); "95% CI 31%–38%" simply isn't readable by the
+ * people this page is for, and it carried an en dash besides. */
+const likely = (lo: number, hi: number) => `Likely between ${fmtPct(lo)} and ${fmtPct(hi)}`
 
 interface Tile {
   label: string
@@ -459,22 +485,89 @@ interface Tile {
   hint?: string
 }
 
+// ------------------------------------------------------------- rate bases
+// "We can have sign rate by doors: answered, knocked, not knocked, not
+// answered" (2026-07-26, user call). A sign rate needs a stated denominator or
+// it means nothing, and the two a manager actually asks for are different
+// questions: how well we do once somebody opens the door, versus how much a
+// street of knocking is worth. One chip pair switches every sign-rate chart on
+// the page, so the two readings can never be confused for each other.
+type RateBase = 'interaction' | 'door'
+const rateBase = ref<RateBase>('interaction')
+const RATE_BASES: { value: RateBase; label: string }[] = [
+  { value: 'interaction', label: 'Per interaction' },
+  { value: 'door', label: 'Per door knocked' },
+]
+const baseWord = computed(() => (rateBase.value === 'door' ? 'doors knocked' : 'interactions'))
+const signRateSubtitle = computed(() =>
+  rateBase.value === 'door'
+    ? 'share of doors knocked where somebody signed'
+    : 'share of interactions that ended in a signature',
+)
+
+function rateItem(label: string, hits: number, of: number, unit: string, id?: string): BarItem {
+  const w = wilson(hits, of)
+  return {
+    id,
+    label,
+    value: w.p,
+    lo: w.lo,
+    hi: w.hi,
+    detail: `${fmtCount(hits)} of ${fmtCount(of)} ${unit}`,
+    note: likely(w.lo, w.hi),
+  }
+}
+
 // ---------------------------------------------------------------- overview
+
+/** Every address on file, so "how much of the county is left" can be
+ * answered. Range-independent on purpose: a door nobody has ever knocked is
+ * not a fact about the last 30 days. */
+const addressTotal = computed(() => {
+  let n = 0
+  for (const v of cityAddressTotals.value.values()) n += v
+  return n
+})
+const everKnockedDoors = computed(() => new Set(knocks.value.map((k) => k.household)).size)
 
 const kpis = computed<Tile[]>(() => {
   const f = filtered.value
   const doors = new Set(f.map((k) => k.household)).size
   const sigs = f.filter((k) => k.signed).length
-  const answered = f.filter((k) => k.answered).length
-  const conv = f.filter((k) => k.conversation).length
+  const interactions = f.filter((k) => k.interacted).length
   const people = new Set(f.map((k) => k.canvasser)).size
+  const days = new Set(f.map((k) => k.day)).size
+  const left = Math.max(0, addressTotal.value - everKnockedDoors.value)
   return [
     { label: 'Signatures', value: fmtCount(sigs) },
-    { label: 'Doors knocked', value: fmtCount(doors) },
-    { label: 'Total knocks', value: fmtCount(f.length) },
-    { label: 'Answer rate', value: f.length ? fmtPct(answered / f.length, 1) : '—', hint: 'answered ÷ knocks' },
-    { label: 'Close rate', value: conv ? fmtPct(sigs / conv, 1) : '—', hint: 'signed ÷ conversations' },
-    { label: 'Canvassers active', value: fmtCount(people) },
+    {
+      label: 'Signatures a day',
+      value: days ? (sigs / days).toFixed(1) : 'none yet',
+      hint: `over ${fmtCount(days)} days out`,
+    },
+    { label: 'Doors knocked', value: fmtCount(doors), hint: 'counted once each' },
+    { label: 'Knocks', value: fmtCount(f.length), hint: 'every visit, repeats included' },
+    {
+      label: 'Interactions',
+      value: fmtCount(interactions),
+      hint: 'somebody came to the door',
+    },
+    {
+      label: 'Answer rate',
+      value: f.length ? fmtPct(interactions / f.length, 1) : 'none yet',
+      hint: 'of knocks, somebody answered',
+    },
+    {
+      label: 'Sign rate',
+      value: interactions ? fmtPct(sigs / interactions, 1) : 'none yet',
+      hint: 'of interactions, they signed',
+    },
+    { label: 'Canvassers out', value: fmtCount(people) },
+    {
+      label: 'Doors never knocked',
+      value: fmtCount(left),
+      hint: `of ${fmtCount(addressTotal.value)} on file`,
+    },
   ]
 })
 
@@ -518,17 +611,35 @@ const outcomeMix = computed(() => mixFor(filtered.value))
 
 // ---------------------------------------------------------------- areas
 
-/** Every area that has knocks, busiest first — the Areas tab's chip picker. */
+/** Every area that has knocks, busiest first. A DROPDOWN since 2026-07-26
+ * (user call: "rather than have them be bubbles you have to click, I'd rather
+ * it be a drop down box") — the chip row grew a line every time the campaign
+ * reached a new village, and a picker that reflows the page under your thumb
+ * is worse than a list that opens over it. Each row carries its knock count,
+ * which the chips had nowhere to put. */
 const areaNames = computed(() => {
   const counts = new Map<string, number>()
   for (const k of knocks.value) counts.set(k.city, (counts.get(k.city) ?? 0) + 1)
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c)
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])
+})
+
+/** Reka refuses an empty-string option value, so "everything" needs a
+ * sentinel of its own rather than reusing the empty focus. */
+const ALL_AREAS = '__all'
+const areaOptions = computed(() => [
+  { value: ALL_AREAS, label: 'All areas' },
+  ...areaNames.value.map(([name, n]) => ({ value: name, label: `${name} (${fmtCount(n)} knocks)` })),
+])
+const areaPick = computed({
+  get: () => areaFocus.value || ALL_AREAS,
+  set: (v: string) => (areaFocus.value = v === ALL_AREAS ? '' : v),
 })
 
 function rateBy(
   key: (k: Knock) => string,
   num: (k: Knock) => boolean,
   den: (k: Knock) => boolean,
+  unit: string,
   minDen = 25,
 ): BarItem[] {
   const per = new Map<string, { n: number; s: number }>()
@@ -541,15 +652,42 @@ function rateBy(
   }
   return [...per.entries()]
     .filter(([, e]) => e.n >= minDen)
-    .map(([label, e]) => {
-      const w = wilson(e.s, e.n)
-      return { label, value: w.p, lo: w.lo, hi: w.hi, detail: `${e.s} of ${e.n} · 95% CI ${fmtPct(w.lo)}–${fmtPct(w.hi)}` }
-    })
+    .map(([label, e]) => rateItem(label, e.s, e.n, unit))
     .sort((a, b) => b.value - a.value)
 }
 
-const signRateByCity = computed(() => rateBy((k) => k.city, (k) => k.signed, (k) => k.conversation))
-const answerRateByCity = computed(() => rateBy((k) => k.city, (k) => k.answered, () => true, 50))
+/** The same rate counted over DOORS instead of knocks: a door counts once,
+ * and it counts as signed if anybody there ever signed. */
+function signRateByDoor(key: (k: Knock) => string, include: (k: Knock) => boolean, minDen: number): BarItem[] {
+  const per = new Map<string, { knocked: Set<string>; signed: Set<string> }>()
+  for (const k of filtered.value) {
+    if (!include(k)) continue
+    let e = per.get(key(k))
+    if (!e) {
+      e = { knocked: new Set(), signed: new Set() }
+      per.set(key(k), e)
+    }
+    e.knocked.add(k.household)
+    if (k.signed) e.signed.add(k.household)
+  }
+  return [...per.entries()]
+    .filter(([, e]) => e.knocked.size >= minDen)
+    .map(([label, e]) => rateItem(label, e.signed.size, e.knocked.size, 'doors knocked'))
+    .sort((a, b) => b.value - a.value)
+}
+
+/** One entry point for every sign-rate chart, so the chip pair switches all
+ * of them together and no two charts on screen can be on different bases. */
+function signRateBy(key: (k: Knock) => string, include: (k: Knock) => boolean = () => true, minDen = 25) {
+  return rateBase.value === 'door'
+    ? signRateByDoor(key, include, minDen)
+    : rateBy(key, (k) => k.signed, (k) => include(k) && k.interacted, 'interactions', minDen)
+}
+
+const signRateByCity = computed(() => signRateBy((k) => k.city))
+const answerRateByCity = computed(() =>
+  rateBy((k) => k.city, (k) => k.interacted, () => true, 'knocks', 50),
+)
 const coverageByCity = computed<BarItem[]>(() => {
   const knocked = new Map<string, Set<string>>()
   for (const k of filtered.value) {
@@ -562,7 +700,8 @@ const coverageByCity = computed<BarItem[]>(() => {
       return {
         label: city,
         value: doors.size / Math.max(1, total),
-        detail: `${fmtCount(doors.size)} of ${fmtCount(total)} doors`,
+        detail: `${fmtCount(doors.size)} of ${fmtCount(total)} doors on file`,
+        note: `${fmtCount(Math.max(0, total - doors.size))} still to knock`,
       }
     })
     .filter((i) => (cityAddressTotals.value.get(i.label) ?? 0) >= 50)
@@ -571,13 +710,26 @@ const coverageByCity = computed<BarItem[]>(() => {
 
 const rateRows = (items: BarItem[]) => items.map((i) => [i.label, fmtPct(i.value, 1), i.detail ?? ''])
 
-/** Campaign-wide rates — the dashed "avg" markers on rate charts. */
+/** Campaign-wide rates: the dashed "average" marker on every rate chart. The
+ * sign one follows whichever base the chips are on, or the marker would be
+ * measuring something the bars beside it are not. */
 const overallRates = computed(() => {
   const f = filtered.value
-  const conv = f.filter((k) => k.conversation).length
   const sigs = f.filter((k) => k.signed).length
-  const answered = f.filter((k) => k.answered).length
-  return { sign: conv ? sigs / conv : 0, answer: f.length ? answered / f.length : 0 }
+  const interactions = f.filter((k) => k.interacted).length
+  const doors = new Set(f.map((k) => k.household)).size
+  const signedDoors = new Set(f.filter((k) => k.signed).map((k) => k.household)).size
+  return {
+    sign:
+      rateBase.value === 'door'
+        ? doors
+          ? signedDoors / doors
+          : 0
+        : interactions
+          ? sigs / interactions
+          : 0,
+    answer: f.length ? interactions / f.length : 0,
+  }
 })
 
 /** Percent-axis bound with headroom, keeping whiskers AND the avg marker on. */
@@ -595,30 +747,28 @@ interface GroupStats {
   label: string
   knocks: number
   doors: Set<string>
-  conv: number
+  interactions: number
   sigs: number
-  answered: number
   days: Set<string>
-  closeRate: number
+  signRate: number
 }
 
 function statsBy(key: (k: Knock) => string): GroupStats[] {
-  const per = new Map<string, Omit<GroupStats, 'label' | 'closeRate'>>()
+  const per = new Map<string, Omit<GroupStats, 'label' | 'signRate'>>()
   for (const k of filtered.value) {
     let e = per.get(key(k))
     if (!e) {
-      e = { knocks: 0, doors: new Set(), conv: 0, sigs: 0, answered: 0, days: new Set() }
+      e = { knocks: 0, doors: new Set(), interactions: 0, sigs: 0, days: new Set() }
       per.set(key(k), e)
     }
     e.knocks++
     e.doors.add(k.household)
     e.days.add(k.day)
-    if (k.answered) e.answered++
-    if (k.conversation) e.conv++
+    if (k.interacted) e.interactions++
     if (k.signed) e.sigs++
   }
   return [...per.entries()]
-    .map(([label, e]) => ({ label, ...e, closeRate: e.conv ? e.sigs / e.conv : 0 }))
+    .map(([label, e]) => ({ label, ...e, signRate: e.interactions ? e.sigs / e.interactions : 0 }))
     .sort((a, b) => b.sigs - a.sigs)
 }
 
@@ -635,12 +785,11 @@ const signaturesByTurf = computed<BarItem[]>(() =>
   chartableTurfs.value.map((t) => ({
     label: t.label,
     value: t.sigs,
-    detail: `${fmtCount(t.knocks)} knocks · close rate ${fmtPct(t.closeRate, 1)}`,
+    detail: `${fmtCount(t.knocks)} knocks, ${fmtCount(t.interactions)} interactions`,
+    note: `Sign rate ${fmtPct(t.signRate, 1)}`,
   })),
 )
-const signRateByTurf = computed(() =>
-  rateBy((k) => k.turf, (k) => k.signed, (k) => k.conversation && k.turf !== NO_TURF, 10),
-)
+const signRateByTurf = computed(() => signRateBy((k) => k.turf, (k) => k.turf !== NO_TURF, 10))
 const coverageByTurf = computed<BarItem[]>(() =>
   chartableTurfs.value
     .filter((t) => (turfAddressTotals.value.get(t.label) ?? 0) > 0)
@@ -649,7 +798,8 @@ const coverageByTurf = computed<BarItem[]>(() =>
       return {
         label: t.label,
         value: Math.min(1, t.doors.size / total),
-        detail: `${fmtCount(t.doors.size)} of ${fmtCount(total)} doors`,
+        detail: `${fmtCount(t.doors.size)} of ${fmtCount(total)} doors in the turf`,
+        note: `${fmtCount(Math.max(0, total - t.doors.size))} still to knock`,
       }
     })
     .sort((a, b) => b.value - a.value),
@@ -661,27 +811,44 @@ const groupRows = (stats: GroupStats[]) =>
     e.days.size,
     e.knocks,
     e.doors.size,
-    e.conv,
+    e.interactions,
     e.sigs,
-    fmtPct(e.closeRate, 1),
-    fmtPct(e.knocks ? e.answered / e.knocks : 0, 1),
+    fmtPct(e.signRate, 1),
+    fmtPct(e.knocks ? e.interactions / e.knocks : 0, 1),
   ])
-const GROUP_COLUMNS = ['', 'Days out', 'Knocks', 'Doors', 'Conversations', 'Signatures', 'Close rate', 'Answer rate']
+const GROUP_COLUMNS = ['', 'Days out', 'Knocks', 'Doors', 'Interactions', 'Signatures', 'Sign rate', 'Answer rate']
 
 const signaturesBySquad = computed<BarItem[]>(() =>
   chartableSquads.value.map((s) => ({
     label: s.label,
     value: s.sigs,
-    detail: `${s.days.size} day${s.days.size === 1 ? '' : 's'} out · ${fmtCount(s.knocks)} knocks`,
+    detail: `${s.days.size} day${s.days.size === 1 ? '' : 's'} out, ${fmtCount(s.knocks)} knocks`,
+    note: `Sign rate ${fmtPct(s.signRate, 1)}`,
   })),
 )
-const signRateBySquad = computed(() =>
-  rateBy((k) => k.squad, (k) => k.signed, (k) => k.conversation && k.squad !== NO_SQUAD, 10),
-)
+const signRateBySquad = computed(() => signRateBy((k) => k.squad, (k) => k.squad !== NO_SQUAD, 10))
 
 // ---------------------------------------------------------------- odds
 
-function rateByAttempt(num: (k: Knock) => boolean, den: (k: Knock) => boolean): BarItem[] {
+/** Visits, not "attempts" (2026-07-26, user call: "signed by attempt, attempt
+ * four plus: does that mean BY attempt four we get 54%, or ON the fourth
+ * attempt we have a 54% chance?").
+ *
+ * It is the second one, and it always was: each bar counts only the knocks
+ * that WERE that visit, so the bars are independent rather than cumulative.
+ * The old "Attempt 4+" said nothing either way. "4th visit or later" plus a
+ * spelled-out sentence in the tooltip says which one it is without anybody
+ * having to guess. */
+const VISIT_LABELS = ['', '1st visit', '2nd visit', '3rd visit', '4th visit or later']
+const visitPhrase = (a: number) =>
+  a === 4 ? 'on a 4th or later visit' : `on a door's ${['', '1st', '2nd', '3rd'][a]} visit`
+
+function rateByVisit(
+  num: (k: Knock) => boolean,
+  den: (k: Knock) => boolean,
+  unit: string,
+  verb: string,
+): BarItem[] {
   const per = new Map<number, { n: number; s: number }>()
   for (const k of filtered.value) {
     if (!den(k)) continue
@@ -695,19 +862,18 @@ function rateByAttempt(num: (k: Knock) => boolean, den: (k: Knock) => boolean): 
     .sort((a, b) => a[0] - b[0])
     .filter(([, e]) => e.n >= 20)
     .map(([a, e]) => {
-      const w = wilson(e.s, e.n)
-      return {
-        label: a === 4 ? 'Attempt 4+' : `Attempt ${a}`,
-        value: w.p,
-        lo: w.lo,
-        hi: w.hi,
-        detail: `${e.s} of ${e.n} · 95% CI ${fmtPct(w.lo)}–${fmtPct(w.hi)}`,
-      }
+      const item = rateItem(VISIT_LABELS[a], e.s, e.n, `${unit} ${visitPhrase(a)}`)
+      item.detail = `${fmtCount(e.s)} of ${fmtCount(e.n)} ${unit} ${visitPhrase(a)} ${verb}`
+      return item
     })
 }
 
-const answerByAttempt = computed(() => rateByAttempt((k) => k.answered, () => true))
-const signByAttempt = computed(() => rateByAttempt((k) => k.signed, (k) => k.conversation))
+const answerByVisit = computed(() =>
+  rateByVisit((k) => k.interacted, () => true, 'knocks', 'were answered'),
+)
+const signByVisit = computed(() =>
+  rateByVisit((k) => k.signed, (k) => k.interacted, 'interactions', 'ended in a signature'),
+)
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const HOURS = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
@@ -718,41 +884,51 @@ const heat = computed(() => {
     const c = HOURS.indexOf(Math.min(20, Math.max(10, k.hour)))
     if (c < 0) continue
     n[k.weekday][c]++
-    if (k.answered) s[k.weekday][c]++
+    if (k.interacted) s[k.weekday][c]++
   }
   const values = n.map((row, r) => row.map((cnt, c) => (cnt >= 15 ? s[r][c] / cnt : null)))
   return { values, counts: n }
 })
 
+/** Three stages, not four: "answered" and "conversation" were the same set of
+ * doors under two names once interactions replaced conversations, and a
+ * funnel step that never loses anybody teaches nothing. */
 const funnel = computed<BarItem[]>(() => {
   const f = filtered.value
   const doors = new Set(f.map((k) => k.household)).size
-  const answeredDoors = new Set(f.filter((k) => k.answered).map((k) => k.household)).size
-  const convDoors = new Set(f.filter((k) => k.conversation).map((k) => k.household)).size
+  const talkedDoors = new Set(f.filter((k) => k.interacted).map((k) => k.household)).size
   const signedDoors = new Set(f.filter((k) => k.signed).map((k) => k.household)).size
-  const ramp = ordinalRamp(4, palette.dark.value)
+  const ramp = ordinalRamp(3, palette.dark.value)
   const steps = [
-    { label: 'Doors knocked', value: doors },
-    { label: 'Door answered', value: answeredDoors },
-    { label: 'Conversation', value: convDoors },
-    { label: 'Signed', value: signedDoors },
+    { label: 'Knocked', value: doors, detail: 'doors visited at least once', of: '' },
+    {
+      label: 'Talked to somebody',
+      value: talkedDoors,
+      detail: 'doors where anyone came out',
+      of: 'of the doors knocked',
+    },
+    {
+      label: 'Got a signature',
+      value: signedDoors,
+      detail: 'doors where somebody signed',
+      of: 'of the doors that answered',
+    },
   ]
-  return steps.map((st, i) => ({
+  return steps.map(({ of, ...st }, i) => ({
     ...st,
     color: ramp[i],
-    detail: i === 0 ? 'unique doors' : `${fmtPct(st.value / Math.max(1, steps[i - 1].value), 1)} of previous step`,
+    note: of ? `${fmtPct(st.value / Math.max(1, steps[i - 1].value), 1)} ${of}` : undefined,
   }))
 })
 
 // ---------------------------------------------------------------- canvassers
 
 const canvasserStats = computed(() => {
-  const per = new Map<string, { knocks: number; conv: number; sigs: number; answered: number }>()
+  const per = new Map<string, { knocks: number; interactions: number; sigs: number }>()
   for (const k of filtered.value) {
-    const e = per.get(k.canvasser) ?? { knocks: 0, conv: 0, sigs: 0, answered: 0 }
+    const e = per.get(k.canvasser) ?? { knocks: 0, interactions: 0, sigs: 0 }
     e.knocks++
-    if (k.answered) e.answered++
-    if (k.conversation) e.conv++
+    if (k.interacted) e.interactions++
     if (k.signed) e.sigs++
     per.set(k.canvasser, e)
   }
@@ -761,15 +937,15 @@ const canvasserStats = computed(() => {
       id,
       name: canvasserNames.value.get(id) ?? 'Unknown',
       ...e,
-      closeRate: e.conv ? e.sigs / e.conv : 0,
+      signRate: e.interactions ? e.sigs / e.interactions : 0,
     }))
     .sort((a, b) => b.sigs - a.sigs)
 })
 
 const scatterPoints = computed<ScatterPoint[]>(() =>
   canvasserStats.value
-    .filter((c) => c.conv >= 20)
-    .map((c) => ({ x: c.knocks, y: c.closeRate, label: c.name, id: c.id })),
+    .filter((c) => c.interactions >= 20)
+    .map((c) => ({ x: c.knocks, y: c.signRate, label: c.name, id: c.id })),
 )
 const scatterFit = computed(() => linearRegression(scatterPoints.value.map((p) => ({ x: p.x, y: p.y }))))
 
@@ -783,7 +959,8 @@ const signatureEarners = computed<BarItem[]>(() =>
       id: c.id,
       label: c.name,
       value: c.sigs,
-      detail: `${fmtCount(c.knocks)} knocks · close rate ${fmtPct(c.closeRate, 1)}`,
+      detail: `${fmtCount(c.knocks)} knocks, ${fmtCount(c.interactions)} interactions`,
+      note: `Sign rate ${fmtPct(c.signRate, 1)}`,
     }),
   ),
 )
@@ -792,13 +969,13 @@ const canvasserRows = computed(() =>
   canvasserStats.value.map((c) => [
     c.name,
     c.knocks,
-    c.conv,
+    c.interactions,
     c.sigs,
-    fmtPct(c.closeRate, 1),
-    fmtPct(c.knocks ? c.answered / c.knocks : 0, 1),
+    fmtPct(c.signRate, 1),
+    fmtPct(c.knocks ? c.interactions / c.knocks : 0, 1),
   ]),
 )
-const CANVASSER_COLUMNS = ['Canvasser', 'Knocks', 'Conversations', 'Signatures', 'Close rate', 'Answer rate']
+const CANVASSER_COLUMNS = ['Canvasser', 'Knocks', 'Interactions', 'Signatures', 'Sign rate', 'Answer rate']
 
 // ---------------------------------------------------------------- focus panel
 // ---------------------------------------------------------------- appointments
@@ -864,11 +1041,11 @@ const apptTiles = computed<Tile[]>(() => {
   const kept = count('kept')
   return [
     { label: 'Booked', value: fmtCount(r.length) },
-    { label: 'Kept', value: fmtCount(kept), hint: 'went back in the window' },
+    { label: 'Kept', value: fmtCount(kept), hint: 'went back inside the window' },
     {
       label: 'Kept rate',
-      value: apptResolved.value.length ? fmtPct(apptKeptRate.value, 1) : '—',
-      hint: 'kept ÷ windows closed',
+      value: apptResolved.value.length ? fmtPct(apptKeptRate.value, 1) : 'none yet',
+      hint: 'of windows already closed',
     },
     { label: 'Missed', value: fmtCount(count('missed')) },
     { label: 'Back late', value: fmtCount(count('late')) },
@@ -942,16 +1119,7 @@ const keptByWindow = computed<BarItem[]>(() => {
   }
   return [...per.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([, e]) => {
-      const w = wilson(e.k, e.n)
-      return {
-        label: e.label,
-        value: w.p,
-        lo: w.lo,
-        hi: w.hi,
-        detail: `${e.k} of ${e.n} · 95% CI ${fmtPct(w.lo)}–${fmtPct(w.hi)}`,
-      }
-    })
+    .map(([, e]) => rateItem(e.label, e.k, e.n, 'windows kept'))
 })
 
 /** What the return visit got, counting kept AND late returns — the door was
@@ -968,7 +1136,7 @@ const apptOutcomeMix = computed<BarItem[]>(() => {
     label: o.short,
     value: counts.get(o.value) ?? 0,
     color: o.hex,
-    detail: `${fmtPct((counts.get(o.value) ?? 0) / Math.max(1, total), 1)} of return visits`,
+    detail: `${fmtPct((counts.get(o.value) ?? 0) / Math.max(1, total), 1)} of the ${fmtCount(total)} return visits`,
   }))
 })
 
@@ -985,7 +1153,7 @@ const apptByCanvasser = computed<BarItem[]>(() => {
       id,
       label: canvasserNames.value.get(id) ?? 'Unknown',
       value: e.n,
-      detail: `${fmtCount(e.k)} kept`,
+      detail: `${fmtCount(e.k)} of them kept`,
     }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 10)
@@ -1015,16 +1183,24 @@ const focusTiles = computed<Tile[]>(() => {
   const sub = focusKnocks.value
   const doors = new Set(sub.map((k) => k.household)).size
   const sigs = sub.filter((k) => k.signed).length
-  const answered = sub.filter((k) => k.answered).length
-  const conv = sub.filter((k) => k.conversation).length
+  const interactions = sub.filter((k) => k.interacted).length
   const days = new Set(sub.map((k) => k.day)).size
   const people = new Set(sub.map((k) => k.canvasser)).size
   const tiles: Tile[] = [
     { label: 'Signatures', value: fmtCount(sigs) },
-    { label: 'Doors knocked', value: fmtCount(doors) },
-    { label: 'Total knocks', value: fmtCount(sub.length) },
-    { label: 'Answer rate', value: sub.length ? fmtPct(answered / sub.length, 1) : '—', hint: 'answered ÷ knocks' },
-    { label: 'Close rate', value: conv ? fmtPct(sigs / conv, 1) : '—', hint: 'signed ÷ conversations' },
+    { label: 'Doors knocked', value: fmtCount(doors), hint: 'counted once each' },
+    { label: 'Knocks', value: fmtCount(sub.length), hint: 'every visit, repeats included' },
+    { label: 'Interactions', value: fmtCount(interactions), hint: 'somebody came to the door' },
+    {
+      label: 'Answer rate',
+      value: sub.length ? fmtPct(interactions / sub.length, 1) : 'none yet',
+      hint: 'of knocks, somebody answered',
+    },
+    {
+      label: 'Sign rate',
+      value: interactions ? fmtPct(sigs / interactions, 1) : 'none yet',
+      hint: 'of interactions, they signed',
+    },
     { label: 'Days active', value: fmtCount(days) },
   ]
   if (f && f.kind !== 'canvasser') tiles.push({ label: 'Canvassers', value: fmtCount(people) })
@@ -1038,54 +1214,56 @@ const focusTiles = computed<Tile[]>(() => {
     tiles.push({
       label: 'Coverage',
       value: fmtPct(Math.min(1, doors / total), 1),
-      hint: `${fmtCount(doors)} of ${fmtCount(total)} doors`,
+      hint: `${fmtCount(doors)} of ${fmtCount(total)} doors reached`,
     })
   }
   return tiles
 })
 
 function rankBy(sub: Knock[], key: (k: Knock) => string, exclude?: string): BarItem[] {
-  const per = new Map<string, { knocks: number; sigs: number; conv: number }>()
+  const per = new Map<string, { knocks: number; sigs: number; interactions: number }>()
   for (const k of sub) {
     const label = key(k)
     if (label === exclude) continue
     let e = per.get(label)
     if (!e) {
-      e = { knocks: 0, sigs: 0, conv: 0 }
+      e = { knocks: 0, sigs: 0, interactions: 0 }
       per.set(label, e)
     }
     e.knocks++
     if (k.signed) e.sigs++
-    if (k.conversation) e.conv++
+    if (k.interacted) e.interactions++
   }
   return [...per.entries()]
     .map(([label, e]) => ({
       label,
       value: e.sigs,
-      detail: `${fmtCount(e.knocks)} knocks · close rate ${fmtPct(e.conv ? e.sigs / e.conv : 0, 1)}`,
+      detail: `${fmtCount(e.knocks)} knocks, ${fmtCount(e.interactions)} interactions`,
+      note: `Sign rate ${fmtPct(e.interactions ? e.sigs / e.interactions : 0, 1)}`,
     }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 10)
 }
 
 function rankPeople(sub: Knock[]): BarItem[] {
-  const per = new Map<string, { knocks: number; sigs: number; conv: number }>()
+  const per = new Map<string, { knocks: number; sigs: number; interactions: number }>()
   for (const k of sub) {
     let e = per.get(k.canvasser)
     if (!e) {
-      e = { knocks: 0, sigs: 0, conv: 0 }
+      e = { knocks: 0, sigs: 0, interactions: 0 }
       per.set(k.canvasser, e)
     }
     e.knocks++
     if (k.signed) e.sigs++
-    if (k.conversation) e.conv++
+    if (k.interacted) e.interactions++
   }
   return [...per.entries()]
     .map(([id, e]) => ({
       id,
       label: canvasserNames.value.get(id) ?? 'Unknown',
       value: e.sigs,
-      detail: `${fmtCount(e.knocks)} knocks · close rate ${fmtPct(e.conv ? e.sigs / e.conv : 0, 1)}`,
+      detail: `${fmtCount(e.knocks)} knocks, ${fmtCount(e.interactions)} interactions`,
+      note: `Sign rate ${fmtPct(e.interactions ? e.sigs / e.interactions : 0, 1)}`,
     }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 10)
@@ -1104,7 +1282,7 @@ const focusRanks = computed<FocusRank[]>(() => {
   switch (f.kind) {
     case 'area':
       return [
-        { title: 'Turfs here', items: rankBy(sub, (k) => k.turf, NO_TURF), open: openTurf },
+        { title: 'Turf here', items: rankBy(sub, (k) => k.turf, NO_TURF), open: openTurf },
         { title: 'Canvassers here', items: rankPeople(sub), open: openPerson },
       ]
     case 'turf':
@@ -1173,25 +1351,13 @@ const focusRanks = computed<FocusRank[]>(() => {
             </button>
           </div>
           <span class="scope-right muted">
-            {{ fmtCount(scopeCount) }} knocks<span v-if="showTapHint"> · tap to explore</span>
+            {{ fmtCount(scopeCount) }} knocks<span v-if="showTapHint">, tap any bar to open it</span>
           </span>
         </div>
 
         <!-- The Areas tab's picker lives IN the tab, not above the page. -->
-        <div v-if="tab === 'areas'" class="chip-row" role="group" aria-label="Area" data-help="analytics-areachips">
-          <button type="button" class="chip" :class="{ on: !areaFocus }" @click="areaFocus = ''">
-            All areas
-          </button>
-          <button
-            v-for="a in areaNames"
-            :key="a"
-            type="button"
-            class="chip"
-            :class="{ on: areaFocus === a }"
-            @click="areaFocus = a"
-          >
-            {{ a }}
-          </button>
+        <div v-if="tab === 'areas'" class="area-pick" data-help="analytics-areachips">
+          <AppSelect v-model="areaPick" :options="areaOptions" small aria-label="Area" />
         </div>
 
         <!-- ============================== Focused entity (shared drill panel) -->
@@ -1206,7 +1372,7 @@ const focusRanks = computed<FocusRank[]>(() => {
 
           <ChartCard
             title="Signatures per day"
-            :columns="['Day', 'Signatures', '7-day avg']"
+            :columns="['Day', 'Signatures', 'Average of the last 7 days']"
             :rows="focusTrendRows"
           >
             <TimeSeriesChart :labels="focusDaily.axis.map(dayLabel)" :series="focusTrend" />
@@ -1217,20 +1383,26 @@ const focusRanks = computed<FocusRank[]>(() => {
               v-for="r in focusRanks"
               :key="r.title"
               :title="r.title"
-              subtitle="by signatures"
+              subtitle="most signatures first"
               :columns="[r.title, 'Signatures', 'Detail']"
               :rows="r.items.map((i) => [i.label, i.value, i.detail ?? ''])"
             >
-              <BarChart :items="r.items" :color="cat[0]" selectable @select="r.open" />
+              <BarChart
+                :items="r.items"
+                :color="cat[0]"
+                measure="Signatures"
+                selectable
+                @select="r.open"
+              />
             </ChartCard>
           </div>
 
           <ChartCard
-            title="Outcome totals"
+            title="What happened at these doors"
             :columns="['Outcome', 'Knocks', 'Share']"
             :rows="focusMix.map((i) => [i.label, i.value, i.detail ?? ''])"
           >
-            <BarChart :items="focusMix" :color="cat[0]" />
+            <BarChart :items="focusMix" :color="cat[0]" measure="Knocks logged" />
           </ChartCard>
         </template>
 
@@ -1247,7 +1419,7 @@ const focusRanks = computed<FocusRank[]>(() => {
           <div class="two-col">
             <ChartCard
               title="Signatures per day"
-              :columns="['Day', 'Signatures', '7-day avg']"
+              :columns="['Day', 'Signatures', 'Average of the last 7 days']"
               :rows="sigRows"
             >
               <TimeSeriesChart :labels="overviewDaily.axis.map(dayLabel)" :series="sigSeries" />
@@ -1256,7 +1428,7 @@ const focusRanks = computed<FocusRank[]>(() => {
             <ChartCard
               title="Knocks per day"
               data-help="overview-trend"
-              :columns="['Day', 'Knocks', '7-day avg']"
+              :columns="['Day', 'Knocks', 'Average of the last 7 days']"
               :rows="knockRows"
             >
               <TimeSeriesChart :labels="overviewDaily.axis.map(dayLabel)" :series="knockSeries" />
@@ -1266,7 +1438,7 @@ const focusRanks = computed<FocusRank[]>(() => {
           <div class="two-col">
             <ChartCard
               title="What happened at doors"
-              subtitle="per day"
+              subtitle="knocks each day, by outcome"
               :columns="['Day', ...OUTCOMES.map((o) => o.short)]"
               :rows="overviewDaily.axis.map((d, i) => [d, ...outcomeStack.map((s) => s.values[i])])"
             >
@@ -1274,11 +1446,12 @@ const focusRanks = computed<FocusRank[]>(() => {
             </ChartCard>
 
             <ChartCard
-              title="Outcome totals"
+              title="Outcomes in total"
+              subtitle="every knock in the window"
               :columns="['Outcome', 'Knocks', 'Share']"
               :rows="outcomeMix.map((i) => [i.label, i.value, i.detail ?? ''])"
             >
-              <BarChart :items="outcomeMix" :color="cat[0]" />
+              <BarChart :items="outcomeMix" :color="cat[0]" measure="Knocks logged" />
             </ChartCard>
           </div>
         </template>
@@ -1289,16 +1462,30 @@ const focusRanks = computed<FocusRank[]>(() => {
             <ChartCard
               title="Sign rate by area"
               data-help="areas-rate"
-              subtitle="signed ÷ conversations"
+              :subtitle="signRateSubtitle"
               :columns="['Area', 'Sign rate', 'Detail']"
               :rows="rateRows(signRateByCity)"
             >
+              <div class="chip-row base-row" role="group" aria-label="Count sign rate out of">
+                <button
+                  v-for="b in RATE_BASES"
+                  :key="b.value"
+                  type="button"
+                  class="chip"
+                  :class="{ on: rateBase === b.value }"
+                  @click="rateBase = b.value"
+                >
+                  {{ b.label }}
+                </button>
+              </div>
               <BarChart
                 :items="signRateByCity"
                 :color="cat[0]"
                 percent
                 selectable
+                measure="Sign rate"
                 :ref-value="overallRates.sign"
+                ref-label="campaign average"
                 :max="pctMax(signRateByCity, overallRates.sign)"
                 @select="openArea"
               />
@@ -1306,7 +1493,7 @@ const focusRanks = computed<FocusRank[]>(() => {
 
             <ChartCard
               title="Answer rate by area"
-              subtitle="answered ÷ knocks"
+              subtitle="share of knocks where somebody came to the door"
               :columns="['Area', 'Answer rate', 'Detail']"
               :rows="rateRows(answerRateByCity)"
             >
@@ -1315,7 +1502,9 @@ const focusRanks = computed<FocusRank[]>(() => {
                 :color="cat[0]"
                 percent
                 selectable
+                measure="Answer rate"
                 :ref-value="overallRates.answer"
+                ref-label="campaign average"
                 :max="pctMax(answerRateByCity, overallRates.answer)"
                 @select="openArea"
               />
@@ -1325,38 +1514,67 @@ const focusRanks = computed<FocusRank[]>(() => {
           <ChartCard
             title="Door coverage by area"
             data-help="areas-coverage"
-            subtitle="knocked ÷ on file"
+            subtitle="share of the doors on file knocked at least once"
             :columns="['Area', 'Coverage', 'Detail']"
             :rows="rateRows(coverageByCity)"
           >
-            <BarChart :items="coverageByCity" :color="cat[0]" percent :max="1" selectable @select="openArea" />
+            <BarChart
+              :items="coverageByCity"
+              :color="cat[0]"
+              percent
+              :max="1"
+              selectable
+              measure="Door coverage"
+              @select="openArea"
+            />
           </ChartCard>
         </template>
 
-        <!-- ============================== Turfs (compare) -->
+        <!-- ============================== Turf (compare) -->
         <template v-else-if="tab === 'turfs'">
           <div class="two-col">
             <ChartCard
               title="Signatures by turf"
+              subtitle="most first"
               :columns="['Turf', 'Signatures', 'Detail']"
               :rows="signaturesByTurf.map((i) => [i.label, i.value, i.detail ?? ''])"
             >
-              <BarChart :items="signaturesByTurf" :color="cat[0]" selectable @select="openTurf" />
+              <BarChart
+                :items="signaturesByTurf"
+                :color="cat[0]"
+                measure="Signatures"
+                selectable
+                @select="openTurf"
+              />
             </ChartCard>
 
             <ChartCard
               title="Sign rate by turf"
               data-help="turfs-rate"
-              subtitle="signed ÷ conversations"
+              :subtitle="signRateSubtitle"
               :columns="['Turf', 'Sign rate', 'Detail']"
               :rows="rateRows(signRateByTurf)"
             >
+              <div class="chip-row base-row" role="group" aria-label="Count sign rate out of">
+                <button
+                  v-for="b in RATE_BASES"
+                  :key="b.value"
+                  type="button"
+                  class="chip"
+                  :class="{ on: rateBase === b.value }"
+                  @click="rateBase = b.value"
+                >
+                  {{ b.label }}
+                </button>
+              </div>
               <BarChart
                 :items="signRateByTurf"
                 :color="cat[0]"
                 percent
                 selectable
+                measure="Sign rate"
                 :ref-value="overallRates.sign"
+                ref-label="campaign average"
                 :max="pctMax(signRateByTurf, overallRates.sign)"
                 @select="openTurf"
               />
@@ -1366,11 +1584,19 @@ const focusRanks = computed<FocusRank[]>(() => {
           <ChartCard
             title="Turf coverage"
             data-help="turfs-coverage"
-            subtitle="knocked ÷ doors in turf"
+            subtitle="share of the turf's doors knocked at least once"
             :columns="['Turf', 'Coverage', 'Detail']"
             :rows="rateRows(coverageByTurf)"
           >
-            <BarChart :items="coverageByTurf" :color="cat[0]" percent :max="1" selectable @select="openTurf" />
+            <BarChart
+              :items="coverageByTurf"
+              :color="cat[0]"
+              percent
+              :max="1"
+              selectable
+              measure="Turf coverage"
+              @select="openTurf"
+            />
           </ChartCard>
 
           <ChartCard
@@ -1390,24 +1616,45 @@ const focusRanks = computed<FocusRank[]>(() => {
             <ChartCard
               title="Signatures by squad"
               data-help="squads-chart"
+              subtitle="most first"
               :columns="['Squad', 'Signatures', 'Detail']"
               :rows="signaturesBySquad.map((i) => [i.label, i.value, i.detail ?? ''])"
             >
-              <BarChart :items="signaturesBySquad" :color="cat[0]" selectable @select="openSquad" />
+              <BarChart
+                :items="signaturesBySquad"
+                :color="cat[0]"
+                measure="Signatures"
+                selectable
+                @select="openSquad"
+              />
             </ChartCard>
 
             <ChartCard
               title="Sign rate by squad"
-              subtitle="signed ÷ conversations"
+              :subtitle="signRateSubtitle"
               :columns="['Squad', 'Sign rate', 'Detail']"
               :rows="rateRows(signRateBySquad)"
             >
+              <div class="chip-row base-row" role="group" aria-label="Count sign rate out of">
+                <button
+                  v-for="b in RATE_BASES"
+                  :key="b.value"
+                  type="button"
+                  class="chip"
+                  :class="{ on: rateBase === b.value }"
+                  @click="rateBase = b.value"
+                >
+                  {{ b.label }}
+                </button>
+              </div>
               <BarChart
                 :items="signRateBySquad"
                 :color="cat[0]"
                 percent
                 selectable
+                measure="Sign rate"
                 :ref-value="overallRates.sign"
+                ref-label="campaign average"
                 :max="pctMax(signRateBySquad, overallRates.sign)"
                 @select="openSquad"
               />
@@ -1438,7 +1685,7 @@ const focusRanks = computed<FocusRank[]>(() => {
           <ChartCard
             title="Kept rate by window"
             data-help="appt-windows"
-            subtitle="kept ÷ windows closed"
+            subtitle="share of closed windows somebody went back for"
             :columns="['Window', 'Kept rate', 'Detail']"
             :rows="rateRows(keptByWindow)"
           >
@@ -1446,7 +1693,9 @@ const focusRanks = computed<FocusRank[]>(() => {
               :items="keptByWindow"
               :color="cat[0]"
               percent
+              measure="Kept rate"
               :ref-value="apptKeptRate"
+              ref-label="overall"
               :max="pctMax(keptByWindow, apptKeptRate)"
             />
           </ChartCard>
@@ -1463,19 +1712,27 @@ const focusRanks = computed<FocusRank[]>(() => {
 
             <ChartCard
               title="What the return visit got"
+              subtitle="outcome of the knock that went back"
               :columns="['Outcome', 'Visits', 'Share']"
               :rows="apptOutcomeMix.map((i) => [i.label, i.value, i.detail ?? ''])"
             >
-              <BarChart :items="apptOutcomeMix" :color="cat[0]" />
+              <BarChart :items="apptOutcomeMix" :color="cat[0]" measure="Return visits" />
             </ChartCard>
           </div>
 
           <ChartCard
             title="Who books them"
+            subtitle="most first"
             :columns="['Canvasser', 'Booked', 'Detail']"
             :rows="apptByCanvasser.map((i) => [i.label, i.value, i.detail ?? ''])"
           >
-            <BarChart :items="apptByCanvasser" :color="cat[0]" selectable @select="openPerson" />
+            <BarChart
+              :items="apptByCanvasser"
+              :color="cat[0]"
+              measure="Appointments booked"
+              selectable
+              @select="openPerson"
+            />
           </ChartCard>
         </template>
 
@@ -1483,33 +1740,37 @@ const focusRanks = computed<FocusRank[]>(() => {
         <template v-else-if="tab === 'odds'">
           <div class="two-col">
             <ChartCard
-              title="Answers by attempt"
+              title="Answer rate by visit"
               data-help="odds-attempts"
-              subtitle="answered ÷ knocks"
-              :columns="['Attempt', 'Answer rate', 'Detail']"
-              :rows="rateRows(answerByAttempt)"
+              subtitle="counts that visit only, not a running total"
+              :columns="['Visit', 'Answer rate', 'Detail']"
+              :rows="rateRows(answerByVisit)"
             >
               <BarChart
-                :items="answerByAttempt"
+                :items="answerByVisit"
                 :color="cat[0]"
                 percent
+                measure="Answer rate on that visit"
                 :ref-value="overallRates.answer"
-                :max="pctMax(answerByAttempt, overallRates.answer)"
+                ref-label="all visits"
+                :max="pctMax(answerByVisit, overallRates.answer)"
               />
             </ChartCard>
 
             <ChartCard
-              title="Signs by attempt"
-              subtitle="signed ÷ conversations"
-              :columns="['Attempt', 'Sign rate', 'Detail']"
-              :rows="rateRows(signByAttempt)"
+              title="Sign rate by visit"
+              subtitle="counts that visit only, not a running total"
+              :columns="['Visit', 'Sign rate', 'Detail']"
+              :rows="rateRows(signByVisit)"
             >
               <BarChart
-                :items="signByAttempt"
+                :items="signByVisit"
                 :color="cat[0]"
                 percent
+                measure="Sign rate on that visit"
                 :ref-value="overallRates.sign"
-                :max="pctMax(signByAttempt, overallRates.sign)"
+                ref-label="all visits"
+                :max="pctMax(signByVisit, overallRates.sign)"
               />
             </ChartCard>
           </div>
@@ -1517,9 +1778,14 @@ const focusRanks = computed<FocusRank[]>(() => {
           <ChartCard
             title="When doors answer"
             data-help="odds-heatmap"
-            subtitle="answer rate"
+            subtitle="share of knocks answered, by day and hour"
             :columns="['Weekday', ...HOURS.map((h) => `${h}:00`)]"
-            :rows="WEEKDAYS.map((w, r) => [w, ...heat.values[r].map((v) => (v == null ? '—' : fmtPct(v)))])"
+            :rows="
+              WEEKDAYS.map((w, r) => [
+                w,
+                ...heat.values[r].map((v) => (v == null ? 'too few' : fmtPct(v))),
+              ])
+            "
           >
             <Heatmap
               :row-labels="WEEKDAYS"
@@ -1531,13 +1797,13 @@ const focusRanks = computed<FocusRank[]>(() => {
           </ChartCard>
 
           <ChartCard
-            title="The funnel"
+            title="How far doors get"
             data-help="odds-funnel"
-            subtitle="unique doors"
-            :columns="['Stage', 'Doors', 'Conversion']"
-            :rows="funnel.map((i) => [i.label, i.value, i.detail ?? ''])"
+            subtitle="doors counted once each"
+            :columns="['Stage', 'Doors', 'What it means']"
+            :rows="funnel.map((i) => [i.label, i.value, i.note ?? i.detail ?? ''])"
           >
-            <BarChart :items="funnel" :color="cat[0]" />
+            <BarChart :items="funnel" :color="cat[0]" measure="Doors" />
           </ChartCard>
         </template>
 
@@ -1545,7 +1811,7 @@ const focusRanks = computed<FocusRank[]>(() => {
         <template v-else>
           <div class="two-col">
             <ChartCard
-              title="Volume vs. close rate"
+              title="Knocks against sign rate"
               data-help="canvassers-scatter"
               subtitle="one dot per canvasser"
               :columns="CANVASSER_COLUMNS"
@@ -1556,7 +1822,7 @@ const focusRanks = computed<FocusRank[]>(() => {
                 :color="cat[0]"
                 :fit="scatterFit"
                 x-label="knocks"
-                y-label="close rate"
+                y-label="sign rate"
                 y-percent
                 selectable
                 @select="openPerson"
@@ -1564,7 +1830,8 @@ const focusRanks = computed<FocusRank[]>(() => {
             </ChartCard>
 
             <ChartCard
-              title="Signature earners"
+              title="Signatures by canvasser"
+              subtitle="most first"
               :columns="['Canvasser', 'Signatures']"
               :rows="signatureEarners.map((i) => [i.label, i.value])"
             >
@@ -1586,7 +1853,13 @@ const focusRanks = computed<FocusRank[]>(() => {
                   Top 12
                 </button>
               </div>
-              <BarChart :items="signatureEarners" :color="cat[0]" selectable @select="openPerson" />
+              <BarChart
+                :items="signatureEarners"
+                :color="cat[0]"
+                measure="Signatures"
+                selectable
+                @select="openPerson"
+              />
             </ChartCard>
           </div>
 
@@ -1721,6 +1994,19 @@ const focusRanks = computed<FocusRank[]>(() => {
 /* Everyone / Top 12 chips inside the signature-earners card. */
 .earners {
   justify-content: flex-end;
+  margin-bottom: 0.5rem;
+}
+
+/* The Areas picker. Capped so it doesn't stretch to the full column width on
+   a desktop, where a select as wide as a chart reads as a page control
+   rather than this tab's scope. */
+.area-pick {
+  max-width: 22rem;
+}
+
+/* "Per interaction / Per door knocked", inside each sign-rate card: the knob
+   belongs on the chart it changes, not in a page-level filter bar. */
+.base-row {
   margin-bottom: 0.5rem;
 }
 

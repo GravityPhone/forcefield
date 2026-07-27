@@ -250,7 +250,7 @@ const streetGroups = computed<StreetGroup[]>(() => {
 /** "100–150" or "100–150 · even" — one chunk's range chip text. */
 function rangeLabel(s: Pick<DraftSegment, 'range_start' | 'range_end' | 'parity'>): string {
   const side = s.parity === 'both' ? '' : ` · ${PARITY_LABELS[s.parity].toLowerCase()}`
-  return `${s.range_start}–${s.range_end}${side}`
+  return `${s.range_start} to ${s.range_end}${side}`
 }
 
 function isGroupOpen(g: StreetGroup): boolean {
@@ -368,7 +368,7 @@ const staleDaysLabel = computed(() => {
   if (!days.length) return ''
   const first = prettyDay(days[0])
   const last = prettyDay(days[days.length - 1])
-  return first === last ? first : `${first} – ${last}`
+  return first === last ? first : `${first} to ${last}`
 })
 
 function indexAddresses(rows: AddressLite[]) {
@@ -609,7 +609,7 @@ const draftDoorCount = computed(() => draftMemberIds.value.size)
  * as a blank. Mirrors the naming rule in saveTurf — keep the two together. */
 const defaultDraftName = computed(() => {
   const opt = assignOptions.value.find((o) => o.value === assignChoice.value)
-  const who = assignChoice.value !== 'none' && opt ? opt.label.split(' — ')[1] : ''
+  const who = assignChoice.value !== 'none' && opt ? opt.label.split(': ')[1] : ''
   return who ? `${who}'s turf` : `Turf ${todayTurfs.value.length + 1}`
 })
 const draftTakenCount = computed(() => segments.value.reduce((n, s) => n + s.takenCount, 0))
@@ -691,16 +691,16 @@ function assignOptionsFor(t: TurfWithMeta | null): SelectOption[] {
   const squadIds = new Set<string>()
   for (const s of squadsStore.squads) {
     squadIds.add(s.id)
-    opts.push({ value: `squad:${s.id}`, label: `Squad — ${s.name}` })
+    opts.push({ value: `squad:${s.id}`, label: `Squad: ${s.name}` })
   }
   if (t?.squad && !squadIds.has(t.squad.id)) {
     opts.push({
       value: `squad:${t.squad.id}`,
-      label: `Squad — ${t.squad.name} (${prettyDay(t.squad.squad_date)})`,
+      label: `Squad: ${t.squad.name} (${prettyDay(t.squad.squad_date)})`,
     })
   }
   for (const p of people.value) {
-    opts.push({ value: `user:${p.id}`, label: `Canvasser — ${p.display_name || p.username}` })
+    opts.push({ value: `user:${p.id}`, label: `Canvasser: ${p.display_name || p.username}` })
   }
   return opts
 }
@@ -766,7 +766,7 @@ async function reassignTurf(t: TurfWithMeta, choice: string) {
     })
     .eq('id', t.id)
   if (error) {
-    listError.value = 'Could not reassign that turf — try again.'
+    listError.value = 'Could not reassign that turf. Try again.'
     return
   }
   if (editingTurfId.value === t.id) assignChoice.value = choice
@@ -775,7 +775,7 @@ async function reassignTurf(t: TurfWithMeta, choice: string) {
 
 function segmentLabel(s: { street_name: string; range_start: number; range_end: number; parity: TurfParity }): string {
   const side = s.parity === 'both' ? '' : ` · ${PARITY_LABELS[s.parity].toLowerCase()}`
-  return `${s.street_name} ${s.range_start}–${s.range_end}${side}`
+  return `${s.street_name} ${s.range_start} to ${s.range_end}${side}`
 }
 
 // --- Door canvas paint state ---
@@ -1778,7 +1778,7 @@ function applyIncomingPlan() {
   // Name what didn't land rather than quietly dropping it — the assistant can
   // misspell a street, and a short draft with no explanation reads as a bug.
   if (missing.length) {
-    flash(`Couldn't find ${missing.join(', ')} in the address list — the rest is in your draft.`)
+    flash(`Couldn't find ${missing.join(', ')} in the address list. The rest is in your draft.`)
   }
   void nextTick(focusDraft)
 }
@@ -1981,14 +1981,14 @@ function skipSentence(doors: AddressLite[], lead?: string): string {
   const one = holders.length === 1 ? holders[0] : null
   if (reason === 'past-day') {
     const who = one ? `${one.name}, cut ${prettyDay(turfDay(one))}` : `${holders.length} turfs from earlier days`
-    return `${head} — ${part ? `${part}in ` : ''}${who}. Copy or clear old turf above first.`
+    return `${head}: ${part ? `${part}in ` : ''}${who}. Copy or clear old turf above first.`
   }
   if (reason === 'crew-split') {
     const who = one ? one.name : `${holders.length} crew splits`
-    return `${head} — ${part ? `${part}in ` : ''}${who}, split on the Squad page. Dissolve the split there to take ${them}.`
+    return `${head}: ${part ? `${part}in ` : ''}${who}, split on the Squad page. Dissolve the split there to take ${them}.`
   }
   const who = one ? one.name : holders.length ? `${holders.length} other turfs` : 'another turf'
-  return `${head} — ${part}held by ${who}.`
+  return `${head}: ${part}held by ${who}.`
 }
 
 /** The unclaimable doors a segment's range sweeps over — the ones behind
@@ -2045,7 +2045,7 @@ function stealDoors(doors: AddressLite[]) {
   for (const seg of segments.value) computeSegment(seg)
   if (uncovered.length) addDoorsAsSegments(uncovered)
   const n = doors.length
-  flash(`Took ${n} door${n === 1 ? '' : 's'} — the other turf gives them up when you save.`)
+  flash(`Took ${n} door${n === 1 ? '' : 's'}. The other turf gives them up when you save.`)
 }
 
 /** Post-add flash for a street: honest got/skipped counts, with the steal
@@ -2055,14 +2055,14 @@ function flashAddResult(streetName: string, city: string | null, prefix: string)
   const got = segsNow.reduce((n, s) => n + s.doorCount, 0)
   const taken = segsNow.reduce((n, s) => n + s.takenCount, 0)
   if (!taken) {
-    flash(`${prefix} — ${got} door${got === 1 ? '' : 's'}.`)
+    flash(`${prefix}: ${got} door${got === 1 ? '' : 's'}.`)
     return
   }
   const takenDoors = streetRows(streetName, city).filter(
     (a) => segsNow.some((s) => matchesSegment(a, s)) && !claimableDoor(a),
   )
   flash(
-    `${prefix} — ${got} door${got === 1 ? '' : 's'}. ${skipSentence(takenDoors, `${taken} skipped`)}`,
+    `${prefix}: ${got} door${got === 1 ? '' : 's'}. ${skipSentence(takenDoors, `${taken} skipped`)}`,
     stealActionFor(takenDoors),
   )
 }
@@ -2078,7 +2078,7 @@ function addLocatedStreet(m: { street_name: string; city: string }) {
   }
   snapshotDraft()
   addSegment(m.street_name, m.city, lo, hi, 'both')
-  flashAddResult(m.street_name, m.city, `Added ${m.street_name} ${lo}–${hi}`)
+  flashAddResult(m.street_name, m.city, `Added ${m.street_name} ${lo} to ${hi}`)
   void materializeStreetPins(m.street_name, m.city, false, true)
 }
 
@@ -2244,7 +2244,7 @@ async function resolveTapStreet(lat: number, lng: number): Promise<{ name: strin
     flash(
       rev?.names.length
         ? `No voter doors on ${rev.names[0]}.`
-        : 'No known street near that tap — try right on the road.',
+        : 'No known street near that tap. Try right on the road.',
     )
     return null
   }
@@ -2255,7 +2255,7 @@ async function resolveTapStreet(lat: number, lng: number): Promise<{ name: strin
       pendingTapStreet.city.toUpperCase() === vote.city.toUpperCase()
     if (!same) {
       pendingTapStreet = { name: vote.name, city: vote.city }
-      flash(`That looks like ${vote.name} — tap again to confirm.`)
+      flash(`That looks like ${vote.name}. Tap again to confirm.`)
       return null
     }
   }
@@ -2292,7 +2292,7 @@ function applyStreetTap(name: string, city: string) {
     return
   }
   if (fullyInDraft({ street_name: name, city })) {
-    flash(`${name} is already in this turf — switch to Erase to take it out.`)
+    flash(`${name} is already in this turf. Switch to Erase to take it out.`)
     return
   }
   const rows = streetRows(name, city)
@@ -2393,9 +2393,9 @@ function onLassoUp() {
       flash(
         segments.value.length
           ? wasTap
-            ? 'Not a door in this turf — tap a dot in this turf’s color.'
-            : 'No doors of this turf in that loop — circle dots in its color.'
-          : 'Nothing to erase yet — Erase takes doors out of the turf being built. Add streets first, or open a turf and tap Edit.',
+            ? 'Not a door in this turf. Tap a dot in this turf’s color.'
+            : 'No doors of this turf in that loop. Circle dots in its color.'
+          : 'Nothing to erase yet. Erase takes doors out of the turf being built. Add streets first, or open a turf and tap Edit.',
       )
       return
     }
@@ -2416,8 +2416,8 @@ function onLassoUp() {
   if (!doors.length) {
     flash(
       wasTap
-        ? 'No door there — tap a dot, or drag a loop around several.'
-        : 'No mapped doors in that loop — houses only get dots once their street is added or searched. Use the ☝ tool or search first.',
+        ? 'No door there. Tap a dot, or drag a loop around several.'
+        : 'No mapped doors in that loop. Houses only get dots once their street is added or searched. Use the ☝ tool or search first.',
     )
     return
   }
@@ -2436,7 +2436,7 @@ function onLassoUp() {
   const { doorCount, streetCount } = addDoorsAsSegments(free)
   if (!doorCount) {
     undoStack.value.pop()
-    flash('Could not read streets for those doors — try a tighter loop.')
+    flash('Could not read streets for those doors. Try a tighter loop.')
     return
   }
   flash(
@@ -2702,9 +2702,9 @@ async function clearStaleTurfs() {
       if (error) throw error
     }
     await reloadAll()
-    flash('Cleared — every door is up for grabs today.')
+    flash('Cleared. Every door is up for grabs today.')
   } catch {
-    flash('Could not clear the old turf — try again.')
+    flash('Could not clear the old turf. Try again.')
   } finally {
     staleBusy.value = false
   }
@@ -2755,9 +2755,9 @@ async function copyStaleTurfs() {
       if (claimErr) throw claimErr
     }
     await reloadAll()
-    flash('Copied to today — same turf, fresh day.')
+    flash('Copied to today: same turf, fresh day.')
   } catch {
-    flash('Could not copy the old turf — reload and try again.')
+    flash('Could not copy the old turf. Reload and try again.')
   } finally {
     staleBusy.value = false
   }
@@ -2774,11 +2774,11 @@ async function saveTurf() {
   let name = draftName.value.trim()
   if (!name) {
     const opt = assignOptions.value.find((o) => o.value === assignChoice.value)
-    const who = assignChoice.value !== 'none' && opt ? opt.label.split(' — ')[1] : ''
+    const who = assignChoice.value !== 'none' && opt ? opt.label.split(': ')[1] : ''
     name = who ? `${who}'s turf` : `Turf ${todayTurfs.value.length + 1}`
   }
   if (isSubcutter.value && !editingTurfId.value && !draftParentId.value) {
-    saveError.value = 'No turf is assigned to you yet — your campaign manager assigns turf first.'
+    saveError.value = 'No turf is assigned to you yet. Your campaign manager assigns turf first.'
     return
   }
   saving.value = true
@@ -2834,7 +2834,7 @@ async function saveTurf() {
     // never blocks the save.
     void geocodeTurfDoors(turfId)
   } catch {
-    saveError.value = 'Could not save the turf — try again.'
+    saveError.value = 'Could not save the turf. Try again.'
   } finally {
     saving.value = false
   }
@@ -3058,7 +3058,7 @@ async function combineTurf(source: TurfWithMeta, targetId: string) {
     await reloadAll()
     flash(`Combined into ${target.name}.`)
   } catch {
-    listError.value = 'Could not combine those turfs — reload and try again.'
+    listError.value = 'Could not combine that turf. Reload and try again.'
   } finally {
     combineBusy.value = false
   }
@@ -3115,7 +3115,7 @@ function focusTurf(turfId: string) {
     }
   }
   if (!bounds.isEmpty()) map.fitBounds(bounds, 64)
-  else if (pinsLoading.value) flash('Still loading street data — try that again in a moment.')
+  else if (pinsLoading.value) flash('Still loading street data. Try that again in a moment.')
 }
 
 /** Opening a draft keeps you AT THE TOP — on the map, with Save / Start over
@@ -3286,7 +3286,7 @@ onUnmounted(() => {
           v-if="takeMode"
           type="button"
           class="editing-take"
-          title="Take is on — sweeps pull doors out of whoever holds them. Tap to turn it off."
+          title="Take is on. Sweeps pull doors out of whoever holds them. Tap to turn it off."
           @click="toggleTakeMode"
         >
           Take ✕
@@ -3347,7 +3347,7 @@ onUnmounted(() => {
         >
           <button class="street-match-main" @click="locateStreet(m)">
             <span class="street-match-name">{{ m.street_name }}</span>
-            <span class="muted">{{ m.city }} · {{ m.count }} doors · {{ m.lo }}–{{ m.hi }}</span>
+            <span class="muted">{{ m.city }} · {{ m.count }} doors · {{ m.lo }} to {{ m.hi }}</span>
           </button>
           <!-- Located row: edit the house-number range (prefilled = whole
                street) and Add takes exactly that stretch. -->
@@ -3361,7 +3361,7 @@ onUnmounted(() => {
                 min="0"
                 aria-label="From house number"
               />
-              <span class="muted">–</span>
+              <span class="muted">to</span>
               <input
                 v-model.number="locatedTo"
                 type="number"
@@ -3571,7 +3571,7 @@ onUnmounted(() => {
             class="layer-btn btn-tiny take-btn"
             :class="{ active: takeMode }"
             :aria-pressed="takeMode"
-            title="Sweeps take doors from other turfs instead of skipping them"
+            title="Sweeps take doors from other turf instead of skipping them"
             @click="toggleTakeMode"
           >
             Take
@@ -3610,7 +3610,7 @@ onUnmounted(() => {
           <div v-if="doorOwner" class="door-card-owner">
             <span class="door-card-owner-text">
               In <strong>{{ doorOwner.name }}</strong>
-              <span class="muted"> — {{ ownerAssignment(doorOwner) }}</span>
+              <span class="muted"> · {{ ownerAssignment(doorOwner) }}</span>
             </span>
             <button
               v-if="!turfBar && canManage(doorOwner) && isTodayTurf(doorOwner)"
@@ -3704,7 +3704,7 @@ onUnmounted(() => {
       </div>
       <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
       <p v-if="mapsAuthError" class="muted map-error">
-        Google rejected the Maps API key — usually quota, billing, or a referrer restriction on
+        Google rejected the Maps API key. Usually quota, billing, or a referrer restriction on
         the key. The exact reason is logged in the browser console.
       </p>
 
@@ -3726,7 +3726,7 @@ onUnmounted(() => {
         <template v-if="isSubcutter && !myParentTurfs.length">
           <h3 class="draft-title">
             <span class="draft-swatch" aria-hidden="true"></span>
-            Sub-turfs
+            Sub-turf
           </h3>
           <p class="muted empty-note">No turf assigned to you yet.</p>
         </template>
@@ -3760,9 +3760,9 @@ onUnmounted(() => {
           v-if="isSubcutter && !editingTurfId && myParentTurfs.length > 1"
           class="parent-pick"
           small
-          :options="myParentTurfs.map((t) => ({ value: t.id, label: `Inside — ${t.name}` }))"
+          :options="myParentTurfs.map((t) => ({ value: t.id, label: `Inside: ${t.name}` }))"
           :model-value="draftParentId ?? ''"
-          aria-label="Cut inside which of your turfs"
+          aria-label="Cut inside which of your turf"
           @update:model-value="draftParentId = $event"
         />
         <p v-else-if="isSubcutter" class="muted parent-note">
@@ -3828,7 +3828,7 @@ onUnmounted(() => {
                     aria-label="Range start"
                     @change="expandedSeg.range_start = Number(($event.target as HTMLInputElement).value); onSegmentRangeChange(expandedSeg)"
                   />
-                  <span class="muted">–</span>
+                  <span class="muted">to</span>
                   <input
                     type="number"
                     class="seg-cell-num"
@@ -3876,7 +3876,7 @@ onUnmounted(() => {
             class="draft-name"
             type="text"
             maxlength="80"
-            placeholder="Turf name (optional — defaults to the assignee)"
+            placeholder="Turf name (optional, defaults to the assignee)"
             aria-label="Turf name (optional)"
           />
           <AppSelect v-model="assignChoice" :options="assignOptions" aria-label="Assign this turf to" />

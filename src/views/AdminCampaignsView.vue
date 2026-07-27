@@ -55,7 +55,7 @@ async function createCampaign() {
   })
   creatingCampaign.value = false
   if (err) {
-    error.value = 'Could not create the campaign — is the name already taken?'
+    error.value = 'Could not create the campaign. Is the name already taken?'
     return
   }
   newCampaignName.value = ''
@@ -79,7 +79,7 @@ async function createTeam() {
   })
   creatingTeam.value = false
   if (err) {
-    error.value = 'Could not create the team — is the name already taken?'
+    error.value = 'Could not create the team. Is the name already taken?'
     return
   }
   newTeamName.value = ''
@@ -93,7 +93,7 @@ async function assignTeam(team: Team, campaignId: string) {
     .update({ campaign_id: campaignId || null })
     .eq('id', team.id)
   if (err) {
-    error.value = 'Could not move that team — try again.'
+    error.value = 'Could not move that team. Try again.'
     return
   }
   team.campaign_id = campaignId || null
@@ -123,7 +123,7 @@ async function saveGoal(c: Campaign) {
     .eq('id', c.id)
   goalSaving.value = null
   if (err) {
-    error.value = 'Could not save the goal — try again.'
+    error.value = 'Could not save the goal. Try again.'
     return
   }
   c.signature_goal = goal
@@ -152,7 +152,7 @@ async function saveDeadline(c: Campaign) {
     .eq('id', c.id)
   deadlineSaving.value = null
   if (err) {
-    error.value = 'Could not save the deadline — try again.'
+    error.value = 'Could not save the deadline. Try again.'
     return
   }
   c.deadline = deadline
@@ -191,7 +191,7 @@ const campaignOptions = computed(() => [
           <div class="card" data-help="campaigns-teams">
             <h3>Teams</h3>
             <p class="muted desc">Assign each team to the campaign it works.</p>
-            <p v-if="!teams.length" class="muted desc">No teams yet — create one below.</p>
+            <p v-if="!teams.length" class="muted desc">No teams yet. Create one below.</p>
             <div v-for="t in teams" :key="t.id" class="team-row">
               <span class="team-name">{{ t.name }}</span>
               <AppSelect
@@ -206,7 +206,7 @@ const campaignOptions = computed(() => [
 
           <div class="card" data-help="campaigns-list">
             <h3>Campaigns</h3>
-            <p v-if="!campaigns.length" class="muted desc">No campaigns yet — create one below.</p>
+            <p v-if="!campaigns.length" class="muted desc">No campaigns yet. Create one below.</p>
             <div v-for="c in campaigns" :key="c.id" class="campaign-row">
               <span class="team-name">{{ c.name }}</span>
               <p v-if="c.description" class="muted desc">{{ c.description }}</p>

@@ -105,7 +105,7 @@ export function decodeTurfPlan(raw: string): TurfPlanSpec | null {
 
 /** "100–298" / "from 100" / "whole street" — the range as a human reads it. */
 export function planRangeLabel(s: TurfPlanStreet): string {
-  if (s.from != null && s.to != null) return `${s.from}–${s.to}`
+  if (s.from != null && s.to != null) return `${s.from} to ${s.to}`
   if (s.from != null) return `${s.from} and up`
   if (s.to != null) return `up to ${s.to}`
   return 'whole street'

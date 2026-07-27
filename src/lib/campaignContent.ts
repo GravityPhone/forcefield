@@ -37,7 +37,7 @@ export const CAMPAIGN_HEADLINE = 'Why we’re out here'
  * is NOT placeholder, because it's the honest label on everything that is. */
 export const DEMO_NOTICE =
   'Forcefield is a demo. This is where a campaign would say what the petition ' +
-  'is for and how to talk about it — the text below is placeholder.'
+  'is for and how to talk about it. The text below is placeholder.'
 
 /** The long-form "why", as placeholder prose. Deliberately headerless: it's a
  * short block of filler showing where a campaign's own words go, not a
@@ -53,7 +53,7 @@ export const CAMPAIGN_BODY: string[] = [
 
 /** The 15-second version, for the moment the door actually opens. */
 export const THE_ASK =
-  '“Lorem ipsum dolor sit amet, consectetur adipiscing elit — sed do eiusmod tempor ' +
+  '“Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor ' +
   'incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam?”'
 
 /** Scannable points. A canvasser reads these on the walk between doors. */
