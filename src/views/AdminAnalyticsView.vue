@@ -69,8 +69,10 @@ interface Knock {
   attempt: number
   priorNotHomes: number
   experience: number // canvasser's knocks before this one
-  /** Somebody came to the door. See INTERACTION below. */
+  /** Tried the door: every outcome except Skip. See the two sets below. */
   interacted: boolean
+  /** Somebody answered. See CONVERSATION below. */
+  conversed: boolean
   signed: boolean
 }
 
@@ -217,23 +219,33 @@ onMounted(async () => {
   }
 })
 
-/** ONE word for "somebody came to the door" (2026-07-26, user call: "can we
- * make the paradigm be interactions instead of conversations… every time
- * someone logs anything is an interaction, aside from logging a not home or
- * logging something on just a door").
+/** TWO tiers now, one word each (2026-07-27, user call: "we wanna call a not
+ * home also an interaction. But then that means we also need to have another
+ * classification… called a conversation, which is either not interested,
+ * signed, or making an appointment to come back or hostile but not Skip").
  *
- * This page used to carry TWO overlapping sets: `answered` (which counted
- * Hostile) and `conversation` (which didn't), with sign rate taken over the
- * narrower one. Nothing on screen ever explained the difference, and a
- * campaign manager reading "close rate: signed ÷ conversations" had no way to
- * know Hostile had been quietly dropped from the denominator. They are now the
- * same set under one name, which is also the honest one: a door slammed in
- * your face is an interaction that didn't sign, not an interaction that never
- * happened.
+ * INTERACTION: the canvasser tried the door. Every outcome except Skip — a
+ * skip is a door-level pass (loose dog, no trespassing) where nobody was
+ * attempted, and if it counted, "interaction" would just mean "knock".
  *
- * Out: Not Home (nobody there) and Skip (a door-level pass, no person). Both
- * are exactly what the user named as not counting. */
-const INTERACTION = new Set<KnockOutcome>(['signed', 'didnt_sign', 'maybe', 'hostile'])
+ * CONVERSATION: somebody answered. Signed, Not Interested, Return, Hostile —
+ * exactly the single set this page called INTERACTION from 2026-07-26 until
+ * this split, and that day's reasoning still stands one tier down: a door
+ * slammed in your face is a conversation that didn't sign, not one that
+ * never happened.
+ *
+ * Answer rate = conversations ÷ interactions. Sign rate = signed ÷
+ * conversations (or ÷ doors knocked; the chip pair below switches it). */
+const CONVERSATION = new Set<KnockOutcome>(['signed', 'didnt_sign', 'maybe', 'hostile'])
+
+/** Chart-local outcome order: the four conversation outcomes first, so the
+ * stacked "What happened at doors" reads as a conversations band at the
+ * bottom with Not Home and Skip piled on top — conversations per day straight
+ * off the chart. outcomes.ts keeps its own order; it lays out the Talk grid.
+ * (sort is stable, so each half keeps outcomes.ts's relative order.) */
+const CHART_OUTCOMES = [...OUTCOMES].sort(
+  (a, b) => Number(CONVERSATION.has(b.value)) - Number(CONVERSATION.has(a.value)),
+)
 
 function enrich(rows: KnockRow[], cityOf: Map<string, string>): Knock[] {
   const parsed = rows
@@ -254,7 +266,8 @@ function enrich(rows: KnockRow[], cityOf: Map<string, string>): Knock[] {
         attempt: 0,
         priorNotHomes: 0,
         experience: 0,
-        interacted: INTERACTION.has(r.outcome),
+        interacted: r.outcome !== 'skip',
+        conversed: CONVERSATION.has(r.outcome),
         signed: r.outcome === 'signed',
       }
     })
@@ -461,7 +474,7 @@ function dailyFor(sub: Knock[]) {
 function mixFor(sub: Knock[]): BarItem[] {
   const counts = new Map<KnockOutcome, number>()
   for (const k of sub) counts.set(k.outcome, (counts.get(k.outcome) ?? 0) + 1)
-  return OUTCOMES.map((o) => {
+  return CHART_OUTCOMES.map((o) => {
     const n = counts.get(o.value) ?? 0
     return {
       label: o.short,
@@ -492,17 +505,17 @@ interface Tile {
 // questions: how well we do once somebody opens the door, versus how much a
 // street of knocking is worth. One chip pair switches every sign-rate chart on
 // the page, so the two readings can never be confused for each other.
-type RateBase = 'interaction' | 'door'
-const rateBase = ref<RateBase>('interaction')
+type RateBase = 'conversation' | 'door'
+const rateBase = ref<RateBase>('conversation')
 const RATE_BASES: { value: RateBase; label: string }[] = [
-  { value: 'interaction', label: 'Per interaction' },
+  { value: 'conversation', label: 'Per conversation' },
   { value: 'door', label: 'Per door knocked' },
 ]
-const baseWord = computed(() => (rateBase.value === 'door' ? 'doors knocked' : 'interactions'))
+const baseWord = computed(() => (rateBase.value === 'door' ? 'doors knocked' : 'conversations'))
 const signRateSubtitle = computed(() =>
   rateBase.value === 'door'
     ? 'share of doors knocked where somebody signed'
-    : 'share of interactions that ended in a signature',
+    : 'share of conversations that ended in a signature',
 )
 
 function rateItem(label: string, hits: number, of: number, unit: string, id?: string): BarItem {
@@ -534,6 +547,7 @@ const kpis = computed<Tile[]>(() => {
   const f = filtered.value
   const doors = new Set(f.map((k) => k.household)).size
   const sigs = f.filter((k) => k.signed).length
+  const conversations = f.filter((k) => k.conversed).length
   const interactions = f.filter((k) => k.interacted).length
   const people = new Set(f.map((k) => k.canvasser)).size
   const days = new Set(f.map((k) => k.day)).size
@@ -548,19 +562,19 @@ const kpis = computed<Tile[]>(() => {
     { label: 'Doors knocked', value: fmtCount(doors), hint: 'counted once each' },
     { label: 'Knocks', value: fmtCount(f.length), hint: 'every visit, repeats included' },
     {
-      label: 'Interactions',
-      value: fmtCount(interactions),
+      label: 'Conversations',
+      value: fmtCount(conversations),
       hint: 'somebody came to the door',
     },
     {
       label: 'Answer rate',
-      value: f.length ? fmtPct(interactions / f.length, 1) : 'none yet',
-      hint: 'of knocks, somebody answered',
+      value: interactions ? fmtPct(conversations / interactions, 1) : 'none yet',
+      hint: 'of interactions, somebody answered',
     },
     {
       label: 'Sign rate',
-      value: interactions ? fmtPct(sigs / interactions, 1) : 'none yet',
-      hint: 'of interactions, they signed',
+      value: conversations ? fmtPct(sigs / conversations, 1) : 'none yet',
+      hint: 'of conversations, they signed',
     },
     { label: 'Canvassers out', value: fmtCount(people) },
     {
@@ -596,7 +610,7 @@ const knockRows = computed(() =>
 const outcomeStack = computed(() => {
   const axis = overviewDaily.value.axis
   const idx = new Map(axis.map((d, i) => [d, i]))
-  return OUTCOMES.map((o) => {
+  return CHART_OUTCOMES.map((o) => {
     const vals = new Array(axis.length).fill(0)
     for (const k of filtered.value) {
       if (k.outcome !== o.value) continue
@@ -681,12 +695,12 @@ function signRateByDoor(key: (k: Knock) => string, include: (k: Knock) => boolea
 function signRateBy(key: (k: Knock) => string, include: (k: Knock) => boolean = () => true, minDen = 25) {
   return rateBase.value === 'door'
     ? signRateByDoor(key, include, minDen)
-    : rateBy(key, (k) => k.signed, (k) => include(k) && k.interacted, 'interactions', minDen)
+    : rateBy(key, (k) => k.signed, (k) => include(k) && k.conversed, 'conversations', minDen)
 }
 
 const signRateByCity = computed(() => signRateBy((k) => k.city))
 const answerRateByCity = computed(() =>
-  rateBy((k) => k.city, (k) => k.interacted, () => true, 'knocks', 50),
+  rateBy((k) => k.city, (k) => k.conversed, (k) => k.interacted, 'interactions', 50),
 )
 const coverageByCity = computed<BarItem[]>(() => {
   const knocked = new Map<string, Set<string>>()
@@ -716,6 +730,7 @@ const rateRows = (items: BarItem[]) => items.map((i) => [i.label, fmtPct(i.value
 const overallRates = computed(() => {
   const f = filtered.value
   const sigs = f.filter((k) => k.signed).length
+  const conversations = f.filter((k) => k.conversed).length
   const interactions = f.filter((k) => k.interacted).length
   const doors = new Set(f.map((k) => k.household)).size
   const signedDoors = new Set(f.filter((k) => k.signed).map((k) => k.household)).size
@@ -725,10 +740,10 @@ const overallRates = computed(() => {
         ? doors
           ? signedDoors / doors
           : 0
-        : interactions
-          ? sigs / interactions
+        : conversations
+          ? sigs / conversations
           : 0,
-    answer: f.length ? interactions / f.length : 0,
+    answer: interactions ? conversations / interactions : 0,
   }
 })
 
@@ -748,6 +763,7 @@ interface GroupStats {
   knocks: number
   doors: Set<string>
   interactions: number
+  conversations: number
   sigs: number
   days: Set<string>
   signRate: number
@@ -758,17 +774,18 @@ function statsBy(key: (k: Knock) => string): GroupStats[] {
   for (const k of filtered.value) {
     let e = per.get(key(k))
     if (!e) {
-      e = { knocks: 0, doors: new Set(), interactions: 0, sigs: 0, days: new Set() }
+      e = { knocks: 0, doors: new Set(), interactions: 0, conversations: 0, sigs: 0, days: new Set() }
       per.set(key(k), e)
     }
     e.knocks++
     e.doors.add(k.household)
     e.days.add(k.day)
     if (k.interacted) e.interactions++
+    if (k.conversed) e.conversations++
     if (k.signed) e.sigs++
   }
   return [...per.entries()]
-    .map(([label, e]) => ({ label, ...e, signRate: e.interactions ? e.sigs / e.interactions : 0 }))
+    .map(([label, e]) => ({ label, ...e, signRate: e.conversations ? e.sigs / e.conversations : 0 }))
     .sort((a, b) => b.sigs - a.sigs)
 }
 
@@ -785,7 +802,7 @@ const signaturesByTurf = computed<BarItem[]>(() =>
   chartableTurfs.value.map((t) => ({
     label: t.label,
     value: t.sigs,
-    detail: `${fmtCount(t.knocks)} knocks, ${fmtCount(t.interactions)} interactions`,
+    detail: `${fmtCount(t.knocks)} knocks, ${fmtCount(t.conversations)} conversations`,
     note: `Sign rate ${fmtPct(t.signRate, 1)}`,
   })),
 )
@@ -811,12 +828,12 @@ const groupRows = (stats: GroupStats[]) =>
     e.days.size,
     e.knocks,
     e.doors.size,
-    e.interactions,
+    e.conversations,
     e.sigs,
     fmtPct(e.signRate, 1),
-    fmtPct(e.knocks ? e.interactions / e.knocks : 0, 1),
+    fmtPct(e.interactions ? e.conversations / e.interactions : 0, 1),
   ])
-const GROUP_COLUMNS = ['', 'Days out', 'Knocks', 'Doors', 'Interactions', 'Signatures', 'Sign rate', 'Answer rate']
+const GROUP_COLUMNS = ['', 'Days out', 'Knocks', 'Doors', 'Conversations', 'Signatures', 'Sign rate', 'Answer rate']
 
 const signaturesBySquad = computed<BarItem[]>(() =>
   chartableSquads.value.map((s) => ({
@@ -869,10 +886,10 @@ function rateByVisit(
 }
 
 const answerByVisit = computed(() =>
-  rateByVisit((k) => k.interacted, () => true, 'knocks', 'were answered'),
+  rateByVisit((k) => k.conversed, (k) => k.interacted, 'interactions', 'were answered'),
 )
 const signByVisit = computed(() =>
-  rateByVisit((k) => k.signed, (k) => k.interacted, 'interactions', 'ended in a signature'),
+  rateByVisit((k) => k.signed, (k) => k.conversed, 'conversations', 'ended in a signature'),
 )
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -881,22 +898,24 @@ const heat = computed(() => {
   const n: number[][] = WEEKDAYS.map(() => HOURS.map(() => 0))
   const s: number[][] = WEEKDAYS.map(() => HOURS.map(() => 0))
   for (const k of filtered.value) {
+    if (!k.interacted) continue // a skipped door was never tried at any hour
     const c = HOURS.indexOf(Math.min(20, Math.max(10, k.hour)))
     if (c < 0) continue
     n[k.weekday][c]++
-    if (k.interacted) s[k.weekday][c]++
+    if (k.conversed) s[k.weekday][c]++
   }
   const values = n.map((row, r) => row.map((cnt, c) => (cnt >= 15 ? s[r][c] / cnt : null)))
   return { values, counts: n }
 })
 
-/** Three stages, not four: "answered" and "conversation" were the same set of
- * doors under two names once interactions replaced conversations, and a
- * funnel step that never loses anybody teaches nothing. */
+/** Still three stages under the two-tier model: the funnel counts DOORS, and
+ * at door level "tried" vs "knocked" differ only by doors that were only ever
+ * skipped — a step that never loses anybody teaches nothing. The knock-level
+ * ladder (interactions → conversations) is the rate tiles' job. */
 const funnel = computed<BarItem[]>(() => {
   const f = filtered.value
   const doors = new Set(f.map((k) => k.household)).size
-  const talkedDoors = new Set(f.filter((k) => k.interacted).map((k) => k.household)).size
+  const talkedDoors = new Set(f.filter((k) => k.conversed).map((k) => k.household)).size
   const signedDoors = new Set(f.filter((k) => k.signed).map((k) => k.household)).size
   const ramp = ordinalRamp(3, palette.dark.value)
   const steps = [
@@ -924,11 +943,12 @@ const funnel = computed<BarItem[]>(() => {
 // ---------------------------------------------------------------- canvassers
 
 const canvasserStats = computed(() => {
-  const per = new Map<string, { knocks: number; interactions: number; sigs: number }>()
+  const per = new Map<string, { knocks: number; interactions: number; conversations: number; sigs: number }>()
   for (const k of filtered.value) {
-    const e = per.get(k.canvasser) ?? { knocks: 0, interactions: 0, sigs: 0 }
+    const e = per.get(k.canvasser) ?? { knocks: 0, interactions: 0, conversations: 0, sigs: 0 }
     e.knocks++
     if (k.interacted) e.interactions++
+    if (k.conversed) e.conversations++
     if (k.signed) e.sigs++
     per.set(k.canvasser, e)
   }
@@ -937,14 +957,14 @@ const canvasserStats = computed(() => {
       id,
       name: canvasserNames.value.get(id) ?? 'Unknown',
       ...e,
-      signRate: e.interactions ? e.sigs / e.interactions : 0,
+      signRate: e.conversations ? e.sigs / e.conversations : 0,
     }))
     .sort((a, b) => b.sigs - a.sigs)
 })
 
 const scatterPoints = computed<ScatterPoint[]>(() =>
   canvasserStats.value
-    .filter((c) => c.interactions >= 20)
+    .filter((c) => c.conversations >= 20)
     .map((c) => ({ x: c.knocks, y: c.signRate, label: c.name, id: c.id })),
 )
 const scatterFit = computed(() => linearRegression(scatterPoints.value.map((p) => ({ x: p.x, y: p.y }))))
@@ -957,7 +977,7 @@ const signatureEarners = computed<BarItem[]>(() =>
     id: c.id,
     label: c.name,
     value: c.sigs,
-    detail: `${fmtCount(c.knocks)} knocks, ${fmtCount(c.interactions)} interactions`,
+    detail: `${fmtCount(c.knocks)} knocks, ${fmtCount(c.conversations)} conversations`,
     note: `Sign rate ${fmtPct(c.signRate, 1)}`,
   })),
 )
@@ -966,13 +986,13 @@ const canvasserRows = computed(() =>
   canvasserStats.value.map((c) => [
     c.name,
     c.knocks,
-    c.interactions,
+    c.conversations,
     c.sigs,
     fmtPct(c.signRate, 1),
-    fmtPct(c.knocks ? c.interactions / c.knocks : 0, 1),
+    fmtPct(c.interactions ? c.conversations / c.interactions : 0, 1),
   ]),
 )
-const CANVASSER_COLUMNS = ['Canvasser', 'Knocks', 'Interactions', 'Signatures', 'Sign rate', 'Answer rate']
+const CANVASSER_COLUMNS = ['Canvasser', 'Knocks', 'Conversations', 'Signatures', 'Sign rate', 'Answer rate']
 
 // ---------------------------------------------------------------- focus panel
 // ---------------------------------------------------------------- appointments
@@ -1180,6 +1200,7 @@ const focusTiles = computed<Tile[]>(() => {
   const sub = focusKnocks.value
   const doors = new Set(sub.map((k) => k.household)).size
   const sigs = sub.filter((k) => k.signed).length
+  const conversations = sub.filter((k) => k.conversed).length
   const interactions = sub.filter((k) => k.interacted).length
   const days = new Set(sub.map((k) => k.day)).size
   const people = new Set(sub.map((k) => k.canvasser)).size
@@ -1187,16 +1208,16 @@ const focusTiles = computed<Tile[]>(() => {
     { label: 'Signatures', value: fmtCount(sigs) },
     { label: 'Doors knocked', value: fmtCount(doors), hint: 'counted once each' },
     { label: 'Knocks', value: fmtCount(sub.length), hint: 'every visit, repeats included' },
-    { label: 'Interactions', value: fmtCount(interactions), hint: 'somebody came to the door' },
+    { label: 'Conversations', value: fmtCount(conversations), hint: 'somebody came to the door' },
     {
       label: 'Answer rate',
-      value: sub.length ? fmtPct(interactions / sub.length, 1) : 'none yet',
-      hint: 'of knocks, somebody answered',
+      value: interactions ? fmtPct(conversations / interactions, 1) : 'none yet',
+      hint: 'of interactions, somebody answered',
     },
     {
       label: 'Sign rate',
-      value: interactions ? fmtPct(sigs / interactions, 1) : 'none yet',
-      hint: 'of interactions, they signed',
+      value: conversations ? fmtPct(sigs / conversations, 1) : 'none yet',
+      hint: 'of conversations, they signed',
     },
     { label: 'Days active', value: fmtCount(days) },
   ]
@@ -1218,49 +1239,49 @@ const focusTiles = computed<Tile[]>(() => {
 })
 
 function rankBy(sub: Knock[], key: (k: Knock) => string, exclude?: string): BarItem[] {
-  const per = new Map<string, { knocks: number; sigs: number; interactions: number }>()
+  const per = new Map<string, { knocks: number; sigs: number; conversations: number }>()
   for (const k of sub) {
     const label = key(k)
     if (label === exclude) continue
     let e = per.get(label)
     if (!e) {
-      e = { knocks: 0, sigs: 0, interactions: 0 }
+      e = { knocks: 0, sigs: 0, conversations: 0 }
       per.set(label, e)
     }
     e.knocks++
     if (k.signed) e.sigs++
-    if (k.interacted) e.interactions++
+    if (k.conversed) e.conversations++
   }
   return [...per.entries()]
     .map(([label, e]) => ({
       label,
       value: e.sigs,
-      detail: `${fmtCount(e.knocks)} knocks, ${fmtCount(e.interactions)} interactions`,
-      note: `Sign rate ${fmtPct(e.interactions ? e.sigs / e.interactions : 0, 1)}`,
+      detail: `${fmtCount(e.knocks)} knocks, ${fmtCount(e.conversations)} conversations`,
+      note: `Sign rate ${fmtPct(e.conversations ? e.sigs / e.conversations : 0, 1)}`,
     }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 10)
 }
 
 function rankPeople(sub: Knock[]): BarItem[] {
-  const per = new Map<string, { knocks: number; sigs: number; interactions: number }>()
+  const per = new Map<string, { knocks: number; sigs: number; conversations: number }>()
   for (const k of sub) {
     let e = per.get(k.canvasser)
     if (!e) {
-      e = { knocks: 0, sigs: 0, interactions: 0 }
+      e = { knocks: 0, sigs: 0, conversations: 0 }
       per.set(k.canvasser, e)
     }
     e.knocks++
     if (k.signed) e.sigs++
-    if (k.interacted) e.interactions++
+    if (k.conversed) e.conversations++
   }
   return [...per.entries()]
     .map(([id, e]) => ({
       id,
       label: canvasserNames.value.get(id) ?? 'Unknown',
       value: e.sigs,
-      detail: `${fmtCount(e.knocks)} knocks, ${fmtCount(e.interactions)} interactions`,
-      note: `Sign rate ${fmtPct(e.interactions ? e.sigs / e.interactions : 0, 1)}`,
+      detail: `${fmtCount(e.knocks)} knocks, ${fmtCount(e.conversations)} conversations`,
+      note: `Sign rate ${fmtPct(e.conversations ? e.sigs / e.conversations : 0, 1)}`,
     }))
     .sort((a, b) => b.value - a.value)
     .slice(0, 10)
@@ -1436,7 +1457,7 @@ const focusRanks = computed<FocusRank[]>(() => {
             <ChartCard
               title="What happened at doors"
               subtitle="knocks each day, by outcome"
-              :columns="['Day', ...OUTCOMES.map((o) => o.short)]"
+              :columns="['Day', ...CHART_OUTCOMES.map((o) => o.short)]"
               :rows="overviewDaily.axis.map((d, i) => [d, ...outcomeStack.map((s) => s.values[i])])"
             >
               <StackedBarChart :labels="overviewDaily.axis.map(dayLabel)" :series="outcomeStack" :height="230" />
@@ -1490,7 +1511,7 @@ const focusRanks = computed<FocusRank[]>(() => {
 
             <ChartCard
               title="Answer rate by area"
-              subtitle="share of knocks where somebody came to the door"
+              subtitle="share of interactions somebody answered"
               :columns="['Area', 'Answer rate', 'Detail']"
               :rows="rateRows(answerRateByCity)"
             >
@@ -1775,7 +1796,7 @@ const focusRanks = computed<FocusRank[]>(() => {
           <ChartCard
             title="When doors answer"
             data-help="odds-heatmap"
-            subtitle="share of knocks answered, by day and hour"
+            subtitle="share of interactions answered, by day and hour"
             :columns="['Weekday', ...HOURS.map((h) => `${h}:00`)]"
             :rows="
               WEEKDAYS.map((w, r) => [
@@ -1789,6 +1810,7 @@ const focusRanks = computed<FocusRank[]>(() => {
               :col-labels="HOURS.map((h) => (h <= 12 ? `${h}a` : `${h - 12}p`))"
               :values="heat.values"
               :counts="heat.counts"
+              unit="interactions"
               :dark="palette.dark.value"
             />
           </ChartCard>

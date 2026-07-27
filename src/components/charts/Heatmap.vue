@@ -14,6 +14,8 @@ const props = defineProps<{
   /** sample size per cell for the tooltip */
   counts: number[][]
   dark: boolean
+  /** what one sample IS in the tooltip ("knocks", "interactions") */
+  unit?: string
 }>()
 
 const { el, width } = useChartWidth()
@@ -107,11 +109,11 @@ const legendStops = Array.from({ length: 9 }, (_, i) => i / 8)
       <strong>{{ rowLabels[hover.r] }} at {{ colLabels[hover.c] }}</strong>
       <span class="muted">
         {{ fmtPct(values[hover.r][hover.c]!, 1) }} answered, out of
-        {{ counts[hover.r][hover.c] }} knocks</span
+        {{ counts[hover.r][hover.c] }} {{ unit ?? 'knocks' }}</span
       >
     </div>
     <div v-else-if="hover" class="detail muted">
-      {{ rowLabels[hover.r] }} at {{ colLabels[hover.c] }}: too few knocks to say
+      {{ rowLabels[hover.r] }} at {{ colLabels[hover.c] }}: too few {{ unit ?? 'knocks' }} to say
     </div>
     <div v-else class="detail muted">Hold a square to read it</div>
 

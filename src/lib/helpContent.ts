@@ -513,7 +513,7 @@ const CARD_CONTROLS =
 
 /** The one paragraph the whole page rests on. */
 const WHAT_COUNTS =
-  'Knock: one logged visit. The same door twice is two knocks.\nDoor: one household, counted once however often it is knocked.\nInteraction: a knock where somebody came to the door. Signed, Not Interested, Return and Hostile count. Not Home and Skip do not.'
+  'Knock: one logged visit. The same door twice is two knocks.\nDoor: one household, counted once however often it is knocked.\nInteraction: a knock that tried the door. Every outcome counts except Skip, Not Home included.\nConversation: an interaction somebody answered. Signed, Not Interested, Return and Hostile count. Not Home does not.'
 
 export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
   overview: {
@@ -531,7 +531,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'The two rates',
         target: 'analytics-tiles',
-        body: 'Answer rate: out of 100 knocks, how many had somebody come to the door.\nSign rate: out of 100 interactions, how many signed.\nSo answer rate is how often you get a conversation. Sign rate is what you do with one.',
+        body: 'Answer rate: out of 100 interactions, how many had somebody come to the door.\nSign rate: out of 100 conversations, how many signed.\nSo answer rate is how often you get a conversation. Sign rate is what you do with one.',
       },
       {
         heading: 'Setting the window',
@@ -561,7 +561,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Out of what',
         target: 'areas-rate',
-        body: 'Per interaction: out of the doors that opened, how many signed. How persuasive the conversations are.\nPer door knocked: out of every door walked up to, how many produced a signature. What an hour of knocking there is worth.\nThe chips switch every sign rate chart on the page together.',
+        body: 'Per conversation: out of the doors that opened, how many signed. How persuasive the conversations are.\nPer door knocked: out of every door walked up to, how many produced a signature. What an hour of knocking there is worth.\nThe chips switch every sign rate chart on the page together.',
       },
       {
         heading: 'Coverage',
@@ -648,7 +648,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Visit numbers',
         target: 'odds-attempts',
-        body: 'A visit is one trip to a door. Several knocks there within ten minutes count as one visit, so a couple both signing is not two visits.\nEach bar counts only what happened ON that visit. It is not a running total.\nSo "3rd visit, 54%" means: of the interactions that happened on a third visit, 54% signed. It does not mean 54% of doors have signed by the third visit.',
+        body: 'A visit is one trip to a door. Several knocks there within ten minutes count as one visit, so a couple both signing is not two visits.\nEach bar counts only what happened ON that visit. It is not a running total.\nSo "3rd visit, 54%" means: of the conversations that happened on a third visit, 54% signed. It does not mean 54% of doors have signed by the third visit.',
       },
       {
         heading: 'What to do with it',
@@ -659,7 +659,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'When doors answer',
         target: 'odds-heatmap',
-        body: 'Answer rate by day of the week and hour. Darker means more doors opened.\nHold a square for its rate and how many knocks it is based on.\nA square with under 15 knocks is left blank rather than guessed at.',
+        body: 'Answer rate by day of the week and hour. Darker means more doors opened.\nHold a square for its rate and how many interactions it is based on.\nA square with under 15 interactions is left blank rather than guessed at.',
       },
       {
         heading: 'How far doors get',
@@ -677,7 +677,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'The dot chart',
         target: 'canvassers-scatter',
-        body: 'One dot per canvasser. Further right: more knocks. Higher up: a better sign rate.\nTop right is both. Bottom right is somebody knocking plenty and closing little, which is usually a coaching conversation, not a numbers one.\nThe faint line is the campaign trend across everybody.\nOnly people with 20 or more interactions are plotted. Fewer than that and the dot would move on one good afternoon. The table has everyone.',
+        body: 'One dot per canvasser. Further right: more knocks. Higher up: a better sign rate.\nTop right is both. Bottom right is somebody knocking plenty and closing little, which is usually a coaching conversation, not a numbers one.\nThe faint line is the campaign trend across everybody.\nOnly people with 20 or more conversations are plotted. Fewer than that and the dot would move on one good afternoon. The table has everyone.',
       },
       {
         heading: 'Going deeper',
