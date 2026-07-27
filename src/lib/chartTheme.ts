@@ -106,7 +106,13 @@ export function niceTicks(min: number, max: number, count = 4): number[] {
   return ticks
 }
 
+/** Counts, plus the occasional average riding the same axis. ONE decimal
+ * place at most, anywhere (2026-07-27, user call): `toLocaleString()` defaults
+ * to THREE, which is what put "86.286" in a 7-day-average tooltip. Integers
+ * are unaffected — a max, not a fixed width. */
 export const fmtCount = (v: number): string =>
-  Math.abs(v) >= 10000 ? `${(v / 1000).toFixed(1)}k` : v.toLocaleString()
+  Math.abs(v) >= 10000
+    ? `${(v / 1000).toFixed(1)}k`
+    : v.toLocaleString(undefined, { maximumFractionDigits: 1 })
 
 export const fmtPct = (v: number, digits = 0): string => `${(v * 100).toFixed(digits)}%`
