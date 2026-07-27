@@ -536,7 +536,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Setting the window',
         target: 'analytics-scope',
-        body: 'The day chips re-cut every number on the tab. All time is the whole campaign.\nThe count on the right is how many knocks are in view.',
+        body: 'The day chips re-cut every number on the tab. Every one of them counts back from today and includes today, so 3 days is today and the two days before it. All time is the whole campaign.\nCustom: a first and last day, both included. Leave one blank for no limit at that end.\nThe count on the right is how many knocks are in view.',
       },
       { heading: 'Folding cards away', target: 'overview-trend', body: FOLDING_CARDS },
       {

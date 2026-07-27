@@ -298,19 +298,87 @@ function enrich(rows: KnockRow[], cityOf: Map<string, string>): Knock[] {
 // The one scope shared by every tab — rendered as chips INSIDE each tab's
 // content (there is no global filter bar anymore).
 
-const rangeDays = ref<number | null>(30) // days back; null = whole campaign
-const RANGE_CHIPS: { value: number | null; label: string }[] = [
-  { value: 7, label: '7 days' },
-  { value: 14, label: '14 days' },
-  { value: 30, label: '30 days' },
-  { value: null, label: 'All time' },
+// Every window is anchored to the CALENDAR, counting back from today, and
+// every preset includes today: "3 days" is today and the two days before it.
+// It used to be anchored to the latest knock in the data instead, which read
+// the same while a campaign was active and quietly drifted once it went quiet
+// — and "Today" cannot be expressed that way at all without lying about which
+// day it means. One rule now covers the presets and the custom range both.
+type RangeKey = '1' | '3' | '7' | '14' | '30' | 'all' | 'custom'
+
+const RANGE_CHIPS: { value: RangeKey; label: string }[] = [
+  { value: '1', label: 'Today' },
+  { value: '3', label: '3 days' },
+  { value: '7', label: '7 days' },
+  { value: '14', label: '14 days' },
+  { value: '30', label: '30 days' },
+  { value: 'all', label: 'All time' },
+  { value: 'custom', label: 'Custom' },
 ]
 
-const maxTs = computed(() => (knocks.value.length ? knocks.value[knocks.value.length - 1].ts : 0))
-const rangeCutoff = computed(() =>
-  rangeDays.value == null ? -Infinity : maxTs.value - rangeDays.value * 86_400_000,
-)
-const filtered = computed(() => knocks.value.filter((k) => k.ts >= rangeCutoff.value))
+const rangeKey = ref<RangeKey>('30')
+const customFrom = ref('') // YYYY-MM-DD, inclusive; blank = no limit that end
+const customTo = ref('')
+
+/** Local midnight `daysAgo` days back, in ms. Built from y/m/d components and
+ * never by subtracting 86.4M ms: across a DST boundary that arithmetic lands
+ * at 23:00 or 01:00 of the intended day rather than on midnight. */
+function dayStartMs(daysAgo: number): number {
+  const n = new Date()
+  return new Date(n.getFullYear(), n.getMonth(), n.getDate() - daysAgo, 0, 0, 0, 0).getTime()
+}
+
+/** Local midnight of a YYYY-MM-DD string (+ whole days), in ms. Split into
+ * components for day.ts's reason: `new Date('2026-07-12')` parses as UTC
+ * midnight, which is the day before in every US timezone. */
+function dayStrMs(s: string, plusDays = 0): number | null {
+  const [y, m, d] = s.split('-').map(Number)
+  if (!y || !m || !d) return null
+  return new Date(y, m - 1, d + plusDays, 0, 0, 0, 0).getTime()
+}
+
+const isoDayOf = (ms: number) => {
+  const d = new Date(ms)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** The window as [start, end) in ms. Presets deliberately have NO upper edge:
+ * that keeps them behaving exactly as they always have (appointments run into
+ * the future, and a preset is "since", not "between"). Only a custom range,
+ * which is a pair of dates by definition, closes the far end. */
+const rangeWindow = computed<{ start: number; end: number }>(() => {
+  const k = rangeKey.value
+  if (k === 'all') return { start: -Infinity, end: Infinity }
+  if (k === 'custom') {
+    const a = dayStrMs(customFrom.value)
+    const b = dayStrMs(customTo.value, 1)
+    // Ends the wrong way round has exactly one sensible reading, so read it.
+    if (a != null && b != null && a >= b) {
+      return { start: dayStrMs(customTo.value)!, end: dayStrMs(customFrom.value, 1)! }
+    }
+    return { start: a ?? -Infinity, end: b ?? Infinity }
+  }
+  return { start: dayStartMs(Number(k) - 1), end: Infinity }
+})
+
+const filtered = computed(() => {
+  const { start, end } = rangeWindow.value
+  return knocks.value.filter((k) => k.ts >= start && k.ts < end)
+})
+
+/** Tapping Custom seeds the dates from whatever window is already showing, so
+ * the switch is continuous instead of landing on a blank pair (which would
+ * read as an empty campaign). */
+function pickRange(v: RangeKey) {
+  if (v === 'custom' && !customFrom.value && !customTo.value) {
+    const { start } = rangeWindow.value
+    customFrom.value = Number.isFinite(start)
+      ? isoDayOf(start)
+      : (knocks.value[0]?.day ?? isoDayOf(dayStartMs(30)))
+    customTo.value = isoDayOf(dayStartMs(0))
+  }
+  rangeKey.value = v
+}
 
 // ---------------------------------------------------------------- tabs
 
@@ -1025,10 +1093,10 @@ const knocksByDoor = computed(() => {
 
 const apptResults = computed<ApptResult[]>(() => {
   const now = Date.now()
-  const cutoff = rangeCutoff.value
+  const { start, end } = rangeWindow.value
   const out: ApptResult[] = []
   for (const a of appointments.value) {
-    if (a.start < cutoff) continue
+    if (a.start < start || a.start >= end) continue
     const back = knocksByDoor.value.get(a.household_id)?.find((k) => k.ts >= a.start) ?? null
     let state: ApptState
     if (a.canceled) state = 'canceled'
@@ -1359,11 +1427,11 @@ const focusRanks = computed<FocusRank[]>(() => {
           <div class="chip-row" role="group" aria-label="Time window">
             <button
               v-for="r in RANGE_CHIPS"
-              :key="r.label"
+              :key="r.value"
               type="button"
               class="chip"
-              :class="{ on: rangeDays === r.value }"
-              @click="rangeDays = r.value"
+              :class="{ on: rangeKey === r.value }"
+              @click="pickRange(r.value)"
             >
               {{ r.label }}
             </button>
@@ -1371,6 +1439,19 @@ const focusRanks = computed<FocusRank[]>(() => {
           <span class="scope-right muted">
             {{ fmtCount(scopeCount) }} knocks<span v-if="showTapHint">, tap once to read, again to open</span>
           </span>
+          <!-- Its own line (flex-basis 100%): the pair needs ~340px, which is
+               most of a phone, so letting it flow beside the chips would only
+               wrap it there anyway, mid row. -->
+          <div v-if="rangeKey === 'custom'" class="custom-range">
+            <input
+              v-model="customFrom"
+              type="date"
+              class="day-input"
+              aria-label="Window starts"
+            />
+            <span class="muted">to</span>
+            <input v-model="customTo" type="date" class="day-input" aria-label="Window ends" />
+          </div>
         </div>
 
         <!-- The Areas tab's picker lives IN the tab, not above the page. -->
@@ -1990,6 +2071,34 @@ const focusRanks = computed<FocusRank[]>(() => {
 .scope-right {
   font-size: 0.82rem;
   margin-left: auto;
+}
+
+/* The custom window's two dates, on their own line under the chips. */
+.custom-range {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+}
+.day-input {
+  min-height: 36px;
+  padding: 0.25rem 0.5rem;
+  font: inherit;
+  /* The 16px floor is non-negotiable: iOS Safari zooms the whole page in
+     whenever a focused field is under it. input[type=date] isn't covered by
+     style.css's global field rule, so it takes the floor here. */
+  font-size: max(16px, calc(0.85rem * var(--ui-scale, 1)));
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.day-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
 }
 
 /* The Areas picker. Capped so it doesn't stretch to the full column width on
