@@ -395,7 +395,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Dispatch',
         target: 'turf-dispatch',
-        body: 'Every turf out today, with the crew on it. Change the crew from the row.\nTap a name to zoom the map to it. Tap it again to scroll up to the map.',
+        body: 'Every turf out today, with the crew on it. Closed until you open it.\nTap a turf to change its crew, or to show it on the map.',
       },
       {
         heading: 'One turf at a time',

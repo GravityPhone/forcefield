@@ -54,6 +54,7 @@ import { Geolocation } from '@capacitor/geolocation'
 import AppShell from '@/components/AppShell.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import type { SelectOption } from '@/components/ui/AppSelect.vue'
+import BottomSheet from '@/components/ui/BottomSheet.vue'
 import { attachPoiTapGuard, loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
@@ -73,6 +74,7 @@ import {
 import type { DoorBadge, DoorPaintState } from '@/lib/doorCanvas'
 import { createBadgeFactory } from '@/lib/doorBadges'
 import type { BadgePerson } from '@/lib/doorBadges'
+import { afterScrollUnlock } from '@/lib/appChrome'
 import { attachMapScrollGuard } from '@/lib/mapScroll'
 import type { MapScrollGuard } from '@/lib/mapScroll'
 import {
@@ -356,6 +358,8 @@ const streetsByName = new Map<string, AddressLite[]>()
  * `indexComplete` says so — until then the search box prefers the server's
  * list (see searchSummaries below). */
 let streetSummaries: StreetSummary[] = []
+/** A page has landed since streetSummaries was last flattened. */
+let summariesDirty = false
 /** Normalized name -> streets bearing it, for matching reverse-geocoded
  * route names ("South Clinton Street") to voter-file streets ("S CLINTON ST"). */
 const streetsByNorm = new Map<string, { name: string; city: string }[]>()
@@ -431,8 +435,39 @@ const streetSummaryByKey = new Map<string, StreetSummary>()
  * The data was there in under a second; only the number was wrong.
  *
  * So the index gets one reactive handle, and everything derived from it reads
- * this. Bump it wherever the Map is written. */
+ * this. Bump it through bumpIndexVersion() wherever the Map is written. */
 const addressIndexVersion = ref(0)
+
+/** How often a streaming load may invalidate everything built on the index.
+ *
+ * The bump used to fire once per PAGE, and a cold load is 32 of them. Anything
+ * derived from the index is a tally over 22,746 rows, so each bump re-ran every
+ * one of those AND re-rendered whatever they feed. Throttling costs nothing
+ * real: a number that lands 200ms late during a load that takes seconds is
+ * still a number climbing honestly, and the states that must be exact — a
+ * finished load, a wholesale replacement after a save — bump immediately and
+ * cancel any pending one, so the last word is never a stale trailing timer. */
+const INDEX_BUMP_MS = 200
+let indexBumpTimer: ReturnType<typeof setTimeout> | null = null
+
+function bumpIndexVersion(immediate = false) {
+  if (immediate) {
+    if (indexBumpTimer) {
+      clearTimeout(indexBumpTimer)
+      indexBumpTimer = null
+    }
+    addressIndexVersion.value++
+    return
+  }
+  // Throttle, not debounce: a scheduled bump is left alone rather than pushed
+  // further out, so a continuous stream of pages still reports progress instead
+  // of going quiet until it stops.
+  if (indexBumpTimer) return
+  indexBumpTimer = setTimeout(() => {
+    indexBumpTimer = null
+    addressIndexVersion.value++
+  }, INDEX_BUMP_MS)
+}
 
 /** Is the index the WHOLE county, or only as much of it as has arrived?
  *
@@ -462,8 +497,18 @@ const serverSummaries = ref<StreetSummary[]>([])
  * about); the server's list before that; the partial client one if the server's
  * never arrived. */
 function searchSummaries(): StreetSummary[] {
-  if (indexComplete.value) return streetSummaries
-  return serverSummaries.value.length ? serverSummaries.value : streetSummaries
+  if (indexComplete.value) return clientSummaries()
+  return serverSummaries.value.length ? serverSummaries.value : clientSummaries()
+}
+
+/** The index's own street list, flattened on demand. Rebuilt only when a page
+ *  has landed since the last read — during a load nobody is reading it. */
+function clientSummaries(): StreetSummary[] {
+  if (summariesDirty) {
+    streetSummaries = [...streetSummaryByKey.values()]
+    summariesDirty = false
+  }
+  return streetSummaries
 }
 
 function resetIndex() {
@@ -473,8 +518,9 @@ function resetIndex() {
   streetsByNorm.clear()
   streetSummaryByKey.clear()
   streetSummaries = []
+  summariesDirty = false
   indexComplete.value = false
-  addressIndexVersion.value++
+  bumpIndexVersion(true)
 }
 
 /** Fold one page of addresses into the street indexes. Kept separate from
@@ -516,10 +562,12 @@ function addToIndex(rows: AddressLite[]) {
       if (n > sum.hi) sum.hi = n
     }
   }
-  streetSummaries = [...summaries.values()]
-  // Per PAGE on the streaming path, so the door counts climb honestly as the
-  // county lands instead of sitting at zero until the last one.
-  addressIndexVersion.value++
+  // The flat list is rebuilt on READ, not here: 1,244 entries copied on every
+  // one of a cold load's 32 pages, for a list only the search box ever asks for.
+  summariesDirty = true
+  // Throttled, so the door counts still climb as the county lands without
+  // every page invalidating every tally built on the index.
+  bumpIndexVersion()
 }
 
 /** Replace the whole index (the post-save reloadAll path, where the row set
@@ -528,6 +576,9 @@ function indexAddresses(rows: AddressLite[]) {
   resetIndex()
   addToIndex(rows)
   indexComplete.value = true
+  // The set is complete as of right now: nothing derived from it may sit on a
+  // throttled bump scheduled mid-fill.
+  bumpIndexVersion(true)
 }
 
 /** One street's doors, pulled on demand.
@@ -1299,6 +1350,18 @@ async function initialize() {
     pinMode: () => pinMode.value,
     paintFor: paintForDoor,
   })
+  // Whatever the index already holds goes in NOW (2026-07-27). loadCutterData
+  // started before this and reads the device's own copy from IndexedDB, which
+  // finishes long before the Maps SDK has downloaded, parsed and built a map —
+  // so on every visit after the first, the whole county was already indexed by
+  // the time this layer came into existence, and the layer was born EMPTY. Its
+  // `doorLayer?.setDoors(...)` had run against a null. Nothing else populated
+  // it on that path (the viewport read is cold-load only), so the map sat blank
+  // until the unconditional background refetch finished paging the entire
+  // county a second time. That was most of "it takes forever to load stuff in":
+  // not slow loading, a map painting nothing while its data sat in memory.
+  // A no-op on a genuinely cold load, where the index is still empty.
+  doorLayer.setDoors(locatedCanvasDoors())
   // Settled pan/zoom: repaint only if the view outgrew the painted canvas
   // (or the zoom landed somewhere new — mid-animation the canvas just
   // stretches via its CSS transform).
@@ -1544,6 +1607,7 @@ async function loadCutterData() {
       // in the table on a re-run. One pass over an already-built index.
       addressGeneration++
       indexComplete.value = true
+      bumpIndexVersion(true)
       doorLayer?.setDoors(locatedCanvasDoors())
       cacheLater([...located, ...unlocated])
     }
@@ -3360,13 +3424,63 @@ function editTurf(t: TurfWithMeta) {
 
 const combineBusy = ref(false)
 
-/** Today's top-level turfs, biggest first — the dispatch list. */
+// --- "Today's turf": collapsed by default, and one control per turf instead
+// of one control on every row (2026-07-27, user call: "we don't need a whole
+// incredibly long today's turf thing. That should be collapsible. And the UI
+// for it is terrible"). ---
+//
+// It was also the page's single most expensive thing to render: every row
+// carried its own AppSelect (a Reka Select — trigger, portal, popper, context,
+// and an options array rebuilt per row per render out of every squad and every
+// profile in the org), and the list re-sorted itself by door count, so each of
+// a cold load's index bumps re-rendered all of it. Collapsed with v-if, none of
+// that is mounted, and none of the tallies it reads are even evaluated —
+// which is why the guard below counts turfs rather than asking dispatchTurfs
+// for its length, since that would sort by door count to answer.
+
+const dispatchOpen = ref(false)
+
+/** Is there anything to dispatch? Deliberately does NOT touch door counts. */
+const hasDispatch = computed(() => todayTurfs.value.some((t) => !t.parent_turf_id))
+
+/** Today's top-level turfs, biggest first — the dispatch list. Only ever
+ *  evaluated while the card is open. */
 const dispatchTurfs = computed(() =>
   todayTurfs.value
     .filter((t) => !t.parent_turf_id)
     .slice()
     .sort((a, b) => turfDoorCount(b.id) - turfDoorCount(a.id)),
 )
+
+/** The turf whose dispatch sheet is open. Held by id, so a refetch after an
+ *  assignment re-reads the fresh row rather than showing the stale one. */
+const dispatchSheetId = ref<string | null>(null)
+const dispatchSheetOpen = computed({
+  get: () => dispatchSheetId.value !== null,
+  set: (v: boolean) => {
+    if (!v) dispatchSheetId.value = null
+  },
+})
+const dispatchSheetTurf = computed(
+  () => turfs.value.find((t) => t.id === dispatchSheetId.value) ?? null,
+)
+
+/** Who a turf is out with right now, in words. */
+function crewLabel(t: TurfWithMeta): string {
+  if (t.squad) return t.squad.name
+  if (t.assignee) return t.assignee.display_name || t.assignee.username
+  return 'Unassigned'
+}
+
+/** Pick this turf on the map and close the sheet — the map is behind it. */
+function showTurfOnMap(t: TurfWithMeta) {
+  dispatchSheetId.value = null
+  onPickTurf(t.id)
+  // Closing a sheet locks the page for the length of its exit animation, and a
+  // scroll fired inside that window is not delayed, it is discarded (see
+  // appChrome). Wait the lock out rather than scrolling into a no-op.
+  afterScrollUnlock(() => scrollMapIntoView())
+}
 
 /** Doors per turf, its sub-turfs' doors folded into it — a crew's assignment
  * doesn't shrink because a leader split it up.
@@ -3634,6 +3748,10 @@ watch([draftOpen, segments, streetMatches, selectedTurfId], () => void nextTick(
 
 onUnmounted(() => {
   unmounted = true
+  if (indexBumpTimer) {
+    clearTimeout(indexBumpTimer)
+    indexBumpTimer = null
+  }
   scrollGuard?.dispose()
   scrollGuard = null
   doorLayer?.dispose()
@@ -4368,38 +4486,72 @@ onUnmounted(() => {
            tap from a reassignment (2026-07-25, user call: "we want an easy
            way to assign a squad to a turf"). The picker card above handles
            ONE turf at a time and made sending five crews out a five-trip
-           job. Managers only — a sub-cutter doesn't dispatch. -->
-      <div v-if="!draftOpen && isManager && dispatchTurfs.length" class="card" data-help="turf-dispatch">
-        <h3>Today's turf</h3>
-        <div class="dispatch-list">
-          <div
+           job. Managers only — a sub-cutter doesn't dispatch.
+
+           Collapsed until asked for (2026-07-27): the list runs as long as
+           the day's crews, and mounting a dropdown on every row of it was
+           the most expensive thing this page rendered. -->
+      <div v-if="!draftOpen && isManager && hasDispatch" class="card options-card" data-help="turf-dispatch">
+        <button
+          class="options-head"
+          :aria-expanded="dispatchOpen"
+          @click="dispatchOpen = !dispatchOpen"
+        >
+          <span>Today's turf</span>
+          <span class="options-caret" aria-hidden="true">{{ dispatchOpen ? '▴' : '▾' }}</span>
+        </button>
+        <!-- v-if, never v-show: a closed card must not mount its rows. -->
+        <div v-if="dispatchOpen" class="dispatch-list">
+          <button
             v-for="t in dispatchTurfs"
             :key="t.id"
             class="dispatch-row"
             :class="{ picked: selectedTurfId === t.id }"
+            @click="dispatchSheetId = t.id"
           >
-            <button class="dispatch-main" @click="tapTurfRow(t.id)">
-              <span class="turf-swatch" :style="{ background: turfDisplayColor(t) }" aria-hidden="true"></span>
-              <span class="dispatch-text">
-                <span class="dispatch-name">{{ t.name }}</span>
-                <!-- No count until the street index is in. Before that a turf
-                     doesn't hold zero doors, it holds an unknown number, and
-                     "0 doors" is the one reading that's actually wrong. -->
-                <span v-if="addressesReady" class="muted dispatch-meta">{{ turfDoorCount(t.id) }} doors</span>
-                <span v-else class="muted dispatch-meta">Counting doors…</span>
+            <span class="turf-swatch" :style="{ background: turfDisplayColor(t) }" aria-hidden="true"></span>
+            <span class="dispatch-text">
+              <span class="dispatch-name">{{ t.name }}</span>
+              <!-- No count until the street index is in. Before that a turf
+                   doesn't hold zero doors, it holds an unknown number, and
+                   "0 doors" is the one reading that's actually wrong. -->
+              <span class="muted dispatch-meta">
+                {{ addressesReady ? `${turfDoorCount(t.id)} doors` : 'Counting doors…' }}
               </span>
-            </button>
-            <AppSelect
-              class="dispatch-assign"
-              small
-              :options="assignOptionsFor(t)"
-              :model-value="assignChoiceOf(t)"
-              :aria-label="`Assign ${t.name}`"
-              @update:model-value="reassignTurf(t, $event)"
-            />
-          </div>
+            </span>
+            <span class="dispatch-crew" :class="{ none: !t.squad && !t.assignee }">
+              {{ crewLabel(t) }}
+            </span>
+          </button>
         </div>
       </div>
+
+      <!-- One turf's dispatch. The assign control lives here rather than on
+           every row: a manager touches one turf at a time, and 70 mounted
+           dropdowns is what made this list slow to open. -->
+      <BottomSheet
+        v-model:open="dispatchSheetOpen"
+        :title="dispatchSheetTurf?.name ?? 'Turf'"
+      >
+        <div v-if="dispatchSheetTurf" class="sheet-body">
+          <!-- Just the count: the picker below is the crew, live and editable,
+               so naming it here would be the same fact twice. -->
+          <p class="muted sheet-line">
+            {{ addressesReady ? `${turfDoorCount(dispatchSheetTurf.id)} doors` : 'Counting doors…' }}
+          </p>
+          <p v-if="staleDispatchLabel(dispatchSheetTurf)" class="turf-stale">
+            ⚠ {{ staleDispatchLabel(dispatchSheetTurf) }}
+          </p>
+          <AppSelect
+            :options="assignOptionsFor(dispatchSheetTurf)"
+            :model-value="assignChoiceOf(dispatchSheetTurf)"
+            :aria-label="`Assign ${dispatchSheetTurf.name}`"
+            @update:model-value="reassignTurf(dispatchSheetTurf, $event)"
+          />
+          <button class="btn btn-ghost" @click="showTurfOnMap(dispatchSheetTurf)">Show on map</button>
+          <p v-if="listError" class="error">{{ listError }}</p>
+        </div>
+      </BottomSheet>
 
       <!-- Long-page shortcut: the cutting screen runs well past one viewport
            (map + streets table + turf card), so park a jump pair on the left
@@ -4715,22 +4867,60 @@ onUnmounted(() => {
   z-index: 6;
 }
 
-/* Dispatch list: one row per turf out today, name on the left, crew picker
-   on the right. Wraps rather than scrolling sideways. */
+/* Collapsible card: same head/caret idiom as Board options and Feed options. */
+.options-card {
+  padding: 0;
+}
+
+.options-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.7rem 0.9rem;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.options-caret {
+  color: var(--text-muted);
+}
+
+/* Dispatch list: one row per turf out today. The whole row is the tap target
+   and every action lives in the sheet it opens, the same lesson the Squad
+   page's member tiles learned. */
 .dispatch-list {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  padding: 0 0.5rem 0.6rem;
 }
 
 .dispatch-row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  padding: 0 0.4rem;
-  margin: 0 -0.4rem;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.5rem 0.4rem;
+  border: none;
   border-radius: 8px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  /* A <button> centres and clamps its contents without these. */
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.dispatch-row + .dispatch-row {
+  border-top: 1px solid var(--border);
+  border-radius: 0;
 }
 
 /* The picked row — the one the map is framed on. */
@@ -4738,22 +4928,8 @@ onUnmounted(() => {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-.dispatch-main {
-  flex: 1 1 10rem;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.35rem 0;
-  border: none;
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
 .dispatch-text {
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -4771,9 +4947,33 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
 }
 
-.dispatch-assign {
-  flex: 0 1 12rem;
-  min-width: 0;
+/* Who it is out with, right-aligned so the column reads down the list. */
+.dispatch-crew {
+  flex: 0 1 auto;
+  max-width: 40%;
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dispatch-crew.none {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding-bottom: 0.5rem;
+}
+
+.sheet-line {
+  margin: 0;
+  font-size: 0.9rem;
 }
 
 /* Which turf is being cut. Sticky at the top of the page so it survives
