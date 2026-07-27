@@ -37,6 +37,7 @@ import {
 } from '@/lib/outcomes'
 import OutcomeSquare from '@/components/canvass/OutcomeSquare.vue'
 import { avatarUrl } from '@/lib/avatars'
+import { defaultSquadName } from '@/lib/squadName'
 import {
   fetchSquadPings,
   isExpired,
@@ -2009,7 +2010,8 @@ const creating = ref(false)
 
 function openComposer() {
   composing.value = true
-  squadName.value = ''
+  // Born named after whoever is forming it, editable on the spot.
+  squadName.value = defaultSquadName(auth.profile)
   picked.value = []
 }
 
@@ -2838,7 +2840,7 @@ watch(
     <BottomSheet v-model:open="composing" title="New squad" aria-label="New squad">
       <div class="field">
         <label for="squad-name">Squad name</label>
-        <input id="squad-name" v-model="squadName" placeholder="e.g. Richwood crew" />
+        <input id="squad-name" v-model="squadName" :placeholder="`e.g. ${defaultSquadName(auth.profile)}`" />
       </div>
       <UserPicker v-model="picked" />
       <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>

@@ -8,9 +8,12 @@ import AddMembersSheet from '@/components/squads/AddMembersSheet.vue'
 import { fadeUp } from '@/lib/motion'
 import { useSquadsStore, type SquadListItem } from '@/stores/squads'
 import { useChatStore } from '@/stores/chat'
+import { useAuthStore } from '@/stores/auth'
+import { defaultSquadName } from '@/lib/squadName'
 import type { ChatProfile } from '@/types'
 
 const router = useRouter()
+const auth = useAuthStore()
 const squads = useSquadsStore()
 const chat = useChatStore()
 
@@ -34,7 +37,8 @@ onUnmounted(() => squads.unsubscribeFromRosters())
 
 function openComposer() {
   composing.value = true
-  squadName.value = ''
+  // Born named after whoever is forming it, editable on the spot.
+  squadName.value = defaultSquadName(auth.profile)
   picked.value = []
 }
 
@@ -133,7 +137,7 @@ function memberNames(squad: SquadListItem): string {
     <BottomSheet v-model:open="composing" title="New squad" aria-label="New squad">
       <div class="field">
         <label for="squad-name">Squad name</label>
-        <input id="squad-name" v-model="squadName" placeholder="e.g. Richwood crew" />
+        <input id="squad-name" v-model="squadName" :placeholder="`e.g. ${defaultSquadName(auth.profile)}`" />
       </div>
       <UserPicker v-model="picked" />
       <p v-if="squads.actionError" class="error">{{ squads.actionError }}</p>

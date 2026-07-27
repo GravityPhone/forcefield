@@ -354,7 +354,7 @@ function simulateDay(day, ctx) {
     // answer-rate chart to compare, and the evening advantage (people are home)
     // only shows up if somebody actually knocks in the morning to lose against.
     const startHour = rng() < 0.55 ? 9 + rng() * 2.5 : 16 + rng() * 2.5
-    const name = squadName(sq, rng)
+    const name = squadName(sq)
     out.squads.push({ id: sq.id, name, squad_date: day, created_by: (sq.lead ?? sq.members[0]).id })
     for (const m of sq.members) out.members.push({ squad_id: sq.id, user_id: m.id })
 
@@ -424,11 +424,13 @@ function pickTurf(turfState, taken, capacity, day, chaseFresh) {
   return best
 }
 
-const CREW_WORDS = ['crew', 'squad', 'team']
-function squadName(sq, rand) {
-  const who = (sq.lead ?? sq.members[0]).display_name ?? 'Crew'
-  const first = who.split(' ')[0]
-  return `${first}'s ${CREW_WORDS[Math.floor(rand() * CREW_WORDS.length)]}`
+// Always "<first name>'s squad" — the app calls a day's crew a squad
+// everywhere, so seeded history says the same word (2026-07-27, user call).
+// Rolling "crew"/"team" in here made the demo look like it had three names for
+// one thing.
+function squadName(sq) {
+  const who = (sq.lead ?? sq.members[0]).display_name ?? 'Squad'
+  return `${who.split(' ')[0]}'s squad`
 }
 
 /** The leader splits the turf, each member walks their slice in street order. */

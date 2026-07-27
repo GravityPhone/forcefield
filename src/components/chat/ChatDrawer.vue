@@ -7,6 +7,7 @@ import GifPicker from '@/components/chat/GifPicker.vue'
 import { useChatStore, type ChatListItem, type OutgoingFile } from '@/stores/chat'
 import { useSquadsStore } from '@/stores/squads'
 import { useAuthStore } from '@/stores/auth'
+import { defaultSquadName } from '@/lib/squadName'
 import { useThemeStore } from '@/stores/theme'
 import { vacStyles } from '@/lib/themes'
 import { avatarUrl } from '@/lib/avatars'
@@ -643,7 +644,7 @@ async function addPeople() {
       <UserPicker v-model="picked" />
       <div class="field">
         <label for="chat-name">Squad name (optional)</label>
-        <input id="chat-name" v-model="chatName" placeholder="e.g. Richwood crew" />
+        <input id="chat-name" v-model="chatName" :placeholder="`e.g. ${defaultSquadName(auth.profile)}`" />
       </div>
       <p v-if="chat.sendError" class="send-error">{{ chat.sendError }}</p>
       <button

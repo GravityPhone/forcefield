@@ -481,7 +481,7 @@ async function main() {
       const squadId = randomUUID()
       squadRows.push({
         id: squadId,
-        name: `${leader.first}'s crew`,
+        name: `${leader.first}'s squad`,
         created_by: leader,
         squad_date: day.iso,
         created_at: localTime(day, startMin - randInt(25, 55)),

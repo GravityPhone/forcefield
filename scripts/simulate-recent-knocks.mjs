@@ -547,7 +547,7 @@ async function main() {
       if (dayDoors.length < 8) continue
 
       const squadId = randomUUID()
-      const squadName = `${firstName(leader)}'s crew`
+      const squadName = `${firstName(leader)}'s squad`
       squadRows.push({
         id: squadId,
         name: squadName,
