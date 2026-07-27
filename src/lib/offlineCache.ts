@@ -198,7 +198,11 @@ export async function clearTurfCache(): Promise<void> {
           db.cachedDoors.clear(),
           db.cachedPersons.clear(),
           db.cachedVisits.clear(),
-          db.cacheMeta.clear(),
+          // This key, not the whole store: cacheMeta is shared with the
+          // cutter's address cache (lib/addressCache.ts), which clears its own
+          // on the same sign-out. A .clear() here would strand that copy's
+          // chunks with no meta describing them.
+          db.cacheMeta.delete(META_KEY),
         ])
       },
     )

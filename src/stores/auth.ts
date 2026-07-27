@@ -172,6 +172,10 @@ export const useAuthStore = defineStore('auth', {
       // fire-and-forget call on the way out. The call was already unawaited, so
       // deferring the fetch of its module changes nothing about sign-out.
       void import('@/lib/offlineCache').then((m) => m.clearTurfCache())
+      // The cutter's stored street index goes the same way, for the same
+      // reason: it's the county's addresses, and this is the moment the phone
+      // stops being this person's.
+      void import('@/lib/addressCache').then((m) => m.clearAddressCache())
     },
   },
 })

@@ -92,6 +92,7 @@ import {
   doorStatusOutcome,
 } from '@/lib/outcomes'
 import { fetchAllRows, supabase } from '@/lib/supabase'
+import { readCachedAddresses, whenIdle, writeCachedAddresses } from '@/lib/addressCache'
 import { houseNumber, streetNameOf, titleCase } from '@/lib/streetWalk'
 import { decodeTurfPlan } from '@/lib/turfPlan'
 import { useRoute, useRouter } from 'vue-router'
@@ -165,6 +166,11 @@ const squadsStore = useSquadsStore()
 
 const mapEl = ref<HTMLElement | null>(null)
 const pinsLoading = ref(false)
+/** True only while the county table is being pulled from the network for want
+ * of a stored copy — the one load that genuinely takes a while. Worth saying so
+ * out loud, because the answer is "once": every visit after this one indexes
+ * from the device. */
+const firstEverLoad = ref(false)
 const loadError = ref('')
 const saveError = ref('')
 const saving = ref(false)
@@ -970,18 +976,34 @@ function* locatedCanvasDoors() {
 
 // --- Data fetches ---
 
+/** The columns the in-memory index is built from. `unit` and `zip` are load-
+ * bearing despite nothing on screen showing them: geocodeCapturedStreets feeds
+ * these very rows to the geocoder, and without the zip the query line silently
+ * loses it. Anything added here needs a SHAPE bump in lib/addressCache.ts. */
+const ADDRESS_COLUMNS = 'id, street, unit, city, zip, lat, lng, turf_id'
+
 /** The WHOLE address table, ungeocoded rows included — street sweeps, door
  * counts, and search all run from memory so no gesture ever waits on the
- * network. ~23k slim rows ≈ a small map tile's worth of JSON. */
-async function fetchAddresses(onPage?: (rows: AddressLite[]) => void): Promise<AddressLite[]> {
+ * network. ~23k slim rows ≈ a small map tile's worth of JSON.
+ *
+ * `geocoded` splits the table the way Scout's fetchMapData does. A door with no
+ * coordinates cannot be painted, so it must not sit in the queue in front of
+ * one that can: pulling the located rows first puts every pin the map can draw
+ * on screen after ~14 pages instead of all 23. Pass nothing for the whole
+ * table in one pass (the post-save reload, where nobody is watching it fill).
+ */
+async function fetchAddresses(
+  onPage?: (rows: AddressLite[]) => void,
+  geocoded?: boolean,
+): Promise<AddressLite[]> {
   // 8 concurrent pages: ~23 pages of 1000 land in 3 round trips instead of 6.
   return fetchAllRows<AddressLite>(
-    (from, to) =>
-      supabase
-        .from('addresses')
-        .select('id, street, unit, city, zip, lat, lng, turf_id')
-        .order('id')
-        .range(from, to),
+    (from, to) => {
+      const q = supabase.from('addresses').select(ADDRESS_COLUMNS)
+      const scoped =
+        geocoded === undefined ? q : geocoded ? q.not('lat', 'is', null) : q.is('lat', null)
+      return scoped.order('id').range(from, to)
+    },
     1000,
     8,
     onPage,
@@ -1193,6 +1215,34 @@ async function zoomToMe() {
   }
 }
 
+/** Bumped by every whole-table load that lands. A background refetch that
+ * started before a save captures this and drops its rows if a fresher set
+ * (reloadAll's) has replaced the index since — a slow read must never
+ * reinstate the turf_ids the save just changed. */
+let addressGeneration = 0
+
+/** Store a complete table once the main thread is free — writing ~4 MB is
+ * cheap but not free, and nothing on screen is waiting on it. Skipped if a
+ * fresher set has been published in the meantime, so two saves in quick
+ * succession can't leave the older one on disk. */
+function cacheLater(rows: AddressLite[]) {
+  const gen = addressGeneration
+  whenIdle(() => {
+    if (gen === addressGeneration) void writeCachedAddresses(rows)
+  })
+}
+
+/** Publish a complete address table: replace the index, the canvas and the
+ * stale-turf prompt, and keep the device's copy in step. */
+function applyAddresses(rows: AddressLite[]) {
+  addressGeneration++
+  indexAddresses(rows)
+  doorLayer?.setDoors(locatedCanvasDoors())
+  refreshStaleTurfs()
+  doorLayer?.requestRepaint()
+  cacheLater(rows)
+}
+
 /** Background data load: the county address table into the street indexes,
  * plus turfs/squads/people for coloring, scoping, and the assign pickers.
  * The map is already up and interactive while this runs. */
@@ -1227,26 +1277,48 @@ async function loadCutterData() {
         }),
     ])
 
-    // Index and paint each page as it lands instead of holding all 24 back
-    // for the last one. Searching a street is what this page is for, and the
-    // county table is several seconds of paging even when nothing is wrong.
-    resetIndex()
-    await fetchAddresses((page) => {
-      if (unmounted) return
-      addToIndex(page)
-      for (const a of page) {
-        if (a.lat != null && a.lng != null) doorLayer?.upsertDoor(canvasDoorOf(a))
-      }
-      doorLayer?.requestRepaint()
-      // A search typed while the pages are still arriving refines itself
-      // rather than sitting on whatever the index held when it was typed.
-      if (streetQuery.value.trim().length >= 2) onStreetInput(streetQuery.value)
-    })
+    // The device's own copy first, if there is one: one IndexedDB read against
+    // 23 network round trips, and the page is fully usable the moment it lands.
+    // The whole table is refetched behind it either way, further down.
+    const cached = await readCachedAddresses<AddressLite>()
     if (unmounted) return
-    // Belt and braces: the streaming upserts above skip any page that landed
-    // before the layer existed, and this also drops doors that are no longer
-    // in the table on a re-run. One pass over an already-built index.
-    doorLayer?.setDoors(locatedCanvasDoors())
+    if (cached?.length) {
+      addressGeneration++
+      indexAddresses(cached)
+      doorLayer?.setDoors(locatedCanvasDoors())
+      doorLayer?.requestRepaint()
+      pinsLoading.value = false
+    } else {
+      // Nothing stored: the long way round, exactly as before. Index and paint
+      // each page as it lands instead of holding all 23 back for the last one,
+      // and take the rows that CAN be drawn first (see fetchAddresses).
+      firstEverLoad.value = true
+      resetIndex()
+      const stream = (page: AddressLite[]) => {
+        if (unmounted) return
+        addToIndex(page)
+        for (const a of page) {
+          if (a.lat != null && a.lng != null) doorLayer?.upsertDoor(canvasDoorOf(a))
+        }
+        doorLayer?.requestRepaint()
+        // A search typed while the pages are still arriving refines itself
+        // rather than sitting on whatever the index held when it was typed.
+        if (streetQuery.value.trim().length >= 2) onStreetInput(streetQuery.value)
+      }
+      const located = await fetchAddresses(stream, true)
+      if (unmounted) return
+      // Pins are up; the streets nobody has geocoded yet still have to join the
+      // index, because they're exactly the ones somebody looks up by name.
+      const unlocated = await fetchAddresses(stream, false)
+      if (unmounted) return
+      firstEverLoad.value = false
+      // Belt and braces: the streaming upserts above skip any page that landed
+      // before the layer existed, and this also drops doors that are no longer
+      // in the table on a re-run. One pass over an already-built index.
+      addressGeneration++
+      doorLayer?.setDoors(locatedCanvasDoors())
+      cacheLater([...located, ...unlocated])
+    }
     await meta
     if (unmounted) return
     await computeLeaderlessSquads()
@@ -1263,10 +1335,31 @@ async function loadCutterData() {
     applyIncomingStreet()
     applyIncomingAssignee()
     applyIncomingPlan()
+    // A stored copy is a head start, never an authority: turf_id is rewritten
+    // server-side every time anyone saves a turf, and which turf a door is in
+    // is what this page exists to show. So refetch the table unconditionally,
+    // once the map has settled, and swap it in when it lands.
+    if (cached?.length) whenIdle(() => void refreshAddresses())
   } catch {
     loadError.value = 'Could not load the street data. Check your connection and reload.'
   } finally {
     pinsLoading.value = false
+    firstEverLoad.value = false
+  }
+}
+
+/** Silent whole-table refetch behind a cache-seeded page. Failure is fine: the
+ * copy already on screen stands, and this runs again next visit. */
+async function refreshAddresses() {
+  const gen = addressGeneration
+  try {
+    const rows = await fetchAddresses()
+    // A save landed while this was in flight — reloadAll has already published
+    // fresher rows, and these would put the old turf_ids back.
+    if (unmounted || !rows.length || gen !== addressGeneration) return
+    applyAddresses(rows)
+  } catch {
+    /* the cached copy stands */
   }
 }
 
@@ -1279,11 +1372,8 @@ async function reloadAll() {
     fetchTurfs(),
     ...(statusesRequested ? [fetchKnockStatuses()] : []),
   ])
-  indexAddresses(rows)
-  doorLayer?.setDoors(locatedCanvasDoors())
+  applyAddresses(rows)
   defaultDraftParent()
-  refreshStaleTurfs()
-  doorLayer?.requestRepaint()
 }
 
 /** After a turf is cut, geocode every door in it that has no coordinates yet
@@ -1295,7 +1385,7 @@ async function reloadAll() {
 async function geocodeTurfDoors(turfId: string) {
   const { data } = await supabase
     .from('addresses')
-    .select('id, street, unit, city, zip, lat, lng, turf_id')
+    .select(ADDRESS_COLUMNS)
     .eq('turf_id', turfId)
     .is('lat', null)
   const missing = (data ?? []) as AddressLite[]
@@ -3454,10 +3544,6 @@ onUnmounted(() => {
         >
           <canvas ref="lassoCanvasEl" class="lasso-canvas"></canvas>
         </div>
-        <div v-if="pinsLoading" class="pins-loading" role="status" aria-live="polite">
-          <span class="pins-loading-spinner" aria-hidden="true"></span>
-          Loading streets…
-        </div>
         <!-- Flip every pin between a colored dot and its house number, same
              control as Scout. Top-left, above the layer toggle. -->
         <div class="pin-mode-toggle" role="group" aria-label="Pin style">
@@ -3636,6 +3722,20 @@ onUnmounted(() => {
              and the turf that's selected. Stacked, so they never cover each
              other. -->
         <div class="map-bottom">
+        <!-- Loading lives at the BOTTOM edge, in the same stack as the flash
+             and the door bubble (2026-07-27). Centred at the top it was
+             flanked by the two chrome columns, which leaves a 320px phone
+             about 128px to say anything in: the first-load line either wrapped
+             to five words a line or ran under the pin-style toggle. Nothing
+             sits along the bottom, and this column already exists to keep the
+             things that do from covering each other. -->
+        <div v-if="pinsLoading" class="pins-loading" role="status" aria-live="polite">
+          <span class="pins-loading-spinner" aria-hidden="true"></span>
+          <span class="pins-loading-text">
+            Loading streets…
+            <small v-if="firstEverLoad">First load only. Next time it is instant.</small>
+          </span>
+        </div>
         <!-- Per-gesture feedback ("Added WALNUT ST, 41 doors"), and only
              while a flash is up — no standing instructions. It lives ON the
              map (2026-07-25): tapping doors one at a time would otherwise
@@ -4177,11 +4277,10 @@ onUnmounted(() => {
   height: 100%;
 }
 
+/* A row in the .map-bottom stack, sized to its words and centred there. */
 .pins-loading {
-  position: absolute;
-  top: 0.6rem;
-  left: 50%;
-  transform: translateX(-50%);
+  align-self: center;
+  max-width: 100%;
   display: flex;
   align-items: center;
   gap: 0.4rem;
@@ -4193,8 +4292,12 @@ onUnmounted(() => {
   border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+/* A message, not a surface — same as the flash it stacks with: taps go
+   through it to the map. */
+.map-bottom > .pins-loading {
   pointer-events: none;
-  z-index: 6;
 }
 
 /* Actual Fullscreen API target — filling the screen only takes effect once
@@ -4817,7 +4920,20 @@ onUnmounted(() => {
   font-variant-numeric: tabular-nums;
 }
 
+.pins-loading-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.pins-loading-text small {
+  font-weight: 500;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
 .pins-loading-spinner {
+  flex: none;
   width: 13px;
   height: 13px;
   border: 2px solid var(--border);

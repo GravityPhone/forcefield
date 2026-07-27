@@ -26,6 +26,8 @@ export class KnockDb extends Dexie {
   cachedPersons!: Table<CachedPerson, string>
   cachedVisits!: Table<CachedVisit, string>
   cacheMeta!: Table<CacheMeta, string>
+  // v3 — the county street table, in a handful of chunks (lib/addressCache.ts).
+  cachedAddresses!: Table<AddressChunk, number>
 
   constructor() {
     super('forcefield')
@@ -38,6 +40,18 @@ export class KnockDb extends Dexie {
       cachedPersons: 'id, household_id',
       cachedVisits: 'id, household_id',
       cacheMeta: 'key',
+    })
+    this.version(3).stores({
+      pendingKnocks: 'client_id',
+      cachedDoors: 'id',
+      cachedPersons: 'id, household_id',
+      cachedVisits: 'id, household_id',
+      cacheMeta: 'key',
+      // Keyed by chunk number, not by address id: this set is only ever read
+      // and written whole, and six records beat 22,700 of them in both
+      // directions. Adding a store leaves every existing one untouched — the
+      // queued knocks in pendingKnocks are somebody's real work.
+      cachedAddresses: 'seq',
     })
   }
 }
@@ -56,10 +70,18 @@ export interface CachedVisit {
   household_id: string
   row: unknown
 }
+export interface AddressChunk {
+  seq: number
+  rows: unknown[]
+}
 export interface CacheMeta {
   key: string
   cachedAt: string
   doors: number
+  /** Row-shape stamp, for the address cache: a copy written by an older build
+   *  whose select listed fewer columns is discarded rather than served with a
+   *  field silently missing. */
+  shape?: number
   /** The turf ids this copy is of — how the auto-sync tells "still the same
    *  assignment" from "the crew's ground changed". Only `key` is indexed, so
    *  adding fields here needs no version bump. */
