@@ -176,6 +176,12 @@ const saveError = ref('')
 const saving = ref(false)
 
 const turfs = ref<TurfWithMeta[]>([])
+/** Has the turfs query actually answered? An empty list means "none" only
+ * after this is true; before it, it means "not yet", and the two empty states
+ * below say very different things. Without it the page claims "No turf cut
+ * yet." for as long as the query takes, which is a positive statement of fact
+ * made before anything is known. */
+const turfsLoaded = ref(false)
 /** turf id -> its dispatch history, oldest first (trigger-written). */
 const historyByTurf = ref<Map<string, AssignmentLog[]>>(new Map())
 const people = ref<ChatProfile[]>([])
@@ -384,6 +390,25 @@ const streetSummaryByKey = new Map<
   { street_name: string; city: string; count: number; lo: number; hi: number }
 >()
 
+/** Bumped whenever the address index changes.
+ *
+ * `addressById` is a bare Map on purpose — 22,746 rows behind a Vue proxy
+ * would cost far more than it could ever pay back — but that means filling it
+ * signals the template NOTHING, and anything derived from it goes stale in
+ * silence. That is not hypothetical: `fetchTurfs` resolves in ~450ms while the
+ * index takes longer, so `dispatchTurfs` computed its door counts against an
+ * EMPTY map, cached them, and every turf in the list read "0 doors" until some
+ * unrelated ref happened to change and force a re-render (measured at 49s).
+ * The data was there in under a second; only the number was wrong.
+ *
+ * So the index gets one reactive handle, and everything derived from it reads
+ * this. Bump it wherever the Map is written. */
+const addressIndexVersion = ref(0)
+
+/** Has the street index actually loaded? Until it has, a door count isn't zero,
+ *  it's unknown, and the difference matters on a page about who holds what. */
+const addressesReady = computed(() => addressIndexVersion.value > 0 && addressById.size > 0)
+
 function resetIndex() {
   addressById.clear()
   streetsByKey.clear()
@@ -391,6 +416,7 @@ function resetIndex() {
   streetsByNorm.clear()
   streetSummaryByKey.clear()
   streetSummaries = []
+  addressIndexVersion.value++
 }
 
 /** Fold one page of addresses into the street indexes. Kept separate from
@@ -427,6 +453,9 @@ function addToIndex(rows: AddressLite[]) {
     }
   }
   streetSummaries = [...summaries.values()]
+  // Per PAGE on the streaming path, so the door counts climb honestly as the
+  // county lands instead of sitting at zero until the last one.
+  addressIndexVersion.value++
 }
 
 /** Replace the whole index (the post-save reloadAll path, where the row set
@@ -1033,6 +1062,7 @@ async function fetchTurfs() {
     else hist.set(row.turf_id, [row])
   }
   historyByTurf.value = hist
+  turfsLoaded.value = true
 }
 
 /** Trim-mode door fills wear knock-status colors — ~15k rows the page never
@@ -3134,16 +3164,33 @@ const dispatchTurfs = computed(() =>
     .sort((a, b) => turfDoorCount(b.id) - turfDoorCount(a.id)),
 )
 
-/** Doors currently stamped to a turf, counting its sub-turfs' doors too —
- * a crew's assignment doesn't shrink because a leader split it up. */
-function turfDoorCount(turfId: string): number {
-  let n = 0
+/** Doors per turf, its sub-turfs' doors folded into it — a crew's assignment
+ * doesn't shrink because a leader split it up.
+ *
+ * ONE pass over the index for the whole list, not one per turf. This used to be
+ * a plain function scanning all 22,746 addresses per call, and `dispatchTurfs`
+ * sorts by it: two calls per comparison, so a dozen turfs cost several million
+ * iterations on every render. Tallying once and looking up is also what lets it
+ * be a computed, which is the actual fix — see addressIndexVersion. */
+const doorCountByTurf = computed<Map<string, number>>(() => {
+  addressIndexVersion.value
+  const direct = new Map<string, number>()
   for (const a of addressById.values()) {
     if (!a.turf_id) continue
-    if (a.turf_id === turfId) n++
-    else if (turfById.value.get(a.turf_id)?.parent_turf_id === turfId) n++
+    direct.set(a.turf_id, (direct.get(a.turf_id) ?? 0) + 1)
   }
-  return n
+  const byId = turfById.value
+  const total = new Map<string, number>()
+  for (const [id, n] of direct) {
+    total.set(id, (total.get(id) ?? 0) + n)
+    const parent = byId.get(id)?.parent_turf_id
+    if (parent) total.set(parent, (total.get(parent) ?? 0) + n)
+  }
+  return total
+})
+
+function turfDoorCount(turfId: string): number {
+  return doorCountByTurf.value.get(turfId) ?? 0
 }
 
 /** Turfs the selected one can merge into: today's other TOP-LEVEL turfs the
@@ -3804,7 +3851,8 @@ onUnmounted(() => {
               <span class="muted">Out with</span> {{ ownerAssignment(turfBar) }}
             </p>
             <p class="turf-bar-detail">
-              <span class="muted">Doors</span> {{ turfDoorCount(turfBar.id) }}
+              <span class="muted">Doors</span>
+              {{ addressesReady ? turfDoorCount(turfBar.id) : 'counting…' }}
             </p>
             <p v-if="turfBar.parent_turf_id" class="turf-bar-detail">
               <span class="muted">Inside</span> {{ parentName(turfBar) }}
@@ -3869,7 +3917,9 @@ onUnmounted(() => {
           + {{ isSubcutter ? 'Create new sub-turf' : 'Create new turf' }}
         </button>
       </div>
-      <p v-else-if="!draftOpen" class="muted empty-note">No turf assigned to you yet.</p>
+      <p v-else-if="!draftOpen" class="muted empty-note">
+        {{ turfsLoaded ? 'No turf assigned to you yet.' : 'Loading…' }}
+      </p>
 
       <!-- Draft tray: the turf being cut. -->
       <div
@@ -4047,7 +4097,8 @@ onUnmounted(() => {
            common-sense pass). -->
       <div v-if="!draftOpen" class="card">
         <h3>{{ isSubcutter ? 'Your turf' : 'Turfs' }}</h3>
-        <p v-if="!listTurfs.length" class="muted empty-note">
+        <p v-if="!turfsLoaded" class="muted empty-note">Loading…</p>
+        <p v-else-if="!listTurfs.length" class="muted empty-note">
           {{ isSubcutter ? 'No turf assigned to you yet.' : 'No turf cut yet.' }}
         </p>
         <template v-else>
@@ -4127,7 +4178,11 @@ onUnmounted(() => {
               <span class="turf-swatch" :style="{ background: turfDisplayColor(t) }" aria-hidden="true"></span>
               <span class="dispatch-text">
                 <span class="dispatch-name">{{ t.name }}</span>
-                <span class="muted dispatch-meta">{{ turfDoorCount(t.id) }} doors</span>
+                <!-- No count until the street index is in. Before that a turf
+                     doesn't hold zero doors, it holds an unknown number, and
+                     "0 doors" is the one reading that's actually wrong. -->
+                <span v-if="addressesReady" class="muted dispatch-meta">{{ turfDoorCount(t.id) }} doors</span>
+                <span v-else class="muted dispatch-meta">Counting doors…</span>
               </span>
             </button>
             <AppSelect
