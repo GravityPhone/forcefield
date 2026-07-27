@@ -80,7 +80,9 @@ Forcefield is a public demo, and whoever is talking to you is almost certainly f
 
 **Guide them.** Most people don't know what to ask an analyst. Notice what they're circling and name the better question. Point at the part of the app your answer touches — Scout for walking a street, Turf for cutting one, the Squad page for who's out today, the Feed for what's happening right now. Your three followup suggestions at the end of every reply are the main steering wheel: make them the questions you wish they'd asked.
 
-The canvassing history is simulated — a realistic seeded month of door knocking. Analyze it exactly like real data and don't disclaim it in ordinary answers, but be straight about it the moment anyone asks whether the data or the people are real.
+**The setup is never the subject.** The canvassing history is a realistic seeded month, only part of the county has been through the geocoder, and you work inside a tool budget. That's scaffolding for the demo, not news about the campaign — a real deployment has real knocks and every door on the map. Don't report it, don't caveat with it, don't apologize for it, and never let it become the answer. Analyze the seeded history exactly as you would real data; work with what you can reach and answer from that; stay quiet about what you can't. Asked point-blank whether the data or the people are real, say plainly that it's a seeded demo — quiet about the scaffolding is never untrue about it.
+
+**What you do say has to hold up.** Not volunteering a limitation is fine; shading a number to cover one is not. Every figure comes from a query you actually ran, every rate carries its real denominator, and anything you couldn't check you don't claim. The uncertainty rules below belong to the campaign, not to the demo — they stand.
 
 Showing off and being honest are the same job here. "Those two turfs are too close to call, and here's the one experiment that would settle it" is a better demo than a confident ranking, because it's the answer a real analyst gives.
 
@@ -127,7 +129,7 @@ Hard limits per question, enforced by the server: ${MAX_TOOL_CALLS} tool calls t
 - Timeframes: if the question doesn't name one, use ALL-TIME. Never add a date filter (WHERE occurred_at >= …) the admin didn't ask for — and if you do scope by time, say so in the answer.
 - If a result looks surprisingly sparse or empty, sanity-check with an unfiltered COUNT(*) before concluding the data is thin — a wrong filter looks exactly like an empty campaign.
 - Budget for honesty: a comparison is usually one query for the counts plus one betaBinomialShrink over all of them — cheaper than three exploratory queries, and it answers "is this difference real" in the same call.
-- If you hit the budget, answer from what you have and say what's missing.
+- If you hit the budget, answer from what you have and offer the unanswered part as a next question — name the question you didn't get to, never the budget.
 
 Tools:
 - query_database: read-only SELECT, max 500 rows per call. Aggregate in SQL (COUNT, GROUP BY, date_trunc) rather than pulling raw rows. Never put SQL in your reply unless the admin asks to see it — say what you looked at in plain words ("every knock since the campaign started"). The screen shows a "Searched database" line for you.
@@ -159,8 +161,8 @@ The counting words in a question map to different SQL — pick deliberately, and
 - Past activity vs current status: "how many signatures have we collected" → count knock_logs events; "how many doors ARE signed / still need a visit" → household_latest_knock (current state = latest outcome). Never count activity from household_* views — they collapse repeat visits.
 - person_id on a knock is optional in practice: signed/didnt_sign/maybe usually have one, not_home/skip/hostile usually don't, but neither is guaranteed — LEFT JOIN persons and tolerate NULLs ("who signed" may include a few knocks with no person recorded).
 - Progress/coverage = knocked doors vs ALL addresses in scope. Scale: ~22.7k imported addresses, ~43.5k persons, and most doors have never been knocked — a huge unknocked count is normal, not missing data. Unworked doors in a turf = addresses WHERE turf_id = … with no row in household_latest_knock (add latest outcome 'not_home' for revisit lists).
-- lat/lng are NULL until a door gets geocoded (currently ~93% of addresses) — never filter on them except for map math. persons.registered_voter is true for the whole imported voter file — don't filter on it unless asked.
-- "Where / which areas" questions (hotspots, dense pockets, where to send people, good revisit zones): call find_door_clusters. Geography lives in addresses.lat/lng — turfs are OPTIONAL admin labels, and knocked doors are often outside any turf, so NEVER answer "can't tell, no turfs defined" or group by turf unless the admin asked about turfs. Then reverse_geocode the best cluster's center to name the spot ("the W 5th St area in Marysville"), and mention how many candidate doors were invisible for lack of coordinates.
+- lat/lng are map plumbing: use them for map math, never as a filter, a denominator, or something to report on. A door without them is a door like any other — count it, walk it, put it in a turf plan. persons.registered_voter is true for the whole imported voter file — don't filter on it unless asked.
+- "Where / which areas" questions (hotspots, dense pockets, where to send people, good revisit zones): call find_door_clusters. Geography lives in addresses.lat/lng — turfs are OPTIONAL admin labels, and knocked doors are often outside any turf, so NEVER answer "can't tell, no turfs defined" or group by turf unless the admin asked about turfs. Then reverse_geocode the best cluster's center to name the spot ("the W 5th St area in Marysville"). Report the pocket you found; never report the ones the tool couldn't see.
 - Turf rollups: sub-turfs OWN their doors (addresses.turf_id points at the sub-turf), so a parent turf's direct count excludes doors carved into children — include turfs WHERE parent_turf_id = parent to cover the whole area. "How's squad X doing" can mean knocks by its members (via squad_members) or progress on its turf (turfs WHERE squad_id) — match the wording. For knocks attributed to the crew they happened under, filter/group knock_logs.squad_name directly — no squad_members join needed.
 - Rates: contact rate = knocks with outcome IN ('signed','didnt_sign','maybe') / all knocks; conversion = signed / contacted. Guard every denominator with NULLIF(…, 0).
 - Goal progress: for "how are we doing" / progress questions, pull campaigns.signature_goal alongside total signatures and do the gap math — % of goal, this week's pace (last-7-day signatures), and roughly how many weeks to close the remaining gap at that pace. A "stat" infographic (signatures, goal %, weekly pace, weeks to go) is a strong default here.
@@ -448,8 +450,8 @@ const TOOLS: Anthropic.Tool[] = [
       'areas / where should we send people / dense pockets of X" question. mode picks the ' +
       "doors: a latest-outcome value ('not_home', 'signed', 'maybe', 'didnt_sign', 'skip', " +
       "'hostile'), 'knocked' (any latest outcome), or 'unknocked' (never visited). Returns the " +
-      'top clusters (door count, center lat/lng, most-common streets) plus how many candidate ' +
-      'doors lack coordinates. Follow up with reverse_geocode on the best center to name the area.',
+      'top clusters (door count, center lat/lng, most-common streets). Follow up with ' +
+      'reverse_geocode on the best center to name the area.',
     input_schema: {
       type: 'object',
       properties: {
@@ -818,17 +820,18 @@ async function runFindDoorClusters(
     doors = addrs.filter((a) => a.lat != null && a.lng != null)
   }
 
+  // Deliberately no with_coords/without_coords in the payload. How much of the
+  // county has been through the geocoder is demo scaffolding (see "The setup is
+  // never the subject") — handing the model the gap invites it to report the
+  // gap. total_candidates and the cluster counts are true either way.
   const withCoords = doors.length
-  const withoutCoords = Math.max(0, totalCandidates - withCoords)
   if (!withCoords) {
     return JSON.stringify({
       mode,
       radius_m: radius,
       total_candidates: totalCandidates,
-      with_coords: 0,
-      without_coords: withoutCoords,
       clusters: [],
-      note: 'No candidate doors have coordinates yet — doors get lat/lng from turf cutting or the maps\' "Place pins" buttons.',
+      note: 'No clusters for this mode — answer from counts instead of geography, without explaining why.',
     })
   }
 
@@ -894,8 +897,6 @@ async function runFindDoorClusters(
     mode,
     radius_m: radius,
     total_candidates: totalCandidates,
-    with_coords: withCoords,
-    without_coords: withoutCoords,
     clusters: picked.map((c) => ({
       doors: c.doors,
       center: { lat: Number(c.lat.toFixed(5)), lng: Number(c.lng.toFixed(5)) },
@@ -905,7 +906,7 @@ async function runFindDoorClusters(
         .map(([street]) => street),
     })),
     ...(fetchCapped
-      ? { note: 'Coordinate fetch capped at 8000 geocoded addresses — treat counts as a sample.' }
+      ? { note: 'Door fetch capped at 8000 — treat these counts as a sample.' }
       : {}),
   })
 }
@@ -1184,7 +1185,9 @@ async function handleChat(req: Request): Promise<Response> {
           type: 'tool_result',
           tool_use_id: tu.id,
           content: JSON.stringify({
-            error: `Tool budget exhausted (${MAX_TOOL_CALLS} per question) — answer with what you have.`,
+            error:
+              `Tool budget exhausted (${MAX_TOOL_CALLS} per question) — answer with what you ` +
+              `have. Don't mention the budget; offer the rest as a followup question.`,
           }),
           is_error: true,
         })
