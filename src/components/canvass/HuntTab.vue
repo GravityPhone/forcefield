@@ -494,6 +494,7 @@ function knockerName(p: BadgePerson): string {
 const router = useRouter()
 const route = useRoute()
 function openKnockerProfile(id: string) {
+  exitFullscreen()
   void router.push({ name: 'member', params: { id } })
 }
 
@@ -1369,6 +1370,9 @@ async function syncFromTalk() {
 }
 
 function knock(addressId: string, personId?: string) {
+  // Knocking switches to Talk, which is behind a map filling the screen — so
+  // come out of fullscreen first, or the tap looks like it did nothing.
+  exitFullscreen()
   void talk.loadAddress(addressId, personId)
 }
 
@@ -1565,6 +1569,10 @@ function nudgeCap(safe: { height: number }): number {
 }
 
 function scrollActiveIntoView() {
+  // Fullscreen: the list is behind a map filling the screen, and so is the
+  // page scroll this would move. Leave listFollow UNCONSUMED and let
+  // onFullscreenChange run this again on the way out.
+  if (isFullscreen.value) return
   const follow = listFollow
   listFollow = 'top'
   if (follow === 'stay') return
@@ -1616,12 +1624,20 @@ type FullscreenableDoc = Document & {
   webkitFullscreenElement?: Element | null
 }
 
+/** Come back out. Safe to call when we're already out — anything that leaves
+ * this screen (Knock, a knocker's profile) calls it unconditionally. */
+function exitFullscreen() {
+  const doc = document as FullscreenableDoc
+  if (!(document.fullscreenElement ?? doc.webkitFullscreenElement)) return
+  if (document.exitFullscreen) void document.exitFullscreen()
+  else doc.webkitExitFullscreen?.()
+}
+
 function toggleFullscreen() {
   const doc = document as FullscreenableDoc
   const isCurrentlyFullscreen = Boolean(document.fullscreenElement ?? doc.webkitFullscreenElement)
   if (isCurrentlyFullscreen) {
-    if (document.exitFullscreen) void document.exitFullscreen()
-    else doc.webkitExitFullscreen?.()
+    exitFullscreen()
     return
   }
   const el = mapWrapEl.value as FullscreenableEl | null
@@ -1633,6 +1649,10 @@ function toggleFullscreen() {
 function onFullscreenChange() {
   const doc = document as FullscreenableDoc
   isFullscreen.value = Boolean(document.fullscreenElement ?? doc.webkitFullscreenElement)
+  // Every pin tapped while fullscreen left the list's follow-the-house intent
+  // parked (see scrollActiveIntoView) — settle it now that the list is on
+  // screen again, so the last house tapped is the first one under the box.
+  if (!isFullscreen.value) void nextTick(scrollActiveIntoView)
   setTimeout(() => {
     if (!map) return
     google.maps.event.trigger(map, 'resize')
@@ -1720,59 +1740,68 @@ onUnmounted(() => {
 <template>
   <div class="hunt">
     <!-- Whatever was last clicked — a pin on the map or a result below —
-         always surfaces here, whether or not it matches the current search. -->
-    <div
-      v-if="locatedAddress"
-      v-motion="fadeUp()"
-      class="card located-card"
-      :style="rowTintFor(locatedAddress.id)"
-    >
-      <!-- Status leads the line on every Scout row (2026-07-26, user call):
-           the square sits BEFORE the address, small, and the whole row is
-           washed in the same color behind it. -->
-      <OutcomeSquare
-        :fill="locatedStripe.fill"
-        :band="locatedStripe.band"
-        :label="statusLabelFor(locatedAddress.id)"
-        small
-      />
-      <span class="result-left">
-        <span class="result-name">
-          {{ locatedAddress.street }}{{ locatedAddress.unit ? ' ' + locatedAddress.unit : '' }}
-        </span>
-        <!-- Whose avatar is riding on this pin — tap it for their profile.
-             The map shows the face; this is where the name lives. -->
-        <button
-          v-if="todayKnocker(locatedAddress.id)"
-          type="button"
-          class="knocker-chip"
-          :style="{ '--knocker-color': memberColor(todayKnocker(locatedAddress.id)!) }"
-          :aria-label="`See ${knockerName(todayKnocker(locatedAddress.id)!)}'s profile`"
-          @click="openKnockerProfile(todayKnocker(locatedAddress.id)!.id)"
-        >
-          <span class="knocker-avatar">
-            <img
-              v-if="avatarUrl(todayKnocker(locatedAddress.id)!.avatar ?? null)"
-              :src="avatarUrl(todayKnocker(locatedAddress.id)!.avatar ?? null)"
-              alt=""
-            />
-            <template v-else>{{ knockerName(todayKnocker(locatedAddress.id)!).slice(0, 1).toUpperCase() }}</template>
-          </span>
-          {{ knockerName(todayKnocker(locatedAddress.id)!) }} knocked here today
-        </button>
-        <span v-else-if="wasKnockedToday(locatedAddress.id)" class="today-badge">Knocked today</span>
-        <!-- Whose ground this is, while the All-turf layer is on. -->
-        <span v-if="locatedTurfLabel" class="turf-tag">{{ locatedTurfLabel }}</span>
-      </span>
-      <span v-if="ratioFor(locatedAddress)" class="ratio-text">{{ ratioFor(locatedAddress) }}</span>
-      <button
-        class="btn btn-sm knock-btn"
-        :style="knockStyleFor(locatedAddress.id)"
-        @click="knock(locatedAddress.id)"
+         always surfaces here, whether or not it matches the current search.
+         FULLSCREEN MOVES IT ONTO THE MAP (2026-07-26, user call — "we're in
+         full screen on the map, we should be seeing information at the bottom
+         about each of the houses that we click on"): a map filling the screen
+         covers this card where it normally sits, so tapping a pin answered
+         with nothing. One card, teleported to the map's bottom edge, rather
+         than a second copy that could drift from this one. -->
+    <Teleport :to="mapWrapEl" :disabled="!isFullscreen">
+      <div
+        v-if="locatedAddress"
+        v-motion="fadeUp()"
+        class="card located-card"
+        :class="{ 'located-card-onmap': isFullscreen }"
+        :style="rowTintFor(locatedAddress.id)"
       >
-        Knock
-      </button>
-    </div>
+        <!-- Status leads the line on every Scout row (2026-07-26, user call):
+             the square sits BEFORE the address, small, and the whole row is
+             washed in the same color behind it. -->
+        <OutcomeSquare
+          :fill="locatedStripe.fill"
+          :band="locatedStripe.band"
+          :label="statusLabelFor(locatedAddress.id)"
+          small
+        />
+        <span class="result-left">
+          <span class="result-name">
+            {{ locatedAddress.street }}{{ locatedAddress.unit ? ' ' + locatedAddress.unit : '' }}
+          </span>
+          <!-- Whose avatar is riding on this pin — tap it for their profile.
+               The map shows the face; this is where the name lives. -->
+          <button
+            v-if="todayKnocker(locatedAddress.id)"
+            type="button"
+            class="knocker-chip"
+            :style="{ '--knocker-color': memberColor(todayKnocker(locatedAddress.id)!) }"
+            :aria-label="`See ${knockerName(todayKnocker(locatedAddress.id)!)}'s profile`"
+            @click="openKnockerProfile(todayKnocker(locatedAddress.id)!.id)"
+          >
+            <span class="knocker-avatar">
+              <img
+                v-if="avatarUrl(todayKnocker(locatedAddress.id)!.avatar ?? null)"
+                :src="avatarUrl(todayKnocker(locatedAddress.id)!.avatar ?? null)"
+                alt=""
+              />
+              <template v-else>{{ knockerName(todayKnocker(locatedAddress.id)!).slice(0, 1).toUpperCase() }}</template>
+            </span>
+            {{ knockerName(todayKnocker(locatedAddress.id)!) }} knocked here today
+          </button>
+          <span v-else-if="wasKnockedToday(locatedAddress.id)" class="today-badge">Knocked today</span>
+          <!-- Whose ground this is, while the All-turf layer is on. -->
+          <span v-if="locatedTurfLabel" class="turf-tag">{{ locatedTurfLabel }}</span>
+        </span>
+        <span v-if="ratioFor(locatedAddress)" class="ratio-text">{{ ratioFor(locatedAddress) }}</span>
+        <button
+          class="btn btn-sm knock-btn"
+          :style="knockStyleFor(locatedAddress.id)"
+          @click="knock(locatedAddress.id)"
+        >
+          Knock
+        </button>
+      </div>
+    </Teleport>
 
     <!-- No "Zoom to my turf" chip strip anymore (2026-07-24): the map's
          "My turf" layer button both colors your ground and flies you to it,
@@ -2307,6 +2336,23 @@ onUnmounted(() => {
  * fact twice. The thick violet edge means only what the rest of the frame
  * means — "this is the door you're looking at" — and status is the square plus
  * the wash behind it. */
+
+/* Same card, pinned to the map's bottom edge while fullscreen — the turf
+ * cutter's .map-bottom slot, which is where this app already puts "the house
+ * you just tapped". Bottom-anchored, so it never reaches the map's chrome
+ * (layers, fullscreen, locate) up at the top. */
+.located-card-onmap {
+  position: absolute;
+  left: 0.6rem;
+  right: 0.6rem;
+  /* Fullscreen has no page chrome, but a notched phone still has a chin. */
+  bottom: max(0.6rem, env(safe-area-inset-bottom, 0px));
+  z-index: 5;
+  max-height: calc(100% - 1.2rem);
+  overflow-y: auto;
+  padding: 0.6rem 0.75rem;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
 
 .turf-tag {
   padding: 0.1rem 0.45rem;
