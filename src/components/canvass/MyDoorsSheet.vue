@@ -13,6 +13,11 @@ import { useTalkStore } from '@/stores/talk'
 // Deliberately the SAME turf set the walk filter uses (talk.myTurfIds — the
 // crew's ground, see lib/myTurf.ts), so the list and the Next button can
 // never disagree about what counts as yours.
+//
+// No search box (2026-07-26, user call). A crew's ground is a handful of
+// streets, so scrolling to one is faster than typing it — and Talk's own
+// search at the top of the screen already covers finding a specific house
+// anywhere in the county. Two search boxes on one screen was one too many.
 
 const open = defineModel<boolean>('open', { required: true })
 
@@ -28,7 +33,6 @@ interface DoorRow {
 const rows = ref<DoorRow[]>([])
 const loading = ref(false)
 const loadError = ref(false)
-const query = ref('')
 /** Which street's houses are expanded. Null = the street list. */
 const openStreet = ref<string | null>(null)
 
@@ -68,7 +72,6 @@ async function load() {
 watch(open, (v) => {
   if (!v) return
   openStreet.value = null
-  query.value = ''
   void talk.ensureMyTurf().then(load)
 })
 
@@ -95,27 +98,6 @@ const groups = computed<StreetGroup[]>(() => {
   return out.sort((a, b) => a.name.localeCompare(b.name))
 })
 
-/** One box searches both halves: type letters to narrow streets, type digits
- * to jump to a house number. That's the "put in a door number" the list was
- * asked for, without a second field to explain. */
-const trimmed = computed(() => query.value.trim().toUpperCase())
-const isNumberQuery = computed(() => /^\d+$/.test(trimmed.value))
-
-const shownGroups = computed(() => {
-  if (!trimmed.value || isNumberQuery.value) return groups.value
-  return groups.value.filter((g) => g.name.includes(trimmed.value))
-})
-
-/** Digits typed: every matching house across all your streets. */
-const numberHits = computed<DoorRow[]>(() => {
-  if (!isNumberQuery.value) return []
-  const n = Number(trimmed.value)
-  return rows.value
-    .filter((r) => houseNumber(r.street) === n)
-    .sort((a, b) => streetNameOf(a.street).localeCompare(streetNameOf(b.street)))
-    .slice(0, 40)
-})
-
 const current = computed(() => groups.value.find((g) => g.key === openStreet.value) ?? null)
 
 const doorCount = computed(() => rows.value.length)
@@ -129,27 +111,9 @@ function pick(id: string) {
 <template>
   <BottomSheet v-model:open="open" title="My doors">
     <div class="my-doors">
-      <input
-        v-model="query"
-        class="doors-search"
-        type="search"
-        inputmode="search"
-        placeholder="Street name, or a house number"
-        aria-label="Search your doors"
-      />
-
       <p v-if="loading" class="muted">Loading…</p>
       <p v-else-if="loadError" class="muted">Couldn't load your doors.</p>
       <p v-else-if="!doorCount" class="muted">No turf assigned to you today.</p>
-
-      <!-- A number was typed: houses first, wherever they are. -->
-      <template v-else-if="isNumberQuery">
-        <p v-if="!numberHits.length" class="muted">No house numbered {{ trimmed }} on your turf.</p>
-        <button v-for="d in numberHits" :key="d.id" class="door-row" @click="pick(d.id)">
-          <span class="door-name">{{ titleCase(d.street) }}{{ d.unit ? ' ' + d.unit : '' }}</span>
-          <span class="muted door-city">{{ titleCase(d.city) }}</span>
-        </button>
-      </template>
 
       <!-- One street, opened: its houses low to high. -->
       <template v-else-if="current">
@@ -161,8 +125,7 @@ function pick(id: string) {
 
       <!-- Default: the streets you have, with how many doors on each. -->
       <template v-else>
-        <p v-if="!shownGroups.length" class="muted">No street matches that.</p>
-        <button v-for="g in shownGroups" :key="g.key" class="door-row" @click="openStreet = g.key">
+        <button v-for="g in groups" :key="g.key" class="door-row" @click="openStreet = g.key">
           <span class="door-name">{{ titleCase(g.name) }}</span>
           <span class="muted door-city">{{ titleCase(g.city) }} · {{ g.doors.length }}</span>
         </button>
@@ -176,13 +139,6 @@ function pick(id: string) {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-}
-
-.doors-search {
-  width: 100%;
-  min-height: 44px;
-  /* 16px floor: below it iOS Safari zooms the page on focus. */
-  font-size: max(16px, calc(0.95rem * var(--ui-scale)));
 }
 
 .door-row,

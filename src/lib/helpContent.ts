@@ -90,7 +90,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'My doors',
         target: 'talk-mydoors',
-        body: 'Every door your crew holds today, grouped by street.\nType letters to filter streets. Type digits to find a house number.\nTap a house to open it.',
+        body: 'Every door your crew holds today, grouped by street.\nTap a street for its houses, then a house to open it.',
       },
       {
         heading: 'Up next',
