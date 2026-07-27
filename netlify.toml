@@ -26,3 +26,33 @@
     Strict-Transport-Security = "max-age=31536000; includeSubDomains"
     Permissions-Policy = "geolocation=(self), camera=(), microphone=(), payment=(), usb=()"
     Content-Security-Policy = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://maps.googleapis.com https://maps.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.googleapis.com https://*.gstatic.com https://*.ggpht.com https://*.giphy.com https://*.tenor.com https://*.supabase.co; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://maps.googleapis.com https://*.googleapis.com https://api.giphy.com https://g.tenor.com; worker-src 'self' blob:; frame-src 'self' https://*.google.com; manifest-src 'self'"
+
+# --- Caching ---------------------------------------------------------------
+# Netlify's default for EVERY file is "public,max-age=0,must-revalidate", so
+# without the rules below a phone re-validates every chunk, every avatar and
+# every boundary file on every single app open: ~30 conditional round-trips
+# before any code runs, which on rural cell signal is most of the wait. The
+# HTML deliberately KEEPS that default — it's the document that names which
+# hashed assets to fetch, so it has to be re-read to ever see a new deploy.
+
+# Vite content-hashes everything in /assets (the filename changes whenever the
+# bytes do), so these can never go stale: a new build is a new URL. This is the
+# one place "immutable" is unconditionally correct.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# Fixed-name files, so NOT immutable — a week of cache with a day of
+# stale-while-revalidate instead. Both sets are regenerated only by hand
+# (scripts/fetch-avatars.mjs, scripts/fetch-city-limits.mjs), and a stale
+# emoji or county outline for a few days is not a correctness problem.
+[[headers]]
+  for = "/avatars/*"
+  [headers.values]
+    Cache-Control = "public, max-age=604800, stale-while-revalidate=86400"
+
+[[headers]]
+  for = "/boundaries/*"
+  [headers.values]
+    Cache-Control = "public, max-age=604800, stale-while-revalidate=86400"

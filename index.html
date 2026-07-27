@@ -6,6 +6,19 @@
     <meta name="theme-color" content="#1a1d29" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- Warm the Supabase connection while the bundle is still downloading.
+         The first thing the app does after boot is auth.init() -> getSession()
+         -> fetch the profile, and without this the DNS lookup and TLS
+         handshake only START once that request is made: on a phone that's a
+         few hundred ms of dead time bolted onto every cold open. The host is
+         the same public-safe default that lives in src/lib/config.ts; if an
+         env var overrides it the worst case is one unused warm socket.
+         Maps gets DNS only, since the three map screens load it lazily and
+         plenty of sessions (admins, managers) never open one. -->
+    <link rel="preconnect" href="https://whrliwbdxjdcksbvwkrc.supabase.co" crossorigin />
+    <link rel="dns-prefetch" href="https://maps.googleapis.com" />
+
     <title>Forcefield</title>
   </head>
   <body>

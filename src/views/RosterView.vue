@@ -138,7 +138,13 @@ function openMember(id: string) {
           @keydown.space.self.prevent="openMember(m.id)"
         >
           <span class="roster-avatar" :style="!avatarUrl(m.avatar) ? { background: memberColor(m) } : {}">
-            <img v-if="avatarUrl(m.avatar)" :src="avatarUrl(m.avatar)" alt="" />
+            <img
+              v-if="avatarUrl(m.avatar)"
+              :src="avatarUrl(m.avatar)"
+              alt=""
+              loading="lazy"
+              decoding="async"
+            />
             <template v-else>{{ memberName(m).slice(0, 1).toUpperCase() }}</template>
           </span>
           <span class="roster-text">

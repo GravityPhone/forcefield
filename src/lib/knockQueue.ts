@@ -139,5 +139,16 @@ export async function flushQueue(): Promise<void> {
 export function initKnockQueue(): void {
   void flushQueue()
   window.addEventListener('online', () => void flushQueue())
-  setInterval(() => void flushQueue(), 60_000)
+  setInterval(() => {
+    // Don't spend the minute-timer on a doomed attempt. navigator.onLine is
+    // only trustworthy in one direction — true says nothing about whether
+    // there's really a route out, but false genuinely means there is no
+    // network stack to try — and that one direction is the case worth
+    // skipping: a phone in a dead zone would otherwise open an IndexedDB
+    // transaction and start a request that cannot succeed, once a minute,
+    // for as long as the canvasser is out there. Nothing is lost by waiting,
+    // because the 'online' listener above flushes the moment signal returns.
+    if (navigator.onLine === false) return
+    void flushQueue()
+  }, 60_000)
 }

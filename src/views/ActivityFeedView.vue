@@ -544,7 +544,16 @@ function whoIdOf(item: FeedItem): string | null {
             class="row-avatar"
             :style="{ borderColor: item.color, background: avatarUrl(item.avatar ?? null) ? 'var(--surface)' : item.color }"
           >
-            <img v-if="avatarUrl(item.avatar ?? null)" :src="avatarUrl(item.avatar ?? null)" alt="" />
+            <!-- The feed holds up to 400 rows for the day, so without lazy
+                 loading a busy afternoon opens 400 avatar requests at once and
+                 the ones you're actually looking at queue behind the rest. -->
+            <img
+              v-if="avatarUrl(item.avatar ?? null)"
+              :src="avatarUrl(item.avatar ?? null)"
+              alt=""
+              loading="lazy"
+              decoding="async"
+            />
             <template v-else>{{ (item.kind === 'milestone' ? item.strong : item.who).slice(0, 1).toUpperCase() }}</template>
           </component>
           <span v-else class="row-emoji" aria-hidden="true">{{ item.emoji }}</span>

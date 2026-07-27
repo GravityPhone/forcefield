@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import { usernameToEmail } from '@/lib/config'
-import { clearTurfCache } from '@/lib/offlineCache'
 import type { AppRole, Profile } from '@/types'
 
 interface AuthState {
@@ -165,7 +164,14 @@ export const useAuthStore = defineStore('auth', {
       // automatic — no button, no Clear — signing out was the only moment left
       // that plainly means "this isn't my phone any more". Queued knocks are
       // deliberately NOT touched: an unsent knock is somebody's work.
-      void clearTurfCache()
+      //
+      // Imported HERE rather than at the top of the file because this store is
+      // reached eagerly from the router, and offlineCache pulls in Dexie: a
+      // static import put the whole IndexedDB library in the entry chunk, so
+      // every visitor downloaded and parsed it before first paint to serve one
+      // fire-and-forget call on the way out. The call was already unawaited, so
+      // deferring the fetch of its module changes nothing about sign-out.
+      void import('@/lib/offlineCache').then((m) => m.clearTurfCache())
     },
   },
 })

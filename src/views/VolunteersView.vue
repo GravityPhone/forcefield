@@ -156,6 +156,8 @@ onMounted(async () => {
                   class="asker-avatar"
                   :src="avatarUrl(r.canvasser.avatar)"
                   alt=""
+                  loading="lazy"
+                  decoding="async"
                   :style="{ borderColor: memberColor(r.canvasser) }"
                 />
                 <span class="asker-name">{{ nameOf(r) }}</span>
