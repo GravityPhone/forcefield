@@ -2913,9 +2913,7 @@ function tapTurfRow(id: string) {
 const selectedFamilyIds = computed(() => {
   const sel = selectedTurf.value
   if (!sel) return null
-  const ids = new Set<string>([sel.id])
-  for (const t of turfs.value) if (t.parent_turf_id === sel.id) ids.add(t.id)
-  return ids
+  return familyIdsOf(sel.id)
 })
 
 /** Only in overview: while a draft is open the map is about the draft. */
@@ -3077,11 +3075,42 @@ async function deleteTurf(t: TurfWithMeta) {
   await reloadAll()
 }
 
+/** A turf's whole ground: itself plus its sub-turfs. `addresses.turf_id`
+ * points at the SUB-turf once a leader splits a crew's turf on the Squad
+ * page, so a parent on its own can own no doors at all — and this page paints
+ * and highlights the family as one shape (see paintTurfOf). */
+function familyIdsOf(turfId: string): Set<string> {
+  const ids = new Set<string>([turfId])
+  for (const t of turfs.value) if (t.parent_turf_id === turfId) ids.add(t.id)
+  return ids
+}
+
+/** Is any of this ground already on screen? Same test Scout (`myTurfInView`)
+ * and Squad (`ourTurfInView`) make before they re-frame. */
+function turfInView(ids: Set<string>): boolean {
+  const bounds = map?.getBounds()
+  if (!bounds) return false
+  for (const a of addressById.values()) {
+    if (!a.turf_id || !ids.has(a.turf_id)) continue
+    if (a.lat != null && a.lng != null && bounds.contains({ lat: a.lat, lng: a.lng })) return true
+  }
+  return false
+}
+
+/** Frame a turf — unless you can already see some of it (2026-07-26, user
+ * call: "if we can see any of the pins, then we don't mess with the Zoom. We
+ * only zoom over to something when we've selected it from somewhere else
+ * other than the map. But when you click on the map and then click edit, no
+ * zooming should occur"). One rule covers both halves: a door you tapped is
+ * by definition on screen, so Edit holds still; a turf picked from the
+ * dropdown or the dispatch list across the county isn't, so it flies. */
 function focusTurf(turfId: string) {
   if (!map) return
+  const ids = familyIdsOf(turfId)
+  if (turfInView(ids)) return
   const bounds = new google.maps.LatLngBounds()
   for (const a of addressById.values()) {
-    if (a.turf_id === turfId && a.lat != null && a.lng != null) {
+    if (a.turf_id && ids.has(a.turf_id) && a.lat != null && a.lng != null) {
       bounds.extend({ lat: a.lat, lng: a.lng })
     }
   }
@@ -3426,6 +3455,21 @@ onUnmounted(() => {
             City
           </button>
         </div>
+        <!-- The way out of an edit, top-right beside fullscreen (2026-07-26,
+             user call: "the cancel button… is just kind of in a weird spot,
+             and it should always be there whether or not we've made any
+             changes yet… it could just be at the top right corner of the
+             map"). It used to be the last button in the draft card's action
+             row, a scroll below the map and gone entirely in fullscreen. -->
+        <button
+          v-if="draftOpen"
+          type="button"
+          class="map-cancel-btn"
+          :disabled="saving"
+          @click="cancelEdit"
+        >
+          {{ editingTurfId ? 'Cancel edit' : 'Cancel' }}
+        </button>
         <!-- Fullscreen, top-right corner. Always available — the map is the
              work surface, and on a phone the page chrome eats most of it. -->
         <button
@@ -3703,10 +3747,7 @@ onUnmounted(() => {
           <button v-if="segments.length" class="btn btn-ghost" :disabled="saving" @click="startOverDraft">
             Start over
           </button>
-          <!-- Always a way back out to the overview, not just mid-edit. -->
-          <button class="btn btn-ghost" :disabled="saving" @click="cancelEdit">
-            {{ editingTurfId ? 'Cancel edit' : 'Cancel' }}
-          </button>
+          <!-- Cancel is on the MAP now (2026-07-26) — see .map-cancel-btn. -->
         </div>
         <p v-if="saveError" class="error">{{ saveError }}</p>
 
@@ -4136,6 +4177,42 @@ onUnmounted(() => {
 
 .map-fullscreen-btn:hover {
   background: var(--surface-2);
+}
+
+/* Cancel edit, row 1 of the right column, immediately LEFT of the fullscreen
+   button rather than in the corner itself. Two reasons it doesn't take the
+   corner: fullscreen sits there on all three maps and moving it per-screen
+   would be a surprise, and this button comes and goes with the draft — a
+   control that isn't always there must never shift one that is (the same rule
+   that put Undo last in the left column). */
+.map-cancel-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: calc(0.6rem + 36px + 0.5rem);
+  min-height: 36px;
+  padding: 0 0.7rem;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(0.8rem * var(--ui-scale, 1));
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+}
+
+.map-cancel-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.map-cancel-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* Undo, third in the LEFT stack (under pin-style and layers) — last in that

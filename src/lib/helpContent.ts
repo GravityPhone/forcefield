@@ -355,7 +355,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Cutting',
         target: 'turf-create',
-        body: '+ Create new turf, take streets, assign to a squad or one canvasser.\nSave, Start over and Cancel sit under the map. The bar at the top names the turf and counts its doors.\nTurf lasts. Squads do not: re-point turf at today’s crew each morning.',
+        body: '+ Create new turf, take streets, assign to a squad or one canvasser.\nSave and Start over sit under the map. Cancel is on the map, top right.\nThe bar at the top names the turf and counts its doors.\nTurf lasts. Squads do not: re-point turf at today’s crew each morning.',
       },
       {
         heading: 'Search, then add',
