@@ -648,7 +648,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Comparing it to something',
         target: 'odds-house',
-        body: 'Every figure is shown against the campaign average, and a house also gets its place among every door still worth knocking.\nIt only says above or below when the difference is bigger than the uncertainty. Otherwise it says about average, however different the two numbers look.',
+        body: 'Every figure is shown against the campaign average, and a house also gets its place among every door still on the walk.\nIt only says above or below when the difference is bigger than the uncertainty. Otherwise it says about average, however different the two numbers look.',
       },
       {
         heading: 'The range',
@@ -658,12 +658,12 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Totals over a set of doors',
         target: 'odds-set',
-        body: 'Doors the walk would not send anybody back to are left out of the totals. That is why "137 doors" can be "84 still worth knocking". The totals are about the 84.\nTwo different reasons a door is out, and only one of them is final. Everybody signed: nothing left to get. Not Interested, Skip or Hostile: a rule about the WALK, so nobody wastes a trip. That is not the same as the door being dead, and a single house says so when you open it.\n"The same doors, average ground" is what that many doors would be worth on an ordinary street. It is the comparison worth making before spending a morning.',
+        body: 'Doors the walk would not send anybody back to are left out of the totals. That is why "137 doors" can be "84 still on the walk". The totals are about the 84.\nTwo different reasons a door is out, and only one of them is final. Everybody signed: nothing left to get. Not Interested, Skip or Hostile: a rule about the WALK, so nobody wastes a trip. That is not the same as the door being dead, and a single house says so when you open it.\n"The same doors, average ground" is what that many doors would be worth on an ordinary street. It is the comparison worth making before spending a morning.',
       },
       {
         heading: 'How much the neighbourhood counts',
         target: 'odds-near',
-        body: 'A street with little record of its own borrows from the streets that connect to it. This card shows what that borrowing is worth, with two sliders, because there are two separate choices in it.\nHow far they reach: how close a street has to come before it counts as connecting. Wider takes in more streets and less relevant ones. It redraws the curve.\nHow much they count: nothing at all, through to trusting a neighbour as much as the street itself. It reads along the curve.\nThe dashed line is where the campaign\'s own data puts the second one, worked out by checking how well each street\'s record actually matches its neighbours\'. The sliders are a what-if, and change nothing else on the page.\nA flat curve is an answer: this ground has enough of its own record that the neighbours barely move it. A steep one means the number you are reading is mostly borrowed.\nWhy these are sliders and not fixed numbers: smoothing a map towards its neighbours can create the smoothness it shows, and how you define a neighbour changes the answer as much as how much you weight one. Better to see how much rides on both.',
+        body: 'A street with little record of its own borrows from the streets that connect to it. Two sliders set how much of that happens, and the numbers above them move as you drag.\nNeighbourhood reaches: how close a street has to come before it counts as connecting. Wider takes in more streets, and less relevant ones.\nHow much it counts: nothing at all, through to trusting a neighbour as much as the street itself.\nBoth start where the campaign\'s own data puts them, worked out by checking how well each street\'s record actually matches its neighbours\'. "Put them back" appears whenever they are off it, so a tuned number always says so.\nIf the numbers barely move, that is an answer. Either this ground has enough record of its own, or nobody has knocked near it and there is nothing to borrow.\nWhy these are sliders and not fixed numbers: smoothing a map towards its neighbours can create the smoothness it shows, and how you define a neighbour changes the answer as much as how much you weight one. Better to see how much rides on both than to bury the choice.',
       },
       {
         heading: 'Refusals spread',

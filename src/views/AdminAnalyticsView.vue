@@ -1309,8 +1309,12 @@ const oddsDoorSet = computed<{ ids: string[]; title: string; how: string } | nul
   }
 })
 
+// Both of these read the TUNED model, so the two neighbourhood sliders move
+// the tiles above them the moment they are dragged. `tunedModel` is the same
+// object as `oddsModel` until a slider is touched, so nothing recomputes in
+// the ordinary case.
 const setResult = computed(() => {
-  const m = oddsModel.value
+  const m = tunedModel.value
   const set = oddsDoorSet.value
   return m && set && set.ids.length ? setOdds(m, set.ids) : null
 })
@@ -1476,7 +1480,7 @@ const projTiles = computed<Tile[]>(() => {
 })
 
 const houseResult = computed(() => {
-  const m = oddsModel.value
+  const m = tunedModel.value
   const pick = oddsPick.value
   if (!m || pick?.kind !== 'house') return null
   return doorOdds(m, pick.id)
@@ -1558,7 +1562,7 @@ const houseTiles = computed<Tile[]>(() => {
       label: 'Against every door',
       value:
         housePercentile.value == null ? 'none yet' : `better than ${housePercentile.value}%`,
-      hint: `of the ${fmtCount(oddsModel.value?.doorScores.length ?? 0)} doors still worth knocking`,
+      hint: `of the ${fmtCount(oddsModel.value?.doorScores.length ?? 0)} doors still on the walk`,
     },
   ]
 })
@@ -1598,7 +1602,7 @@ const setTiles = computed<Tile[]>(() => {
     // which reports that figure and only that figure.
     const m = oddsModel.value
     return [
-      { label: 'Doors', value: fmtCount(s.doors), hint: `${fmtCount(s.open)} still worth knocking` },
+      { label: 'Doors', value: fmtCount(s.doors), hint: `${fmtCount(s.open)} still on the walk` },
       {
         label: 'Somebody answers',
         value: s.answer ? oddsPct(s.answer.p) : 'none yet',
@@ -1614,7 +1618,7 @@ const setTiles = computed<Tile[]>(() => {
   }
 
   return [
-    { label: 'Doors', value: fmtCount(s.doors), hint: `${fmtCount(s.open)} still worth knocking` },
+    { label: 'Doors', value: fmtCount(s.doors), hint: `${fmtCount(s.open)} still on the walk` },
     {
       label: 'Expected conversations',
       value: s.expectedConversations.value.toFixed(0),
@@ -1720,10 +1724,6 @@ const timeRows = (values: (number | null)[][]) =>
  * reads off it. Recomputing per drag would be several hundred door evaluations
  * a frame.
  */
-const NEAR_STEPS = 11
-/** A mean over doors converges long before the whole set, and the curve is
- *  redrawn every time the distance slider moves, so it has to stay cheap. */
-const NEAR_SAMPLE = 150
 /** The widest the distance slider goes, and therefore how far the lazy index
  *  looks. Past a few hundred metres "the street that connects to this one"
  *  stops meaning anything: it is just the rest of the neighbourhood. */
@@ -1737,8 +1737,18 @@ const nearMetresAt = ref(FITTED_NEAR_METRES)
  *  county, and a street's neighbourhood is not a meaningful idea there. */
 const nearScopeIds = computed<string[]>(() => {
   const pick = oddsPick.value
-  if (!pick) return []
-  if (pick.kind === 'house') return houseResult.value && !houseResult.value.closed ? [pick.id] : []
+  const m = oddsModel.value
+  if (!pick || !m) return []
+  if (pick.kind === 'house') {
+    // The UNTUNED model on purpose, and this is load-bearing: whether a door
+    // is closed is a fact about its outcomes, not about the neighbourhood, and
+    // reading `houseResult` here would close a computed cycle —
+    // tunedModel -> nearReachIndex -> nearScopeIds -> houseResult ->
+    // tunedModel. It stayed invisible because `tunedModel` returns early
+    // before touching the reach index while both sliders are untouched, so the
+    // cycle only formed on a HOUSE scope the moment somebody dragged one.
+    return doorOdds(m, pick.id).closed ? [] : [pick.id]
+  }
   return oddsDoorSet.value?.ids ?? []
 })
 
@@ -1757,83 +1767,33 @@ const nearReachIndex = computed(() => {
   )
 })
 
-/** The chance of a signature across the scope, swept over the weight, at the
- *  distance the other slider is on. Recomputed when the distance moves, read
- *  from when the weight moves — which is why the weight slider is smooth and
- *  the distance one has coarse steps. */
-const nearCurve = computed(() => {
+/**
+ * The model as the two sliders have it set.
+ *
+ * THE SLIDERS MOVE THE REAL NUMBERS NOW (2026-07-27, user call: 'have it
+ * reflected in the numbers above immediately'). They used to drive a chart of
+ * their own and nothing else, on the reasoning that a manager could otherwise
+ * walk away from a tuned tile. That call reverses it, and the guard that
+ * replaces the isolation is the 'Put them back' chip: it renders only while
+ * the sliders are off the fitted setting, so a tuned number always has a
+ * visible way home sitting under it.
+ *
+ * Returns the model UNCHANGED, by identity, while nothing has been touched, so
+ * the ordinary case recomputes nothing at all.
+ */
+const tunedModel = computed(() => {
   const m = oddsModel.value
+  if (!m || !nearMoved.value) return m
   const reach = nearReachIndex.value
-  const ids = nearScopeIds.value
-  if (!m || !reach || !ids.length) return null
-  const step = Math.max(1, Math.ceil(ids.length / NEAR_SAMPLE))
-  const sample = ids.filter((_, i) => i % step === 0)
-  const neighboursOf = neighboursWithin(reach, nearMetresAt.value)
-  const points: number[] = []
-  for (let s = 0; s < NEAR_STEPS; s++) {
-    const tweaked = withNeighbourhood(m, { weight: s / (NEAR_STEPS - 1), neighboursOf })
-    let sum = 0
-    let n = 0
-    for (const id of sample) {
-      const o = doorOdds(tweaked, id)
-      if (!o.signature) continue
-      sum += o.signature.p
-      n++
-    }
-    points.push(n ? sum / n : 0)
-  }
-  if (!points.some((p) => p > 0)) return null
-  const lo = Math.min(...points)
-  const hi = Math.max(...points)
-  // How many streets the reach pulls in, and — the part that decides what the
-  // sentence below may claim — how many conversations there actually are to
-  // borrow. A flat curve has two completely different causes: this street
-  // knows its own mind, or nobody has knocked anywhere near here. Saying the
-  // first when the second is true is the worst thing this card could do.
-  const streets = new Set<string>()
-  let scoped = 0
-  let nearN = 0
-  let ownN = 0
-  for (const id of sample) {
-    const st = m.streetOf.get(id)
-    if (!st || streets.has(st)) continue
-    streets.add(st)
-    const near = neighboursOf(st)
-    scoped += near.length
-    for (const n of near) nearN += m.streetSign.get(n)?.n ?? 0
-    ownN += m.streetSign.get(st)?.n ?? 0
-  }
-  return {
-    points,
-    doors: sample.length,
-    fitted: m.nearWeight,
-    swing: (hi - lo) * 100,
-    lo,
-    hi,
-    neighbours: streets.size ? Math.round(scoped / streets.size) : 0,
-    nearN,
-    ownN,
-  }
+  return withNeighbourhood(m, {
+    weight: nearAt.value,
+    neighboursOf: reach ? neighboursWithin(reach, nearMetresAt.value) : undefined,
+  })
 })
 
-/** Where the weight slider sits, 0 to 1. Defaults to the fitted value. */
-const nearAt = computed(() => nearWeightAt.value ?? nearCurve.value?.fitted ?? 0)
-
-/** A reading off the curve, with a linear step between the two points either
- *  side of the position asked for. */
-function nearReadAt(w: number): number | null {
-  const c = nearCurve.value
-  if (!c) return null
-  const x = Math.max(0, Math.min(1, w)) * (NEAR_STEPS - 1)
-  const i = Math.min(NEAR_STEPS - 2, Math.floor(x))
-  const f = x - i
-  return c.points[i] * (1 - f) + c.points[i + 1] * f
-}
-
-const nearReading = computed(() => nearReadAt(nearAt.value))
-const nearFittedReading = computed(() =>
-  nearCurve.value ? nearReadAt(nearCurve.value.fitted) : null,
-)
+/** Where the weight slider sits, 0 to 1. Defaults to whatever the campaign's
+ *  own data fitted. */
+const nearAt = computed(() => nearWeightAt.value ?? oddsModel.value?.nearWeight ?? 0)
 
 /** Both sliders back where the campaign's own data put them. */
 const nearMoved = computed(
@@ -1844,57 +1804,15 @@ function resetNear() {
   nearMetresAt.value = FITTED_NEAR_METRES
 }
 
-const nearLabels = computed(() =>
-  Array.from({ length: NEAR_STEPS }, (_, i) => `${Math.round((100 * i) / (NEAR_STEPS - 1))}%`),
-)
-
-const nearSeries = computed<TimeSeries[]>(() => {
-  const c = nearCurve.value
-  const fit = nearFittedReading.value
-  if (!c || fit == null) return []
-  return [
-    { name: 'A signature this knock', color: cat.value[0], values: c.points, area: true },
-    {
-      name: 'Where the fit puts it',
-      color: cat.value[1],
-      values: c.points.map(() => fit),
-      dash: true,
-      width: 2,
-    },
-  ]
-})
-
-const nearRows = computed(() =>
-  (nearCurve.value?.points ?? []).map((p, i) => [nearLabels.value[i], fmtPct(p, 1)]),
-)
-
-/** Plain words for the whole point of the card, and the reason has to be the
- *  real one: a flat curve because the street knows its own mind and a flat
- *  curve because nobody has been near the place look identical on the chart
- *  and mean opposite things. */
-const nearSentence = computed(() => {
-  const c = nearCurve.value
-  if (!c) return ''
-  const reach = `Reaching ${nearMetresAt.value}m takes in about ${c.neighbours} connecting ${c.neighbours === 1 ? 'street' : 'streets'}.`
-  if (c.nearN < 20) {
-    return `${reach} There is almost nothing to borrow from them: ${fmtCount(c.nearN)} conversations between them, so how much they count barely changes the answer. This is a reading of the campaign as a whole, not of here.`
-  }
-  // Deliberately NOT "because this street has enough of its own record": with
-  // 19 conversations of its own against 224 nearby, that would be plainly
-  // false. A flat curve on real neighbour evidence means the neighbourhood
-  // leans the way the campaign already does, so how much it counts is moot.
-  if (c.swing < 0.5) {
-    return `${reach} Their ${fmtCount(c.nearN)} conversations point much the same way as the campaign as a whole, so how much they count makes almost no difference: ignoring them and trusting them completely land within ${c.swing.toFixed(1)} of a point of each other. This street has ${fmtCount(c.ownN)} conversations of its own.`
-  }
-  const dir = c.points[NEAR_STEPS - 1] >= c.points[0] ? 'up' : 'down'
-  return `${reach} They are pulling this ${dir}: between ignoring their ${fmtCount(c.nearN)} conversations and trusting them completely there are ${c.swing.toFixed(1)} points, ${fmtPct(c.lo, 1)} to ${fmtPct(c.hi, 1)}.`
-})
+/** Only meaningful over ground somebody has picked, and only once the wider
+ *  index they need has been built. */
+const showNearSliders = computed(() => !!nearReachIndex.value && !!nearScopeIds.value.length)
 
 const streetsInSet = computed<BarItem[]>(() =>
   (setResult.value?.streets ?? []).map((s) => ({
     label: titleCase(s.name),
     value: s.open,
-    detail: `${fmtCount(s.doors)} doors, ${fmtCount(s.open)} still worth knocking`,
+    detail: `${fmtCount(s.doors)} doors, ${fmtCount(s.open)} still on the walk`,
   })),
 )
 
@@ -2452,7 +2370,7 @@ const focusRanks = computed<FocusRank[]>(() => {
             <p class="muted proj-note">
               At their own pace over {{ fmtCount(personPace.daysOut) }}
               {{ personPace.daysOut === 1 ? 'day' : 'days' }} out, on
-              {{ fmtCount(projection.open) }} doors still worth knocking:
+              {{ fmtCount(projection.open) }} doors still on the walk:
               {{ personDoors.how }}.<span v-if="projMode === 'week'">
                 A week is {{ personPace.perWeek }}
                 {{ personPace.perWeek === 1 ? 'day' : 'days' }} out, which is how often they
@@ -2829,49 +2747,40 @@ const focusRanks = computed<FocusRank[]>(() => {
               v-if="oddsPick && streetsInSet.length > 1"
               title="Streets in here"
               data-help="odds-streets"
-              subtitle="doors still worth knocking"
+              subtitle="doors still on the walk"
               :columns="['Street', 'Open doors', 'Detail']"
               :rows="streetsInSet.map((i) => [i.label, i.value, i.detail ?? ''])"
             >
               <BarChart
                 :items="streetsInSet"
                 :color="cat[0]"
-                measure="Doors still worth knocking"
+                measure="Doors still on the walk"
               />
             </ChartCard>
           </template>
 
-          <!-- How much the streets around this one are moving it. Its own
-               frame, and it moves nothing else on the page. -->
-          <ChartCard
-            v-if="nearCurve"
-            title="How much the neighbourhood counts"
-            data-help="odds-near"
-            subtitle="the same doors, at every setting"
-            :columns="['Neighbours count for', 'A signature this knock']"
-            :rows="nearRows"
-          >
-            <TimeSeriesChart :labels="nearLabels" :series="nearSeries" percent :height="200" />
-            <!-- TWO sliders, and they are two different questions: how far the
-                 neighbourhood reaches, and how much of it counts. The distance
-                 one redraws the curve, so it steps coarsely; the weight one
-                 only reads along it, so it can be smooth. -->
-            <div class="slider-row">
-              <label class="slider-label muted" for="near-metres">How far they reach</label>
+          <!-- The two neighbourhood sliders. No chart and no prose: the chart
+               drew a nearly flat line on a zero-based axis, which is honest
+               and reads as a grey rectangle, and the explanation belongs in
+               the help deck. What is left is the pair of controls, and they
+               move the numbers above (2026-07-27, user call). -->
+          <div v-if="showNearSliders" class="card near-sliders" data-help="odds-near">
+            <div class="slider-row slider-row--major">
+              <label class="slider-label" for="near-metres">Neighbourhood reaches</label>
+              <span class="slider-value">{{ nearMetresAt }}m</span>
               <input
                 id="near-metres"
                 class="slider-range"
                 type="range"
                 min="50"
                 :max="NEAR_MAX_METRES"
-                step="50"
+                step="25"
                 :value="nearMetresAt"
                 @input="nearMetresAt = Number(($event.target as HTMLInputElement).value)"
               />
-              <span class="slider-value">{{ nearMetresAt }}m</span>
             </div>
-            <div class="slider-row">
-              <label class="slider-label muted" for="near-weight">How much they count</label>
+            <div class="slider-row slider-row--minor">
+              <label class="slider-label muted" for="near-weight">How much it counts</label>
               <input
                 id="near-weight"
                 class="slider-range"
@@ -2882,20 +2791,12 @@ const focusRanks = computed<FocusRank[]>(() => {
                 :value="Math.round(nearAt * 100)"
                 @input="nearWeightAt = Number(($event.target as HTMLInputElement).value) / 100"
               />
-              <span class="slider-value">{{ fmtPct(nearAt, 0) }}</span>
-            </div>
-            <p class="slider-read">
-              At {{ nearMetresAt }}m and {{ fmtPct(nearAt, 0) }} these doors come to
-              <strong>{{ fmtPct(nearReading ?? 0, 1) }}</strong> a knock. The campaign's own
-              record puts it at {{ FITTED_NEAR_METRES }}m and
-              {{ fmtPct(nearCurve.fitted, 0) }}, which is
-              {{ fmtPct(nearFittedReading ?? 0, 1) }}.
+              <span class="slider-value muted">{{ fmtPct(nearAt, 0) }}</span>
               <button v-if="nearMoved" type="button" class="chip" @click="resetNear">
                 Put them back
               </button>
-            </p>
-            <p class="muted slider-note">{{ nearSentence }}</p>
-          </ChartCard>
+            </div>
+          </div>
 
           <!-- When to go. Two grids: answering moves with the clock, signing
                does not, so the second is the two multiplied. -->
@@ -3263,40 +3164,56 @@ const focusRanks = computed<FocusRank[]>(() => {
 }
 
 /* The two neighbourhood sliders. The only range inputs in the app, so they
-   style themselves rather than inheriting anything. */
+   style themselves rather than inheriting anything. Distance is the major
+   control and gets a full-width track under its own label; how much it counts
+   is the trim on it and sits compact on one line. */
+.near-sliders {
+  padding: 0.85rem 1rem 0.95rem;
+}
 .slider-row {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.5rem 0.6rem;
   flex-wrap: wrap;
-  margin-top: 0.55rem;
+}
+.slider-row--minor {
+  margin-top: 0.7rem;
 }
 .slider-label {
-  font-size: 0.8rem;
+  font-size: 0.85rem;
   flex: 0 0 auto;
 }
+.slider-row--minor .slider-label {
+  font-size: 0.8rem;
+}
 .slider-range {
-  flex: 1 1 120px;
-  min-width: 110px;
   accent-color: var(--accent);
   /* A slider is a drag, and on a phone a horizontal drag inside a scrolling
      page is otherwise ambiguous. */
   touch-action: none;
 }
+.slider-row--major .slider-range {
+  flex: 1 1 100%;
+  height: 1.6rem;
+}
+.slider-row--minor .slider-range {
+  flex: 1 1 90px;
+  min-width: 80px;
+  max-width: 190px;
+}
 .slider-value {
   font-variant-numeric: tabular-nums;
   font-weight: 700;
   flex: 0 0 auto;
+}
+.slider-row--major .slider-value {
+  margin-left: auto;
+  font-size: 1.05rem;
+}
+.slider-row--minor .slider-value {
+  font-size: 0.85rem;
   min-width: 4ch;
   text-align: right;
-}
-.slider-read {
-  margin: 0.6rem 0 0;
-  font-size: 0.9rem;
-}
-.slider-note {
-  margin: 0.3rem 0 0;
-  font-size: 0.82rem;
 }
 
 /* One canvasser's projection. */
