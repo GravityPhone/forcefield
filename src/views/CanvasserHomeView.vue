@@ -39,7 +39,7 @@ onActivated(() => {
         :class="{ active: talk.activeTab === 'hunt' }"
         @click="talk.activeTab = 'hunt'"
       >
-        Scout
+        Map
       </button>
     </div>
 

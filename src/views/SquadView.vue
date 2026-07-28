@@ -6,6 +6,7 @@ import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import AddMembersSheet from '@/components/squads/AddMembersSheet.vue'
+import EditSquadSheet from '@/components/squads/EditSquadSheet.vue'
 import { fadeUp } from '@/lib/motion'
 import { startOfLocalDayISO } from '@/lib/day'
 import { fetchAllRows, supabase } from '@/lib/supabase'
@@ -237,6 +238,17 @@ const canManageRoster = computed(() => {
 })
 const addMembersOpen = ref(false)
 const removingMemberId = ref<string | null>(null)
+
+// Edit the crew itself — rename, take people off — same sheet the all-squads
+// page uses (2026-07-28). mySquad is a computed off the store, so the open
+// sheet keeps reading the fresh row through every reload.
+const editSquadOpen = ref(false)
+
+/** "+ Add people" inside the edit sheet hands off to the add sheet. */
+function addFromEdit() {
+  editSquadOpen.value = false
+  addMembersOpen.value = true
+}
 
 async function removeFromSquad(memberId: string) {
   const squad = mySquad.value
@@ -2275,6 +2287,14 @@ watch(
           <!-- No squad switcher: one crew at a time (2026-07-25). Leave and
                join another if you're on the wrong one. -->
           <button v-if="mySquad.chat_id" class="btn btn-sm btn-primary" @click="openSquadChat">Chat</button>
+          <button
+            v-if="canManageRoster"
+            class="btn btn-sm btn-ghost"
+            data-help="squad-edit"
+            @click="editSquadOpen = true"
+          >
+            Edit
+          </button>
           <button class="btn btn-sm btn-ghost" @click="leaveSquad">Leave</button>
         </div>
       </div>
@@ -2874,6 +2894,10 @@ watch(
 
     <!-- Adding people to this crew (leaders, the crew's creator, managers). -->
     <AddMembersSheet v-model:open="addMembersOpen" :squad="mySquad" :can-move="isManagerRole" />
+
+    <!-- Renaming the crew and taking people off it, for the same people who
+         may add to it. -->
+    <EditSquadSheet v-model:open="editSquadOpen" :squad="mySquad" @add="addFromEdit" />
 
     <BottomSheet v-model:open="composing" title="New squad" aria-label="New squad">
       <div class="field">

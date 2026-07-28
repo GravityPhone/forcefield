@@ -65,7 +65,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Modes',
         target: 'canvass-tabs',
-        body: 'Scout: the map.\nTalk: the door. Roster, past visits, outcome buttons.\nTap a pin in Scout to open that door in Talk.',
+        body: 'Map: every door, painted by what happened there.\nTalk: the door. Roster, past visits, outcome buttons.\nTap a pin on the Map to open that door in Talk.',
       },
       {
         heading: 'Outcomes',
@@ -135,7 +135,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'The map',
         target: 'squad-layers',
-        body: 'Fill: knock status, same colors as Scout.\nAvatar: who knocked that door today.\nNothing lit: every door, status colors.\nOur turf: only our doors.\nAll turf: every turf in its own color.\nTap a door to open it in Talk.',
+        body: 'Fill: knock status, same colors as the Map tab.\nAvatar: who knocked that door today.\nNothing lit: every door, status colors.\nOur turf: only our doors.\nAll turf: every turf in its own color.\nTap a door to open it in Talk.',
         swatches: DOOR_COLORS,
       },
       {
@@ -157,6 +157,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         heading: 'Adding people',
         target: 'squad-add',
         body: 'Squad leaders and managers only.\nLeaders add people who aren’t out with another crew today. Managers can move anyone.\nRemove is in the member’s sheet.',
+      },
+      {
+        heading: 'Editing the crew',
+        target: 'squad-edit',
+        body: 'Rename the crew or take people off it. Squad leaders, managers, and whoever started it.\nThe squad chat follows the name.',
       },
       {
         heading: 'Assign doors',
@@ -191,7 +196,12 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Assigning people',
         target: 'squads-add',
-        body: 'Add people puts them on that crew and in its chat.\nAlready out with another crew: they move.\nRemove is on the squad page, in the member’s sheet.',
+        body: 'Add people puts them on that crew and in its chat.\nAlready out with another crew: they move.',
+      },
+      {
+        heading: 'Editing one',
+        target: 'squads-edit',
+        body: 'Edit renames the crew and takes people off it.\nThe squad chat follows the name.',
       },
       {
         heading: 'Starting one',
@@ -256,8 +266,17 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'Your team, leadership first. Tap a person for their intro and recent knocks.',
       },
       {
+        target: 'roster-search',
+        body: 'Search by name or username.',
+      },
+      {
         target: 'roster-call',
         body: 'Call shows when someone saved a number. Numbers are visible to their own team only.',
+      },
+      {
+        heading: 'Manage',
+        target: 'roster-manage',
+        body: 'Managers set roles: Canvasser, Squad Leader, Campaign Manager.\nManagers and squad leaders set today\'s squad. Moving somebody already out with another crew is a manager\'s call; a leader takes them off that crew first.',
       },
     ],
   },

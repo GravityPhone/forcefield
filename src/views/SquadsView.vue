@@ -5,6 +5,7 @@ import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import AddMembersSheet from '@/components/squads/AddMembersSheet.vue'
+import EditSquadSheet from '@/components/squads/EditSquadSheet.vue'
 import { fadeUp } from '@/lib/motion'
 import { onPageEnter, whileOnPage } from '@/lib/pageState'
 import { useSquadsStore, type SquadListItem } from '@/stores/squads'
@@ -76,6 +77,25 @@ function openAddMembers(squad: SquadListItem) {
   addMembersOpen.value = true
 }
 
+// Edit: rename the crew, take people off it (2026-07-28). Tracked by id, not
+// by row — loadToday() replaces the squads array after every change, and the
+// open sheet has to keep reading the fresh row, not a stale snapshot.
+const editId = ref<string | null>(null)
+const editOpen = ref(false)
+const editTarget = computed(() => squads.squads.find((s) => s.id === editId.value) ?? null)
+
+function openEdit(squad: SquadListItem) {
+  editId.value = squad.id
+  editOpen.value = true
+}
+
+/** "+ Add people" inside the edit sheet hands off to the add sheet. */
+function addFromEdit() {
+  const squad = editTarget.value
+  editOpen.value = false
+  if (squad) openAddMembers(squad)
+}
+
 function openSquadChat(squad: SquadListItem) {
   if (!squad.chat_id) return
   chat.openDrawer(squad.chat_id) // slides over this page — no navigation
@@ -131,6 +151,9 @@ function memberNames(squad: SquadListItem): string {
           <button class="btn btn-sm btn-ghost" data-help="squads-add" @click="openAddMembers(s)">
             Add people
           </button>
+          <button class="btn btn-sm btn-ghost" data-help="squads-edit" @click="openEdit(s)">
+            Edit
+          </button>
           <button v-if="!s.isMember" class="btn btn-sm btn-primary" @click="squads.joinSquad(s.id)">
             Join
           </button>
@@ -139,6 +162,8 @@ function memberNames(squad: SquadListItem): string {
     </div>
 
     <AddMembersSheet v-model:open="addMembersOpen" :squad="addTo" can-move />
+
+    <EditSquadSheet v-model:open="editOpen" :squad="editTarget" @add="addFromEdit" />
 
     <!-- New squad sheet -->
     <BottomSheet v-model:open="composing" title="New squad" aria-label="New squad">

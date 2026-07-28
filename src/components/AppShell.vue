@@ -182,7 +182,7 @@ const moreActive = computed(() => moreItems.value.some((i) => route.path === i.t
 const DEMO_ROLES: { role: AppRole; blurb: string }[] = [
   {
     role: 'canvasser',
-    blurb: 'Knock doors: Scout map, Talk mode, your squad, boards and bulletin.',
+    blurb: 'Knock doors: Map and Talk modes, your squad, boards and bulletin.',
   },
   {
     role: 'team_lead',

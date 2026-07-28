@@ -108,6 +108,19 @@ export const useSquadsStore = defineStore('squads', {
       return error ? error.message || 'Could not add them to the squad.' : null
     },
 
+    /** The "edit" half of squad management (2026-07-28): a new name for the
+     * crew, and the squad chat's room follows it. The RPC is the gate —
+     * managers, squad leaders, or whoever started the crew. */
+    async renameSquad(squadId: string, name: string): Promise<string | null> {
+      const { error } = await supabase.rpc('rename_squad', {
+        target_squad_id: squadId,
+        new_name: name,
+      })
+      if (error) return error.message || 'Could not rename the squad.'
+      await this.loadToday()
+      return null
+    },
+
     /** The undo for the above — off the roster and out of the squad chat. */
     async removeMember(squadId: string, userId: string): Promise<string | null> {
       const { error } = await supabase.rpc('remove_squad_member', {

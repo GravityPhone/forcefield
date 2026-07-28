@@ -70,7 +70,7 @@ function pickAddress(a: Address) {
       <div v-else-if="talk.searching" class="empty muted">Searching…</div>
       <!-- Anonymous walk-up logging was removed (outcomes need a loaded
            address), so don't suggest "log it anyway" here. -->
-      <div v-else class="empty muted">No matches. Try fewer letters, or find the door in Scout.</div>
+      <div v-else class="empty muted">No matches. Try fewer letters, or find the door on the Map.</div>
     </div>
   </div>
 </template>
