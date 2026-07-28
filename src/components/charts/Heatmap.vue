@@ -2,6 +2,12 @@
 // Rate heatmap (weekday × hour band). One sequential hue carries magnitude,
 // cells separated by the surface itself (2px gap), per-cell tooltip with the
 // rate AND the sample size, plus a gradient scale legend.
+//
+// Column headers sit ABOVE the grid, not below (2026-07-28, user call: "it
+// should just have the time of day at the top"), and each one can carry a
+// second, smaller line — colSubLabels — so a header says both what a block
+// is called and when it runs ("Midday" / "Noon to 2:30 PM") instead of
+// leaving the hours to a caption elsewhere on the page.
 import { computed, ref } from 'vue'
 import { sequentialColor, fmtPct } from '@/lib/chartTheme'
 import { useChartWidth } from './useChartWidth'
@@ -9,6 +15,9 @@ import { useChartWidth } from './useChartWidth'
 const props = defineProps<{
   rowLabels: string[]
   colLabels: string[]
+  /** A second, muted line under each column name — the hours that block
+   *  covers. Omit it for a plain single-line header. */
+  colSubLabels?: string[]
   /** rate per [row][col], null = no data */
   values: (number | null)[][]
   /** sample size per cell for the tooltip */
@@ -25,6 +34,9 @@ const { el, width } = useChartWidth()
 const LABEL_W = props.labelWidth ?? 44
 const CELL_H = 26
 const GAP = 2
+/** Header band above the grid: one line for the block's name, a second and
+ *  smaller one for its hours when colSubLabels is given. */
+const TOP_H = computed(() => (props.colSubLabels?.length ? 34 : 20))
 
 const cellW = computed(
   () => (Math.max(80, width.value - LABEL_W) - GAP * props.colLabels.length) / Math.max(1, props.colLabels.length),
@@ -34,7 +46,7 @@ const maxRate = computed(() => {
   for (const row of props.values) for (const v of row) if (v != null && v > m) m = v
   return m || 1
 })
-const height = computed(() => props.rowLabels.length * (CELL_H + GAP) + 24)
+const height = computed(() => props.rowLabels.length * (CELL_H + GAP) + TOP_H.value)
 
 const fill = (v: number | null) =>
   v == null ? 'transparent' : sequentialColor(v / maxRate.value, props.dark)
@@ -42,12 +54,14 @@ const fill = (v: number | null) =>
 // Cells are resolved from the pointer's position rather than per-rect
 // `pointerenter`, so a finger can slide across the grid: touch gets an
 // implicit capture on whatever it first pressed, and every other cell's enter
-// never fires. See the BarChart header for the whole story.
+// never fires. See the BarChart header for the whole story. A tap alone
+// already reads a cell — onDown fires on first contact whether or not it's
+// held — the drag is there for sliding across cells, not a requirement.
 const hover = ref<{ r: number; c: number } | null>(null)
 const held = ref(false)
 function cellAt(ev: PointerEvent): { r: number; c: number } | null {
   const rect = (ev.currentTarget as SVGElement).getBoundingClientRect()
-  const r = Math.floor((ev.clientY - rect.top) / (CELL_H + GAP))
+  const r = Math.floor((ev.clientY - rect.top - TOP_H.value) / (CELL_H + GAP))
   const c = Math.floor((ev.clientX - rect.left - LABEL_W) / (cellW.value + GAP))
   if (r < 0 || r >= props.rowLabels.length) return null
   if (c < 0 || c >= props.colLabels.length) return null
@@ -80,15 +94,39 @@ const legendStops = Array.from({ length: 9 }, (_, i) => i / 8)
       @pointercancel="held = false"
       @pointerleave="onLeave"
     >
+      <g v-for="(cl, c) in colLabels" :key="'c' + cl">
+        <text
+          class="tick col-name"
+          :x="LABEL_W + c * (cellW + GAP) + cellW / 2"
+          :y="colSubLabels?.length ? 13 : 14"
+          text-anchor="middle"
+        >
+          {{ cl }}
+        </text>
+        <text
+          v-if="colSubLabels?.[c]"
+          class="tick col-hours"
+          :x="LABEL_W + c * (cellW + GAP) + cellW / 2"
+          :y="27"
+          text-anchor="middle"
+        >
+          {{ colSubLabels[c] }}
+        </text>
+      </g>
       <g v-for="(rl, r) in rowLabels" :key="rl">
-        <text class="tick" :x="LABEL_W - 8" :y="r * (CELL_H + GAP) + CELL_H / 2 + 4" text-anchor="end">
+        <text
+          class="tick"
+          :x="LABEL_W - 8"
+          :y="TOP_H + r * (CELL_H + GAP) + CELL_H / 2 + 4"
+          text-anchor="end"
+        >
           {{ rl }}
         </text>
         <rect
           v-for="(cl, c) in colLabels"
           :key="cl"
           :x="LABEL_W + c * (cellW + GAP)"
-          :y="r * (CELL_H + GAP)"
+          :y="TOP_H + r * (CELL_H + GAP)"
           :width="cellW"
           :height="CELL_H"
           rx="3"
@@ -96,16 +134,6 @@ const legendStops = Array.from({ length: 9 }, (_, i) => i / 8)
           :class="{ empty: (values[r]?.[c] ?? null) == null, lifted: hover?.r === r && hover?.c === c }"
         />
       </g>
-      <text
-        v-for="(cl, c) in colLabels"
-        :key="'c' + cl"
-        class="tick"
-        :x="LABEL_W + c * (cellW + GAP) + cellW / 2"
-        :y="height - 6"
-        text-anchor="middle"
-      >
-        {{ cl }}
-      </text>
     </svg>
 
     <div v-if="hover && (values[hover.r]?.[hover.c] ?? null) != null" class="detail">
@@ -118,7 +146,7 @@ const legendStops = Array.from({ length: 9 }, (_, i) => i / 8)
     <div v-else-if="hover" class="detail muted">
       {{ rowLabels[hover.r] }} at {{ colLabels[hover.c] }}: too few {{ unit ?? 'knocks' }} to say
     </div>
-    <div v-else class="detail muted">Hold a square to read it</div>
+    <div v-else class="detail muted">Tap a section for more info.</div>
 
     <div class="scale">
       <span class="muted">0%</span>
@@ -151,6 +179,15 @@ svg {
 .tick {
   fill: var(--text-muted);
   font-size: 11px;
+}
+/* The block's name outranks a plain axis tick — it's the header of its
+   column now, not a label underneath it. */
+.col-name {
+  fill: var(--text);
+  font-weight: 700;
+}
+.col-hours {
+  font-size: 9px;
 }
 rect.empty {
   stroke: var(--border);

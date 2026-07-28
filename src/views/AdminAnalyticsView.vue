@@ -14,10 +14,11 @@
 // stay at 2–3 word hints. (A logistic-regression "Predictor" tab existed
 // until 2026-07-14 — removed as more than managers needed; stats.ts keeps
 // the machinery if it ever comes back.)
-import { computed, ref, shallowRef } from 'vue'
+import { computed, nextTick, ref, shallowRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
-import { onPageEnter } from '@/lib/pageState'
+import { onPageEnter, whileOnPage } from '@/lib/pageState'
+import { scrollIntoSafeView } from '@/lib/appChrome'
 import ChartCard from '@/components/charts/ChartCard.vue'
 import TimeSeriesChart from '@/components/charts/TimeSeriesChart.vue'
 import type { TimeSeries } from '@/components/charts/TimeSeriesChart.vue'
@@ -38,6 +39,7 @@ import { useChartPalette, fmtPct, fmtCount } from '@/lib/chartTheme'
 import { wilson, linearRegression } from '@/lib/stats'
 import {
   buildOddsModel,
+  blockHours,
   campaignCities,
   doorOdds,
   percentileOf,
@@ -1234,6 +1236,38 @@ function clearOddsPick() {
 }
 
 /**
+ * Keep the search box and its results above the on-screen keyboard
+ * (2026-07-28, user call: "it's not displaying while the keyboard is pulled
+ * up. It needs to auto fill in and show me something while I'm typing").
+ *
+ * The results list is plain page flow below the input, so as matches
+ * populate while typing, nothing re-scrolls to reveal them: a phone's
+ * keyboard covers the bottom of the screen without moving anything
+ * getBoundingClientRect() or a plain `vh` unit knows about, and the browser
+ * only auto-scrolls the input into view once, on focus — not content that
+ * grows in afterward. safeViewport() (appChrome.ts) is keyboard-aware via
+ * visualViewport, so reusing scrollIntoSafeView here is what actually fixes
+ * it; the `contains(activeElement)` guard keeps a resize elsewhere on the
+ * page from yanking the screen while nobody is searching. 'auto', not the
+ * default smooth: this fires on every keystroke that changes the result
+ * count, and an animated scroll would visibly chase the list while typing —
+ * same reasoning keepInSafeView documents for its own corrections.
+ */
+const oddsSearchWrapEl = ref<HTMLElement | null>(null)
+function keepOddsSearchVisible() {
+  const el = oddsSearchWrapEl.value
+  if (!el || !el.contains(document.activeElement)) return
+  scrollIntoSafeView(el, 'auto')
+}
+watch(oddsHits, () => {
+  void nextTick(keepOddsSearchVisible)
+})
+whileOnPage(
+  () => window.visualViewport?.addEventListener('resize', keepOddsSearchVisible),
+  () => window.visualViewport?.removeEventListener('resize', keepOddsSearchVisible),
+)
+
+/**
  * Arriving from somewhere else with a door already in mind.
  *
  * Talk and the two maps carry a compact odds panel for managers, and its "Open
@@ -1611,9 +1645,8 @@ const setTiles = computed<Tile[]>(() => {
   // "expected conversations and expected signatures doesn't make any sense
   // [there], that's covered by somebody answers and they sign if they
   // answer"). Over the whole campaign those totals are only the rates times
-  // the door count, so they add nothing and read as a projection nobody made;
-  // and "the same doors on average ground" is comparing the average with
-  // itself. For a street or a turf they are the whole point, because that is
+  // the door count, so they add nothing and read as a projection nobody made.
+  // For a street or a turf they are the whole point, because that is
   // somebody deciding how to spend a morning.
   if (!oddsPick.value) {
     // These are FORWARD numbers over the doors that are left, so comparing
@@ -1625,7 +1658,7 @@ const setTiles = computed<Tile[]>(() => {
     // which reports that figure and only that figure.
     const m = oddsModel.value
     return [
-      { label: 'Doors', value: fmtCount(s.doors), hint: `${fmtCount(s.open)} still on the walk` },
+      { label: 'Doors', value: fmtCount(s.doors) },
       {
         label: 'Somebody answers',
         value: s.answer ? oddsPct(s.answer.p) : 'none yet',
@@ -1641,7 +1674,7 @@ const setTiles = computed<Tile[]>(() => {
   }
 
   return [
-    { label: 'Doors', value: fmtCount(s.doors), hint: `${fmtCount(s.open)} still on the walk` },
+    { label: 'Doors', value: fmtCount(s.doors) },
     {
       label: 'Expected conversations',
       value: s.expectedConversations.value.toFixed(0),
@@ -1651,11 +1684,6 @@ const setTiles = computed<Tile[]>(() => {
       label: 'Expected signatures',
       value: s.expectedSignatures.value.toFixed(0),
       hint: `${s.expectedSignatures.lo.toFixed(0)} to ${s.expectedSignatures.hi.toFixed(0)}`,
-    },
-    {
-      label: 'The same doors, average ground',
-      value: s.typicalYield.signatures.toFixed(0),
-      hint: 'signatures, at the campaign average',
     },
     ...rates,
   ]
@@ -1680,6 +1708,12 @@ const setTiles = computed<Tile[]>(() => {
 const TIME_ROWS = ['Weekday', 'Weekend']
 const TIME_COLS = ['Morning', 'Midday', 'Afternoon', 'Evening']
 const TIME_PARTS = ['morning', 'midday', 'afternoon', 'evening']
+// Capitalised for a header rather than a caption ("Before noon", not "before
+// noon") — blockHours only needs the part name, the |wd or |we half is unused.
+const TIME_COL_HOURS = TIME_PARTS.map((p) => {
+  const h = blockHours(p)
+  return h.charAt(0).toUpperCase() + h.slice(1)
+})
 
 const timeGrid = computed(() => {
   const list = setResult.value?.bestTimes ?? houseResult.value?.bestTimes ?? []
@@ -2570,31 +2604,36 @@ const focusRanks = computed<FocusRank[]>(() => {
 
         <!-- ============================== Odds (the next-knock predictor) -->
         <template v-else-if="tab === 'odds'">
-          <!-- One box for all four kinds of thing. Tap a result to see it. -->
-          <input
-            v-if="!oddsPick"
-            v-model="oddsQuery"
-            class="odds-search"
-            type="search"
-            placeholder="A house, a street, or turf"
-            aria-label="Find somewhere to work out the odds for"
-            data-help="odds-scope"
-          />
-          <ul v-if="oddsHits.length && !oddsPick" class="odds-hits">
-            <li v-for="h in oddsHits" :key="h.kind + h.id">
-              <button type="button" class="odds-hit" @click="pickOdds(h)">
-                <span class="odds-hit-kind">{{ KIND_LABEL[h.kind] }}</span>
-                <span class="odds-hit-name">{{ h.label }}</span>
-                <span class="muted odds-hit-sub">{{ h.sub }}</span>
-              </button>
-            </li>
-          </ul>
-          <p
-            v-else-if="!oddsPick && oddsQuery.trim().length >= 2"
-            class="muted odds-empty"
-          >
-            Nothing by that name.
-          </p>
+          <!-- One box for all four kinds of thing. Tap a result to see it.
+               Wrapped so keepOddsSearchVisible has one element to bring above
+               the on-screen keyboard, input and results together. -->
+          <div ref="oddsSearchWrapEl">
+            <input
+              v-if="!oddsPick"
+              v-model="oddsQuery"
+              class="odds-search"
+              type="search"
+              placeholder="A house, a street, or turf"
+              aria-label="Find somewhere to work out the odds for"
+              data-help="odds-scope"
+              @focus="keepOddsSearchVisible"
+            />
+            <ul v-if="oddsHits.length && !oddsPick" class="odds-hits">
+              <li v-for="h in oddsHits" :key="h.kind + h.id">
+                <button type="button" class="odds-hit" @click="pickOdds(h)">
+                  <span class="odds-hit-kind">{{ KIND_LABEL[h.kind] }}</span>
+                  <span class="odds-hit-name">{{ h.label }}</span>
+                  <span class="muted odds-hit-sub">{{ h.sub }}</span>
+                </button>
+              </li>
+            </ul>
+            <p
+              v-else-if="!oddsPick && oddsQuery.trim().length >= 2"
+              class="muted odds-empty"
+            >
+              Nothing by that name.
+            </p>
+          </div>
 
           <!-- ONE HOUSE -->
           <template v-if="houseResult">
@@ -2692,13 +2731,13 @@ const focusRanks = computed<FocusRank[]>(() => {
             <ChartCard
               title="When somebody answers"
               data-help="odds-times"
-              subtitle="morning before noon, midday to 3 PM, afternoon to 5 PM, evening after 5"
               :columns="['', ...TIME_COLS]"
               :rows="timeRows(timeGrid.answer)"
             >
               <Heatmap
                 :row-labels="TIME_ROWS"
                 :col-labels="TIME_COLS"
+                :col-sub-labels="TIME_COL_HOURS"
                 :values="timeGrid.answer"
                 :counts="timeGrid.counts"
                 :label-width="66"
@@ -2716,6 +2755,7 @@ const focusRanks = computed<FocusRank[]>(() => {
               <Heatmap
                 :row-labels="TIME_ROWS"
                 :col-labels="TIME_COLS"
+                :col-sub-labels="TIME_COL_HOURS"
                 :values="timeGrid.signature"
                 :counts="timeGrid.counts"
                 :label-width="66"
@@ -2985,7 +3025,13 @@ const focusRanks = computed<FocusRank[]>(() => {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  max-height: 40vh;
+  /* dvh, not vh (2026-07-28) — HuntTab's map height already established that
+     dvh shrinks with the on-screen keyboard on a real phone while plain vh
+     does not, which is exactly the property wanted here: with the keyboard
+     up the list caps itself to what's actually left on screen instead of
+     staying capped to a height computed before the keyboard opened, which is
+     what left results sitting below the fold with nothing to reveal them. */
+  max-height: 40dvh;
   overflow-y: auto;
   overscroll-behavior: contain;
 }

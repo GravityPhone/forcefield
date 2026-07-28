@@ -346,19 +346,23 @@ const BLOCK_LABEL: Record<string, string> = {
   'evening|we': 'Weekend evening',
 }
 
-/** Spelled out where a block label alone would not tell somebody when to go. */
+/** Spelled out where a block label alone would not tell somebody when to go.
+ *  Midday and afternoon split the noon-to-5 span evenly, two and a half hours
+ *  each (2026-07-28, user call); morning and evening keep whatever falls
+ *  before and after that. */
 const BLOCK_HOURS: Record<string, string> = {
   morning: 'before noon',
-  midday: 'noon to 3 PM',
-  afternoon: '3 to 5 PM',
+  midday: 'noon to 2:30 PM',
+  afternoon: '2:30 to 5 PM',
   evening: 'after 5 PM',
 }
 
 export function blockOf(ts: number): TimeBlockKey {
   const d = new Date(ts)
-  const h = d.getHours()
+  // Minutes matter here: the midday/afternoon boundary sits on a half hour.
+  const h = d.getHours() + d.getMinutes() / 60
   const wd = d.getDay()
-  const part = h < 12 ? 'morning' : h < 15 ? 'midday' : h < 17 ? 'afternoon' : 'evening'
+  const part = h < 12 ? 'morning' : h < 14.5 ? 'midday' : h < 17 ? 'afternoon' : 'evening'
   return `${part}|${wd === 0 || wd === 6 ? 'we' : 'wd'}` as TimeBlockKey
 }
 
@@ -1561,10 +1565,6 @@ export interface SetOdds {
   streets: { key: string; name: string; city: string; doors: number; open: number }[]
   /** Against every door in the campaign. */
   vsCampaign: { answer: Benchmark; sign: Benchmark } | null
-  /** What the SAME number of open doors would be worth at the campaign
-   *  average. The comparison a manager is really making when they ask whether
-   *  a street is worth the morning. */
-  typicalYield: { conversations: number; signatures: number }
   /** Set only for a scope that is exactly one street with enough evidence to
    *  be ranked: where it sits among every such street, 1 = friendliest. */
   streetRank: { place: number; of: number } | null
@@ -1677,10 +1677,6 @@ export function setOdds(model: OddsModel, households: string[]): SetOdds {
           sign: benchmark(signEst, model.campaignSign),
         }
       : null,
-    typicalYield: {
-      conversations: open * model.campaignAnswer,
-      signatures: open * model.campaignSignature,
-    },
     streetRank:
       rankIdx >= 0 ? { place: rankIdx + 1, of: model.streetRanking.length } : null,
     bestTimes: [...blockSums.entries()]

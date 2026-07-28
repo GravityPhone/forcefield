@@ -45,10 +45,23 @@ export interface SafeViewport {
   height: number
 }
 
-/** The band of screen a user can actually see content in, right now. */
+/**
+ * The band of screen a user can actually see content in, right now.
+ *
+ * On a phone with the on-screen keyboard up, `window.innerHeight` is the
+ * LAYOUT viewport and typically does not shrink for it — the keyboard covers
+ * the bottom of the page without resizing anything `getBoundingClientRect()`
+ * or a `vh` unit knows about. `window.visualViewport` is the one API that
+ * does track the keyboard, so it's the bound to use whenever it exists; every
+ * caller (scrollIntoSafeView, keepInSafeView) inherits this for free. In the
+ * common case — no keyboard, no pinch zoom — visualViewport's height and
+ * offsetTop match window.innerHeight and 0, so this is a no-op.
+ */
 export function safeViewport(): SafeViewport {
   const winTop = top
-  const winBottom = Math.max(winTop + 1, window.innerHeight - bottom)
+  const vv = window.visualViewport
+  const visibleBottom = vv ? vv.offsetTop + vv.height : window.innerHeight
+  const winBottom = Math.max(winTop + 1, visibleBottom - bottom)
   return { top: winTop, bottom: winBottom, height: winBottom - winTop }
 }
 
