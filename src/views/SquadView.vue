@@ -1410,7 +1410,7 @@ function undoAssign() {
   if (!prev) return
   assignUndo.value = stack
   assignSelected.value = prev
-  sweepFlash.value = ''
+  clearSweepFlash()
 }
 
 const assigningMember = computed<ChatProfile | null>(
@@ -1477,7 +1477,8 @@ function startAssign(memberId: string) {
   assignSelected.value = pre
   assignUndo.value = []
   disarmTools()
-  sweepFlash.value = ''
+  takeMode.value = false
+  clearSweepFlash()
   scrollMapIntoView()
   // Land on the ground being divided, not on the county. The map is already
   // filtered to that turf (paintForDoor), so this frames exactly what's
@@ -1492,7 +1493,8 @@ function cancelAssign() {
   assignUndo.value = []
   assignError.value = ''
   disarmTools()
-  sweepFlash.value = ''
+  takeMode.value = false
+  clearSweepFlash()
 }
 
 /** The map's own way into assigning (2026-07-25, user call — "I don't see any
@@ -1521,6 +1523,10 @@ function startAssignFromMap() {
 }
 
 /** One tap, one door, in or out. That's the whole gesture.
+ *
+ * Deliberately exempt from the sweeps' held-door rule: pointing at one pin is
+ * already the deliberate act the rule exists to require, and the door flips
+ * to the assignee's color under your finger — nothing silent about it.
  *
  * The two-tap walk sweep (tap A, tap B, take everything between) is GONE as
  * of 2026-07-25 (user call, both maps): "the tap one and then sweep the whole
@@ -1558,19 +1564,55 @@ const LASSO_BRUSH_PX = 16
 const lassoActive = ref(false)
 const streetTapActive = ref(false)
 const sweepMode = ref<'add' | 'erase'>('add')
+
+/** Take, the deliberate steal (2026-07-28, user call — the cutter's toggle,
+ * brought over): sweeps normally leave doors that are already in a
+ * squadmate's pile, so tapping a street takes only the free stretch of it.
+ * Armed, sweeps grab those too. Off by default, never persisted, and cleared
+ * whenever a pile opens or closes: a mode you arm for one handout, not a
+ * setting you forget is on. Turning it OFF never hands anything back — the
+ * cutter learned that the hard way; Undo is how you take a sweep back. */
+const takeMode = ref(false)
+
+/** Only while a sweep tool is armed to ADD (the cutter's rule): Take
+ * modifies what a sweep does, so it has no business on screen when no sweep
+ * can happen. Erase never steals — removing a squadmate's door from the pile
+ * just means "don't take it after all". */
+const canTake = computed(
+  () =>
+    !!assigningMemberId.value &&
+    (lassoActive.value || streetTapActive.value) &&
+    sweepMode.value === 'add',
+)
 const lassoCanvasEl = ref<HTMLCanvasElement | null>(null)
 let lassoPath: { x: number; y: number }[] = []
 let lassoDrawing = false
 
 /** Transient one-liner under the assign bar ("Lasso: added 34 doors") — the
  * sweep tools take a lot of doors at once and silence reads as "did that
- * work?". */
+ * work?". Optionally carries one action button ("Take them too" after a sweep
+ * left doors in a squadmate's pile) — the cutter's flash, same contract. */
 const sweepFlash = ref('')
+const sweepFlashAction = ref<{ label: string; run: () => void } | null>(null)
 let sweepFlashTimer: ReturnType<typeof setTimeout> | undefined
-function flashSweep(msg: string) {
+function flashSweep(msg: string, action: { label: string; run: () => void } | null = null) {
   sweepFlash.value = msg
+  sweepFlashAction.value = action
   clearTimeout(sweepFlashTimer)
-  sweepFlashTimer = setTimeout(() => (sweepFlash.value = ''), 3500)
+  // A message with a decision on it hangs around longer (the cutter's rule).
+  sweepFlashTimer = setTimeout(clearSweepFlash, action ? 8000 : 3500)
+}
+
+function clearSweepFlash() {
+  clearTimeout(sweepFlashTimer)
+  sweepFlash.value = ''
+  sweepFlashAction.value = null
+}
+
+function runSweepFlashAction() {
+  const a = sweepFlashAction.value
+  clearSweepFlash()
+  a?.run()
 }
 
 /** Put the map back the way we found it and drop any half-drawn loop. */
@@ -1704,6 +1746,8 @@ function streetKeyOf(d: TurfDoor): string {
  * included. Sweeps clear the two-tap walk anchor: the anchor means "the last
  * door you tapped", and after a loop that's not a thing. */
 function applySweep(ids: string[], what: string) {
+  const memberId = assigningMemberId.value
+  if (!memberId) return
   const next = new Set(assignSelected.value)
   if (sweepMode.value === 'erase') {
     let removed = 0
@@ -1721,31 +1765,94 @@ function applySweep(ids: string[], what: string) {
   }
   let added = 0
   let skipped = 0
+  const heldIds: string[] = []
+  const holders = new Map<string, number>()
   for (const id of ids) {
+    if (next.has(id)) continue
     const door = turfDoors.value.get(id)
     if (!door || poolParentOf(door) === null) {
-      if (!next.has(id)) skipped++
+      skipped++
       continue
     }
-    if (!next.has(id)) {
-      next.add(id)
-      added++
+    // A door already in a squadmate's pile stays theirs until somebody MEANS
+    // to move it (2026-07-28, user call): a street tap should take the free
+    // stretch, not quietly re-split what a crewmate already claimed. Take
+    // (armed) or the flash's "Take them too" is the deliberate version.
+    const holder = takeMode.value ? null : heldByOther(door, memberId)
+    if (holder) {
+      heldIds.push(id)
+      holders.set(holder, (holders.get(holder) ?? 0) + 1)
+      continue
     }
+    next.add(id)
+    added++
   }
+  const held = heldIds.length
+  const who = holders.size === 1 ? firstNameOf([...holders.keys()][0]) : 'squadmates'
+  const takeAction = held
+    ? { label: held === 1 ? 'Take it too' : 'Take them too', run: () => takeDoors(heldIds) }
+    : null
   if (!added) {
-    flashSweep(
-      skipped
-        ? `${what}: nothing to take. ${skipped} door${skipped === 1 ? '' : 's'} belong to turf you can't divide.`
-        : `${what}: those doors are already in the pile.`,
-    )
+    if (held) {
+      flashSweep(
+        held === 1 ? `${what}: that door is with ${who}.` : `${what}: all ${held} are with ${who}.`,
+        takeAction,
+      )
+    } else {
+      flashSweep(
+        skipped
+          ? `${what}: nothing to take. ${skipped} door${skipped === 1 ? '' : 's'} belong to turf you can't divide.`
+          : `${what}: those doors are already in the pile.`,
+      )
+    }
     return
   }
   snapshotAssign()
   assignSelected.value = next
+  const bits = [`added ${added} door${added === 1 ? '' : 's'}`]
+  if (held) bits.push(`left ${held} with ${who}`)
+  if (skipped) bits.push(`${skipped} not yours to divide`)
+  flashSweep(`${what}: ${bits.join(' · ')}.`, takeAction)
+}
+
+/** Who is already holding this door, if it's somebody other than the person
+ * being assigned to — the id, or null when the door is free ground.
+ *
+ * Only a SUB-turf counts as somebody's pile. The pool's own top-level turf is
+ * the shared ground being divided, and it can perfectly well carry an
+ * assignee itself (a crew turf handed to one canvasser by name) — reading
+ * that as "held" would refuse every sweep a leader made across their own
+ * turf, which is the ordinary case this page exists for.
+ *
+ * Keyed on the assignee ID rather than a resolved profile: a sub-turf cut for
+ * somebody who has since left the crew still isn't free to take, and it
+ * mustn't quietly become takeable because the name lookup came back empty. */
+function heldByOther(door: TurfDoor, memberId: string): string | null {
+  const t = turfById.value.get(door.turf_id)
+  if (!t?.parent_turf_id) return null
+  const holder = t.assignee_id
+  return holder && holder !== memberId ? holder : null
+}
+
+/** First name for a flash line — the whole name is noise at that size, and a
+ * holder who has left the crew has no name here at all. */
+function firstNameOf(memberId: string): string {
+  const m = memberById.value.get(memberId)
+  return m ? memberName(m).split(/\s+/)[0] : 'a squadmate'
+}
+
+/** The flash's deliberate yes: put exactly the doors a sweep just left
+ * behind into the pile. Nothing new mechanically — save already releases a
+ * takeover from its old sub-turf — this is just the consent step. */
+function takeDoors(ids: string[]) {
+  snapshotAssign()
+  const next = new Set(assignSelected.value)
+  for (const id of ids) next.add(id)
+  assignSelected.value = next
   flashSweep(
-    skipped
-      ? `${what}: added ${added} door${added === 1 ? '' : 's'} · ${skipped} skipped (not yours to divide).`
-      : `${what}: added ${added} door${added === 1 ? '' : 's'}.`,
+    ids.length === 1
+      ? 'Took 1 door. It moves when you save.'
+      : `Took ${ids.length} doors. They move when you save.`,
   )
 }
 
@@ -1888,7 +1995,8 @@ async function saveAssignment() {
     assigningMemberId.value = null
     assignSelected.value = new Set()
     disarmTools()
-    sweepFlash.value = ''
+    takeMode.value = false
+    clearSweepFlash()
     await loadDashboard()
   } catch {
     assignError.value = "Couldn't save that assignment. Try again."
@@ -2322,7 +2430,17 @@ watch(
               Assigning to <strong>{{ memberName(assigningMember) }}</strong>
             </template>
             · <strong class="assign-count">{{ assignSelected.size }}</strong> doors
-            <span v-if="sweepFlash" class="assign-flash">· {{ sweepFlash }}</span>
+            <span v-if="sweepFlash" class="assign-flash">
+              · {{ sweepFlash }}
+              <button
+                v-if="sweepFlashAction"
+                type="button"
+                class="btn btn-sm btn-primary sweep-action"
+                @click="runSweepFlashAction"
+              >
+                {{ sweepFlashAction.label }}
+              </button>
+            </span>
             <span v-else-if="lassoActive" class="assign-flash">
               · {{ sweepMode === 'erase' ? 'Loop doors to take them back out' : 'Loop doors to add them' }}
             </span>
@@ -2388,6 +2506,17 @@ watch(
               </template>
               <template v-else>{{ memberName(assigningMember) }}</template>
             </span>
+            <!-- The flash's one action ("Take them too") — a sibling of the
+                 message, not inside it: the message span ellipsizes and would
+                 clip a button. -->
+            <button
+              v-if="sweepFlash && sweepFlashAction"
+              type="button"
+              class="btn btn-sm btn-primary sweep-action"
+              @click="runSweepFlashAction"
+            >
+              {{ sweepFlashAction.label }}
+            </button>
             <strong class="assign-mapbar-count">{{ assignSelected.size }}</strong>
             <button class="btn btn-sm btn-primary" :disabled="assignSaving" @click="saveAssignment">
               {{ assignSaving ? 'Saving…' : 'Save' }}
@@ -2511,6 +2640,24 @@ watch(
               @click="sweepMode = 'erase'"
             >
               Erase
+            </button>
+          </div>
+          <!-- Take, the deliberate steal — the cutter's toggle in the cutter's
+               slot logic: armed, sweeps grab doors already in a squadmate's
+               pile instead of leaving them. Only while a tool is armed to
+               ADD; it changes what a sweep does, so it has no business on
+               screen when no sweep can happen. -->
+          <div v-if="canTake" class="take-row">
+            <button
+              type="button"
+              class="layer-btn take-btn"
+              :class="{ active: takeMode }"
+              :aria-pressed="takeMode"
+              data-help="squad-take"
+              title="Sweeps take doors from squadmates' piles instead of leaving them"
+              @click="takeMode = !takeMode"
+            >
+              Take
             </button>
           </div>
           <!-- The same slot when nobody's pile is open: the way IN to
@@ -3076,6 +3223,13 @@ watch(
   opacity: 0.85;
 }
 
+/* The flash's one action button, inline in the page bar and a flex item in
+   the fullscreen map bar. */
+.sweep-action {
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
 .rundown-toggle {
   align-self: flex-start;
   display: inline-flex;
@@ -3409,6 +3563,7 @@ watch(
 .owner-layer-btn,
 .lasso-toggle,
 .sweep-mode-toggle,
+.take-row,
 .map-assign-btn {
   max-width: calc(50% - 0.9rem);
 }
@@ -3434,6 +3589,33 @@ watch(
 
 .layer-btn:not(.active):hover {
   background: var(--surface-2);
+}
+
+/* Right column, fourth row — Take rides under Add/Erase, and small on
+   purpose (the cutter's 28px chip): a mode that overrides a protection
+   shouldn't be the biggest thing in the column. Red when armed, the shared
+   "this is a no" red, because it takes doors off somebody. */
+.take-row {
+  position: absolute;
+  top: calc(0.6rem + 3 * (36px + 0.5rem));
+  right: 0.6rem;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  z-index: 6;
+}
+
+.take-btn {
+  min-height: 28px;
+  padding: 0 0.55rem;
+  font-size: calc(0.78rem * var(--ui-scale, 1));
+}
+
+.take-btn.active {
+  background: #d64545;
+  color: #fff;
 }
 
 .map-error {

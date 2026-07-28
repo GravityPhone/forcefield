@@ -174,6 +174,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'Pick a person, then pick doors:\n• tap pins one at a time\n• ◯ Lasso: drag a loop\n• ☝ Streets: tap a door for its whole street\nAdd and Erase set direction. Undo reverts one sweep. Save.',
       },
       {
+        heading: 'Take',
+        target: 'squad-take',
+        body: "Sweeps leave doors already in a squadmate's pile and say whose they are. Take armed: sweeps grab those too. Tapping one pin always moves it.",
+      },
+      {
         heading: 'Sharing where you are',
         target: 'squad-share',
         body: 'Off until you switch it on. Your squad only. Nobody else, ever.\nRuns while this app is open and in front. Not in a pocket, not with the screen off.\nGreen ring: a fresh position. Faded: over 5 minutes old. Gone after 20. The pin falls back to your last knocked door.\nBattery saver 3 min · Balanced 1 min · Precise 20 sec.\nSwitching off deletes your position.',
