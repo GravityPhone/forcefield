@@ -13,7 +13,8 @@
  * over: it put a planning number in the middle of the screen a canvasser reads
  * at a porch, and the two map surfaces have no room for a block at all. A chip
  * costs one line of chrome and the sheet has room to say the whole thing
- * properly.
+ * properly. The chip reads "%" rather than the word Odds (2026-07-28, user
+ * call) — the aria-label still says what it is.
  *
  * THE FIRST TAP PAYS FOR THE MODEL. It needs the whole knock history: see the
  * header of lib/oddsData.ts. Every door after that is instant, and a canvasser
@@ -86,7 +87,7 @@ const bestTime = computed(() => odds.value?.bestTimes[0] ?? null)
 <template>
   <template v-if="allowed && householdId">
     <button type="button" class="odds-chip" aria-label="Odds for this door" @click="show">
-      Odds
+      %
     </button>
 
     <BottomSheet v-model:open="open" :title="label || 'Odds for this door'">
@@ -164,9 +165,8 @@ const bestTime = computed(() => odds.value?.bestTimes[0] ?? null)
   background: var(--surface);
   color: var(--text-muted);
   font: inherit;
-  font-size: 0.75rem;
+  font-size: 0.95rem;
   font-weight: 700;
-  letter-spacing: 0.03em;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
