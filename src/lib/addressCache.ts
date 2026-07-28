@@ -154,11 +154,10 @@ export async function clearDoorCaches(): Promise<void> {
   for (const name of NAMES) await clearDoorCache(name)
 }
 
-/** Run when the main thread is free, with a hard backstop. Used for both the
- *  background refetch and the write, so neither competes with the map the user
- *  is already looking at. requestIdleCallback is missing on older Safari, where
- *  the timeout is the whole mechanism rather than a backstop. */
-export function whenIdle(fn: () => void, timeout = 2000): void {
-  if ('requestIdleCallback' in window) requestIdleCallback(fn, { timeout })
-  else setTimeout(fn, Math.min(timeout, 1200))
-}
+/** Run when the main thread is free, with a hard backstop. Used here for both
+ *  the background refetch and the write, so neither competes with the map the
+ *  user is already looking at. It LIVES in idle.ts now and is re-exported from
+ *  here so existing importers did not have to move: this module reaches Dexie,
+ *  and a caller that only wants the scheduler should not have to pay for that.
+ *  New callers should import from '@/lib/idle'. */
+export { whenIdle } from './idle'

@@ -418,23 +418,34 @@ console.log('\n5. EXPECTED YIELD: does a whole street add up?')
 // quietly breaks it is caught by the harness rather than by a manager.
 console.log('\n6. THE HONESTY STRIP, as the page will print it')
 {
-  const s = scoreOddsModel(knocks, doors, 7)
+  const t0 = performance.now()
+  const s = scoreOddsModel(knocks, doors)
+  const ms = performance.now() - t0
   if (!s) {
     console.log('  FAIL  scoreOddsModel returned nothing on a full campaign')
     failures.push('honesty strip')
   } else {
     console.log(
-      `  Tested on the last ${s.days} days of knocks, held back from the model. ` +
-        `Given two doors it picked the livelier one ${s.pickedLivelier} times out of 100.`,
+      `  Backtested over ${s.days} days, refitting ${s.refits} times, in ${ms.toFixed(0)}ms. ` +
+        `Given two knocks it picked the one that got a signature ${s.pickedLivelier} times out of 100 ` +
+        `(${s.answerPickedLivelier} on answering alone).`,
     )
     for (const b of s.bands) {
       console.log(
-        `    when it said ${(100 * b.said).toFixed(0)}%, ${(100 * b.happened).toFixed(0)} out of 100 answered  (n=${b.n})`,
+        `    when it said ${(100 * b.said).toFixed(0)}%, ${(100 * b.happened).toFixed(0)} out of 100 got one  (n=${b.n})`,
       )
     }
-    const ok = s.trials >= 100 && s.pickedLivelier >= 50 && s.worstBand <= 15
+    // Both halves have to beat a coin toss, and the headline probability has
+    // to mean what it says. A backtest that only checked answering never
+    // tested the street adjustment at all, which is the one term most at risk
+    // of being fitted noise.
+    const ok =
+      s.trials >= 200 &&
+      s.pickedLivelier >= 52 &&
+      s.answerPickedLivelier >= 52 &&
+      s.worstBand <= 15
     console.log(
-      `  ${ok ? 'PASS' : 'FAIL'}  ${s.trials} held-back visits, worst band off by ${s.worstBand.toFixed(1)} points`,
+      `  ${ok ? 'PASS' : 'FAIL'}  ${s.trials} out-of-sample visits, worst band off by ${s.worstBand.toFixed(1)} points`,
     )
     if (!ok) failures.push('honesty strip')
   }

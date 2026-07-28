@@ -752,7 +752,7 @@ export function buildOddsModel(
 
   const kStreet = momentsK(streetSign.values())
   const kStreetAnswer = momentsK(streetAnswer.values())
-  const neighboursOf = neighbourIndex(doors)
+  const neighboursOf = neighboursWithin(neighbourReach(doors, NEAR_METRES), NEAR_METRES)
   // How much a street's neighbours are worth is MEASURED, not assumed. See
   // fitNeighbourWeight: on this campaign it comes back near zero, and that is
   // the honest answer rather than a reason to drop the level.
@@ -1041,7 +1041,29 @@ function fitNeighbourWeight(
  * the campaign baseline, which is the honest answer for ground nobody has been
  * near.
  */
-function neighbourIndex(doors: OddsDoor[]): (street: string) => string[] {
+/** A street that connects to another, and the reach at which it starts to
+ *  count: the distance at which the two-distinct-doors rule below is first
+ *  satisfied. Recording the threshold rather than a yes/no is what lets the
+ *  Odds tab put a DISTANCE slider on the neighbourhood without rebuilding the
+ *  index for every position of it. */
+export interface NeighbourReach {
+  street: string
+  metres: number
+}
+
+/**
+ * Which streets are near which, with the distance each one needs.
+ *
+ * `maxMetres` sizes the grid and bounds the answer: nothing further than that
+ * is ever found, so build it at the widest reach anybody will ask for. The
+ * model itself builds at NEAR_METRES, which is the reach its own numbers are
+ * fitted at; the tab's slider builds a wider one lazily, and only when
+ * somebody opens the card that has the slider on it.
+ */
+export function neighbourReach(
+  doors: OddsDoor[],
+  maxMetres: number,
+): (street: string) => NeighbourReach[] {
   interface P { s: string; x: number; y: number }
   const cells = new Map<string, P[]>()
   const byStreet = new Map<string, P[]>()
@@ -1050,7 +1072,7 @@ function neighbourIndex(doors: OddsDoor[]): (street: string) => string[] {
     const y = d.lat * METRES_PER_DEG_LAT
     const x = d.lng * METRES_PER_DEG_LAT * Math.cos((d.lat * Math.PI) / 180)
     const p: P = { s: `${streetNameOf(d.street)}|${d.city}`, x, y }
-    const key = `${Math.floor(x / NEAR_METRES)},${Math.floor(y / NEAR_METRES)}`
+    const key = `${Math.floor(x / maxMetres)},${Math.floor(y / maxMetres)}`
     const c = cells.get(key)
     if (c) c.push(p)
     else cells.set(key, [p])
@@ -1058,8 +1080,8 @@ function neighbourIndex(doors: OddsDoor[]): (street: string) => string[] {
     if (b) b.push(p)
     else byStreet.set(p.s, [p])
   }
-  const memo = new Map<string, string[]>()
-  const R2 = NEAR_METRES * NEAR_METRES
+  const memo = new Map<string, NeighbourReach[]>()
+  const R2 = maxMetres * maxMetres
   return (street: string) => {
     let hit = memo.get(street)
     if (hit) return hit
@@ -1068,30 +1090,80 @@ function neighbourIndex(doors: OddsDoor[]): (street: string) => string[] {
     // connected. One is a geocode: 136 doors once sat stacked on 9 exact
     // coordinates in this very table, 83 of them on a town centroid, and a
     // single bad one must not be able to invent a corner that isn't there.
-    const votes = new Map<string, Set<number>>()
+    // Per candidate street we keep, for each of our own doors, how close that
+    // door gets to it; the threshold is then the SECOND smallest of those,
+    // which is exactly the radius at which a second distinct door joins in.
+    const votes = new Map<string, Map<number, number>>()
     if (mine) {
       for (let i = 0; i < mine.length; i++) {
         const p = mine[i]
-        const cx = Math.floor(p.x / NEAR_METRES)
-        const cy = Math.floor(p.y / NEAR_METRES)
+        const cx = Math.floor(p.x / maxMetres)
+        const cy = Math.floor(p.y / maxMetres)
         for (let dx = -1; dx <= 1; dx++) {
           for (let dy = -1; dy <= 1; dy++) {
             for (const q of cells.get(`${cx + dx},${cy + dy}`) ?? []) {
               if (q.s === street) continue
-              if ((p.x - q.x) ** 2 + (p.y - q.y) ** 2 > R2) continue
-              const v = votes.get(q.s)
-              if (v) v.add(i)
-              else votes.set(q.s, new Set([i]))
+              const d2 = (p.x - q.x) ** 2 + (p.y - q.y) ** 2
+              if (d2 > R2) continue
+              let v = votes.get(q.s)
+              if (!v) {
+                v = new Map()
+                votes.set(q.s, v)
+              }
+              const prev = v.get(i)
+              if (prev == null || d2 < prev) v.set(i, d2)
             }
           }
         }
       }
     }
-    hit = [...votes.entries()].filter(([, v]) => v.size >= 2).map(([s]) => s)
+    hit = []
+    for (const [s, perDoor] of votes) {
+      if (perDoor.size < 2) continue
+      const sorted = [...perDoor.values()].sort((a, b) => a - b)
+      hit.push({ street: s, metres: Math.sqrt(sorted[1]) })
+    }
     memo.set(street, hit)
     return hit
   }
 }
+
+/** Turn a reach index into the plain "who connects to this street" lookup the
+ *  model uses, at one radius. */
+export function neighboursWithin(
+  reach: (street: string) => NeighbourReach[],
+  metres: number,
+): (street: string) => string[] {
+  return (street) => {
+    const out: string[] = []
+    for (const n of reach(street)) if (n.metres <= metres) out.push(n.street)
+    return out
+  }
+}
+
+/**
+ * The same model with the neighbourhood set differently: how far it reaches,
+ * and how much it counts.
+ *
+ * A shallow copy is the whole implementation, and that is not a trick — every
+ * Map on the model is shared by reference and `geoChain` reads both of these
+ * off the model, so this costs nothing and cannot desynchronise from the real
+ * one. It exists so the Odds tab can draw what those two choices do without
+ * refitting anything, and without any other number on the page moving.
+ */
+export function withNeighbourhood(
+  model: OddsModel,
+  opts: { weight?: number; neighboursOf?: (street: string) => string[] },
+): OddsModel {
+  return {
+    ...model,
+    nearWeight: opts.weight ?? model.nearWeight,
+    neighboursOf: opts.neighboursOf ?? model.neighboursOf,
+  }
+}
+
+/** The reach the model's own numbers are fitted at. */
+export const FITTED_NEAR_METRES = NEAR_METRES
 
 // ---------------------------------------------------------------- prediction
 
@@ -1640,21 +1712,45 @@ export const streetKeyOf = (street: string, city: string) => `${streetNameOf(str
 // ---------------------------------------------------------------- how good is it
 
 export interface ModelScore {
-  /** Days of knocks held back. */
+  /** Days of knocks scored, none of which their own model had seen. */
   days: number
+  /** How many times the model was refit walking across them. */
+  refits: number
   /** Visits scored. */
   trials: number
-  /** Out of 100 pairs of doors, how often the livelier one was picked. 50 is
-   *  a coin toss. */
+  /** Out of 100 pairs of visits, how often the one that got a signature was
+   *  given the higher chance. 50 is a coin toss. */
   pickedLivelier: number
-  /** What it said against what happened, in ten-point bands. */
+  /** The same, on the answer half alone: the part the time grid rests on. */
+  answerPickedLivelier: number
+  /** What it said against what happened, in bands. */
   bands: { said: number; happened: number; n: number }[]
   /** The worst band, in percentage points. */
   worstBand: number
 }
 
+/** Refit every week walking forward. Refitting daily costs 32 model builds and
+ *  ~15s against 5 and ~2.4s, measured, for an answer that moves in the third
+ *  decimal: a week-old fit differs from a day-old one by a week of knocks out
+ *  of a campaign's worth. Published walk-forward protocols routinely refit on a
+ *  coarse grid for exactly this reason. */
+const SCORE_STEP_DAYS = 7
+
+/** Visits that must sit behind a cut before anything fitted on them is allowed
+ *  to predict. Below this the "model" is a campaign average with noise. */
+const SCORE_MIN_FIT = 400
+
+/** Bands narrower than this are mostly sampling noise about themselves. */
+const SCORE_MIN_BAND = 40
+
+/** Rows in the calibration table. Six, not ten: the model's spread is narrow,
+ *  so ten equal-count rows print the same number eight times, which reads as a
+ *  broken table rather than as the honest statement that it barely separates
+ *  doors. Six still shows both ends, which is where its whole range lives. */
+const SCORE_BANDS = 6
+
 /**
- * Measure the model against knocks it was not shown.
+ * Backtest the model across the whole campaign, walking forward.
  *
  * This exists because of a problem no amount of care in the model can fix: the
  * history it learns from is mostly SIMULATED, so any sentence written here
@@ -1662,77 +1758,140 @@ export interface ModelScore {
  * computed at run time is not. Replace the seeded history with real knocks and
  * this moves on its own, and nobody has to remember to edit a caveat.
  *
- * Method: refit on everything except the last `days` days, then predict those
- * days. It is the same prequential idea as the harness in
- * scripts/verify-odds-model.mjs, cut down to one split so it costs one extra
- * model build rather than twenty.
+ * METHOD, and the two things that make it a real backtest rather than a
+ * gesture at one:
  *
- * It reports the two things a person can actually act on: whether it can tell
- * two doors apart at all (a rank statistic, which is what "picked the livelier
- * one" is), and whether the numbers mean what they say (calibration). Those
- * are different virtues, and this model is much better at the second, which is
- * exactly what a total over a turf rests on.
+ *  1. WALK FORWARD, refitting every `stepDays`. Fit on everything before a
+ *     cut, predict the days up to the next cut, move the cut, repeat. Every
+ *     visit is therefore scored by a model that could not have seen it, and
+ *     the whole campaign gets scored rather than its last week. It used to
+ *     hold back the last 7 days and score only those, which measured the model
+ *     on whichever week the campaign happened to end on.
  *
- * Returns null when there is not enough held-back data to say anything, which
- * is a real state early in a campaign and must be shown as "not enough knocks
- * yet" rather than as a bad score.
+ *  2. THE DOOR'S HISTORY IS SEQUENTIAL, the fitted RATES are not. Visits are
+ *     collapsed once over the whole campaign, so each one already carries the
+ *     door's state as it stood on that porch: which visit this is, whether
+ *     anybody has ever answered, whether somebody has signed. That is what a
+ *     canvasser would have known. What the model is not allowed to know is how
+ *     doors like this one turned out, which is what refitting controls. Mixing
+ *     those two up is the easiest way to write a backtest that flatters
+ *     itself, or (as the previous version did, by re-collapsing only the
+ *     held-out days and restarting every door at visit 1) one that quietly
+ *     scores the model on situations it was never in.
+ *
+ * It scores the number the page actually leads with, P(signature this knock),
+ * so the calibration table validates the headline rather than a component of
+ * it. That also means the street adjustment is finally under test: it lives
+ * entirely on the sign half, which the old answer-only score never touched.
+ * The answer half keeps its own discrimination figure because the time grid
+ * rests on it alone.
+ *
+ * Returns null when there is not enough history to fit and still have days
+ * left to predict, which is a real state early in a campaign and must be shown
+ * as "not enough knocks yet" rather than as a bad score.
  */
 export function scoreOddsModel(
   knocks: OddsKnock[],
   doors: OddsDoor[],
-  days = 7,
+  opts: { stepDays?: number } = {},
 ): ModelScore | null {
-  if (!knocks.length) return null
-  let latest = -Infinity
-  for (const k of knocks) if (k.ts > latest) latest = k.ts
-  const end = new Date(latest)
-  const cutoff = new Date(
-    end.getFullYear(),
-    end.getMonth(),
-    end.getDate() - (days - 1),
-    0,
-    0,
-    0,
-    0,
-  ).getTime()
+  const step = Math.max(1, opts.stepDays ?? SCORE_STEP_DAYS)
+  if (knocks.length < SCORE_MIN_FIT) return null
 
-  const before = knocks.filter((k) => k.ts < cutoff)
-  if (before.length < 300) return null
-  const model = buildOddsModel(before, doors, { rank: false })
+  const residentsAll = new Map<string, number>()
+  for (const d of doors) if (d.residents) residentsAll.set(d.id, d.residents)
+  // Once, over everything: this is what carries each door's history forward
+  // correctly. `visits` comes back in ascending time order.
+  const { visits } = collapse(knocks, residentsAll)
+  if (!visits.length) return null
 
-  const { visits } = collapse(knocks.filter((k) => k.ts >= cutoff), model.residentsOf)
-  const ps: number[] = []
-  const ys: number[] = []
-  for (const v of visits) {
-    if (!v.interacted) continue
-    const o = doorOdds(model, v.household)
-    // A door the model calls closed gives no number, so there is nothing to
-    // score. Scoring it against the campaign average instead would be marking
-    // its own homework with a different pen.
-    if (!o.answer) continue
-    ps.push(o.answer.p)
-    ys.push(v.answered ? 1 : 0)
+  const midnight = (ts: number) => {
+    const d = new Date(ts)
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
   }
-  if (ps.length < 100) return null
+  const days = [...new Set(visits.map((v) => midnight(v.ts)))].sort((a, b) => a - b)
 
-  const bandMap = new Map<number, { said: number; happened: number; n: number }>()
-  for (let i = 0; i < ps.length; i++) {
-    const b = Math.min(9, Math.floor(ps[i] * 10))
-    const e = bandMap.get(b) ?? { said: 0, happened: 0, n: 0 }
-    e.said += ps[i]
-    e.happened += ys[i]
-    e.n++
-    bandMap.set(b, e)
+  // Visits strictly before each day, by one pass rather than a filter per day.
+  const behind: number[] = []
+  let p = 0
+  for (const d of days) {
+    while (p < visits.length && visits[p].ts < d) p++
+    behind.push(p)
   }
-  const bands = [...bandMap.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([, e]) => ({ said: e.said / e.n, happened: e.happened / e.n, n: e.n }))
-    .filter((b) => b.n >= 30)
+  const first = behind.findIndex((n) => n >= SCORE_MIN_FIT)
+  if (first < 0 || first >= days.length) return null
+
+  const sigP: number[] = []
+  const sigY: number[] = []
+  const ansP: number[] = []
+  const ansY: number[] = []
+  let refits = 0
+  let scoredDays = 0
+
+  for (let i = first; i < days.length; i += step) {
+    const cut = days[i]
+    const nextIdx = Math.min(i + step, days.length)
+    const end = nextIdx < days.length ? days[nextIdx] : Infinity
+    const model = buildOddsModel(
+      knocks.filter((k) => k.ts < cut),
+      doors,
+      { rank: false },
+    )
+    refits++
+    scoredDays += nextIdx - i
+
+    for (const v of visits) {
+      if (v.ts < cut) continue
+      if (v.ts >= end) break
+      if (!v.interacted) continue
+      // A door the model calls closed gets no number on screen, so there is
+      // nothing here to score. Marking it against the campaign average instead
+      // would be marking its own homework with a different pen.
+      if (v.wasClosed) continue
+      const street = model.streetOf.get(v.household) ?? null
+      const aCell = cellAt(model.answerBase, answerCell(v.visit, v.everAnswered))
+      const a = geoChain(model, street, aCell.p, 'answer').p
+      const sCell = cellAt(model.signBase, signCell(v.visit, v.partlySigned))
+      const s = geoChain(model, street, sCell.p, 'sign').p
+      ansP.push(a)
+      ansY.push(v.answered ? 1 : 0)
+      sigP.push(a * s)
+      sigY.push(v.signed ? 1 : 0)
+    }
+  }
+  if (sigP.length < 200) return null
+
+  // EQUAL-COUNT BANDS, not equal-width, and the difference is what makes this
+  // table say anything. The signature chance is tightly clustered — most doors
+  // are a first visit on a street with modest evidence — so five-point bands
+  // put 84% of 10,001 visits in a single row and the other rows on a few
+  // dozen. Splitting by rank instead gives every row the same weight behind
+  // it, and reads as what it is: the doors it was least hopeful about through
+  // to the ones it liked most, and what each group actually did.
+  const order = sigP.map((_, i) => i).sort((a, b) => sigP[a] - sigP[b])
+  const wanted = Math.min(SCORE_BANDS, Math.floor(order.length / SCORE_MIN_BAND))
+  const bands: { said: number; happened: number; n: number }[] = []
+  if (wanted >= 2) {
+    const size = Math.floor(order.length / wanted)
+    for (let b = 0; b < wanted; b++) {
+      const from = b * size
+      const to = b === wanted - 1 ? order.length : from + size
+      let said = 0
+      let happened = 0
+      for (let i = from; i < to; i++) {
+        said += sigP[order[i]]
+        happened += sigY[order[i]]
+      }
+      bands.push({ said: said / (to - from), happened: happened / (to - from), n: to - from })
+    }
+  }
 
   return {
-    days,
-    trials: ps.length,
-    pickedLivelier: Math.round(100 * rankAuc(ps, ys)),
+    days: scoredDays,
+    refits,
+    trials: sigP.length,
+    pickedLivelier: Math.round(100 * rankAuc(sigP, sigY)),
+    answerPickedLivelier: Math.round(100 * rankAuc(ansP, ansY)),
     bands,
     worstBand: bands.reduce((w, b) => Math.max(w, Math.abs(b.said - b.happened) * 100), 0),
   }

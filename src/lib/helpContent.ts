@@ -627,7 +627,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'What this tab does',
         target: 'odds-scope',
-        body: 'One box. Type a house, a street, a turf or a canvasser, and tap it. It works out what the NEXT knock there is likely to get.\nTwo numbers, always in this order: the chance somebody comes to the door, and the chance they sign once somebody does. Multiply them and you have the chance one knock ends in a signature.\nFor a set of doors it also gives a total: knock all of these once, expect about this many conversations and this many signatures.\nA canvasser also gets day chips: their doors on one day, or across every day they were out.\nType nothing and it shows the average door: every door in the campaign at once, which is what everything else here gets compared against.',
+        body: 'One box. Type a house, a street or a turf, and tap it. It works out what the NEXT knock there is likely to get.\nTwo numbers, always in this order: the chance somebody comes to the door, and the chance they sign once somebody does. Multiply them and you have the chance one knock ends in a signature.\nFor a set of doors it also gives a total: knock all of these once, expect about this many conversations and this many signatures.\nPlaces only, not people. What one canvasser should get is on the Canvassers tab, on the panel that opens when you tap somebody.\nType nothing and it shows the average door: every door in the campaign at once, which is what everything else here gets compared against.',
       },
       { heading: 'What counts as what', target: 'odds-scope', body: WHAT_COUNTS },
       {
@@ -658,12 +658,12 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Totals over a set of doors',
         target: 'odds-set',
-        body: 'Doors off the walk are counted separately, not in the totals. That is why "137 doors" can be "84 still worth knocking". The totals are about the 84.\n"The same doors, average ground" is what that many doors would be worth on an ordinary street. It is the comparison worth making before spending a morning.',
+        body: 'Doors the walk would not send anybody back to are left out of the totals. That is why "137 doors" can be "84 still worth knocking". The totals are about the 84.\nTwo different reasons a door is out, and only one of them is final. Everybody signed: nothing left to get. Not Interested, Skip or Hostile: a rule about the WALK, so nobody wastes a trip. That is not the same as the door being dead, and a single house says so when you open it.\n"The same doors, average ground" is what that many doors would be worth on an ordinary street. It is the comparison worth making before spending a morning.',
       },
       {
-        heading: 'Doors off the walk',
-        target: 'odds-closed',
-        body: 'Two different things, and only one of them is final.\nEverybody signed: nothing left to get. Leaving it out is not a guess.\nNot Interested, Skip, Hostile: a rule about the WALK, not a fact about the door. It comes off the list so nobody wastes a trip. It is not dead.\nThe last column is the only evidence there is either way: what happened the times somebody went back anyway. Read it as "sometimes worth another look", never as "a refusal means nothing", because those were doors a canvasser chose to retry rather than a fair sample.\nA refused door gets no percentage because nobody will be sent, so there is no next knock to put odds on.',
+        heading: 'How much the neighbourhood counts',
+        target: 'odds-near',
+        body: 'A street with little record of its own borrows from the streets that connect to it. This card shows what that borrowing is worth, with two sliders, because there are two separate choices in it.\nHow far they reach: how close a street has to come before it counts as connecting. Wider takes in more streets and less relevant ones. It redraws the curve.\nHow much they count: nothing at all, through to trusting a neighbour as much as the street itself. It reads along the curve.\nThe dashed line is where the campaign\'s own data puts the second one, worked out by checking how well each street\'s record actually matches its neighbours\'. The sliders are a what-if, and change nothing else on the page.\nA flat curve is an answer: this ground has enough of its own record that the neighbours barely move it. A steep one means the number you are reading is mostly borrowed.\nWhy these are sliders and not fixed numbers: smoothing a map towards its neighbours can create the smoothness it shows, and how you define a neighbour changes the answer as much as how much you weight one. Better to see how much rides on both.',
       },
       {
         heading: 'Refusals spread',
@@ -678,7 +678,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'How much to trust it',
         target: 'odds-quality',
-        body: 'Measured, not claimed. The model is refitted without the last few days of knocks, then asked to predict them.\n"Picked the livelier one 60 times out of 100" is how often, given two doors, it put the one that answered ahead. Fifty is a coin toss. Sixty is real but modest.\nThe table under it is the more useful half: when it said 39%, this many actually answered.',
+        body: 'Measured, not claimed, and measured across the whole campaign rather than its last week.\nIt walks forward: fit on everything before a day, predict that day, move on, refitting each week. So every knock in the test was scored by a model that had not seen it.\n"Picked the one that got a signature 53 times out of 100" is how often, given two knocks, it put the right one ahead. Fifty is a coin toss.\nThe table is the more useful half, and the better result: rows are equal-sized groups from the knocks it was least hopeful about to the ones it liked most. When it said 17%, 17 in 100 signed. That is what makes a total over a street worth having even though single doors are close to a coin toss.',
       },
       {
         heading: 'When not to trust it',
@@ -708,6 +708,11 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
         target: 'canvassers-table',
         body: 'Open a dot, a bar or a row for one person: signatures by day, what their knocks turned into, the turf and crews they worked.\n' +
           CARD_CONTROLS,
+      },
+      {
+        heading: 'What they should get next',
+        target: 'canvassers-projection',
+        body: 'The bottom card on one person\'s panel. Everything above it is what they have already done; this is the one part that looks forward.\nTwo halves multiplied. How many doors they get through on a day out, from their own history. What a door on their ground is worth, from the odds model.\nA day OUT, not a calendar day. "A week" is how many days a week they have actually been going, not seven.\nThe typical day is their middle day and the range is their own middle half, so a rained-off evening and a full Saturday are both in there.\nWhich doors: turf assigned to them by name if there is any, else turf dispatched to a crew they were out with, else the doors they have knocked. The card says which one it used.\nIt is their observed pace, not a target, and nobody should be held to it.',
       },
       {
         heading: 'A fair reading',

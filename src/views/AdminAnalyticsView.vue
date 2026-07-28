@@ -39,11 +39,16 @@ import { wilson, linearRegression } from '@/lib/stats'
 import {
   buildOddsModel,
   doorOdds,
+  FITTED_NEAR_METRES,
+  neighbourReach,
+  neighboursWithin,
   percentileOf,
   scoreOddsModel,
   setOdds,
+  withNeighbourhood,
 } from '@/lib/odds'
 import { titleCase } from '@/lib/streetWalk'
+import { whenIdle } from '@/lib/idle'
 import { ANALYTICS_TAB_HELP } from '@/lib/helpContent'
 import type { KnockOutcome } from '@/types'
 
@@ -283,6 +288,22 @@ onPageEnter(async () => {
     loadNote.value = 'Crunching…'
     knocks.value = enrich(rows)
     applyOddsDeepLink()
+    // THE ODDS MODEL IS BUILT ON AN IDLE CALLBACK, NOT DURING THE LOAD.
+    // Measured on the live campaign: 2.1s to build with door ranking on, and
+    // another 0.8s for the backtest that walks the whole campaign refitting
+    // every week. Every other tab on this page is arithmetic over rows already
+    // in memory and paints in milliseconds, so doing this inline would make
+    // Overview wait on a tab most visits never open. Deferred rather than
+    // gated on the tab, because a 2s freeze the moment somebody taps Odds is
+    // worse than 2s of quiet work behind a page that is already usable.
+    whenIdle(() => {
+      oddsReady.value = true
+      // A second hop: the backtest is the most expensive single thing here and
+      // only one card at the bottom of one tab reads it.
+      whenIdle(() => {
+        scoreReady.value = true
+      }, 4000)
+    }, 4000)
   } catch (e) {
     loadError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -729,6 +750,31 @@ function rateItem(label: string, hits: number, of: number, unit: string, id?: st
   }
 }
 
+/**
+ * ORDER A RATE CHART BY THE BOTTOM OF ITS RANGE, NOT ITS MIDDLE (2026-07-27).
+ *
+ * Every rate chart here draws the observed rate with a Wilson interval around
+ * it, and then sorted on the observed rate alone, which put a turf with 13
+ * conversations at 69% level with one that had 159 at 69%. Measured on the
+ * live campaign, that is the actual top of the turf chart: the second of those
+ * is a fact about the ground and the first is four coin flips.
+ *
+ * Ranking on the lower bound is the standard fix for ordering rated things
+ * with wildly different sample sizes, and it needs no new machinery, no prior
+ * and no constant: the interval is already computed, and a group is pushed
+ * down by exactly as much as its own uncertainty warrants. A thin turf has to
+ * earn its place by being knocked more, which is also the honest instruction.
+ *
+ * THE BARS STILL SHOW THE OBSERVED RATE. Only the order changes, so nothing on
+ * screen becomes a derived number a manager cannot check against the "12 of 34
+ * conversations" beside it, and the tooltip's "Likely between 42% and 88%"
+ * already explains why a small group sits lower than its headline suggests.
+ * This is the literature's own framing for league tables: screening, not
+ * scoring.
+ */
+const byLowerBound = (a: BarItem, b: BarItem) =>
+  (b.lo ?? b.value) - (a.lo ?? a.value) || b.value - a.value
+
 // ---------------------------------------------------------------- overview
 
 /** "How much of the county is left" — range-independent on purpose: a door
@@ -841,7 +887,7 @@ function rateBy(
   return [...per.entries()]
     .filter(([, e]) => e.n >= minDen)
     .map(([label, e]) => rateItem(label, e.s, e.n, unit))
-    .sort((a, b) => b.value - a.value)
+    .sort(byLowerBound)
 }
 
 /** The same rate counted over DOORS instead of knocks: a door counts once,
@@ -861,7 +907,7 @@ function signRateByDoor(key: (k: Knock) => string, include: (k: Knock) => boolea
   return [...per.entries()]
     .filter(([, e]) => e.knocked.size >= minDen)
     .map(([label, e]) => rateItem(label, e.signed.size, e.knocked.size, 'doors knocked'))
-    .sort((a, b) => b.value - a.value)
+    .sort(byLowerBound)
 }
 
 /** One entry point for every sign-rate chart, so the chip pair switches all
@@ -1015,8 +1061,14 @@ const signRateBySquad = computed(() => signRateBy((k) => k.squad, (k) => k.squad
 /** Built from every knock and every door, once. `rank: true` scores the whole
  *  county so a single house can be placed against all of them, which is what
  *  "compare one house to everything" needs. */
+/** Flipped on an idle callback once the load finishes. See the load function:
+ *  these two are the only expensive things on the page and they belong to one
+ *  tab. */
+const oddsReady = ref(false)
+const scoreReady = ref(false)
+
 const oddsModel = computed(() =>
-  knocks.value.length && doorRows.value.length
+  oddsReady.value && knocks.value.length && doorRows.value.length
     ? buildOddsModel(
         knocks.value.map((k) => ({ household: k.household, ts: k.ts, outcome: k.outcome })),
         doorRows.value.map((d) => ({
@@ -1036,7 +1088,7 @@ const oddsModel = computed(() =>
  *  because the history it learns from is mostly simulated and any sentence
  *  written here would be a claim about a simulator. */
 const oddsScore = computed(() =>
-  knocks.value.length && doorRows.value.length
+  scoreReady.value && knocks.value.length && doorRows.value.length
     ? scoreOddsModel(
         knocks.value.map((k) => ({ household: k.household, ts: k.ts, outcome: k.outcome })),
         doorRows.value.map((d) => ({
@@ -1062,11 +1114,19 @@ const oddsScore = computed(() =>
  * before you could look for it, which is a question nobody has an opinion
  * about. You know the name. Type the name.
  */
-type PickKind = 'house' | 'street' | 'turf' | 'canvasser'
+/**
+ * PLACES, NOT PEOPLE (2026-07-27, user call). The box used to find canvassers
+ * too, and a canvasser is not a scope of the same kind: a house, a street and a
+ * turf are all "some ground, what will it give", while a person is "how is this
+ * person doing", which is the Canvassers tab's whole subject. Their odds live
+ * there now, on the panel that opens when you tap one, where the rest of what
+ * is known about them already is.
+ */
+type PickKind = 'house' | 'street' | 'turf'
 
 interface OddsHit {
   kind: PickKind
-  /** Household id, street key, turf id, or profile id. */
+  /** Household id, street key, or turf id. */
   id: string
   label: string
   sub: string
@@ -1076,12 +1136,10 @@ const KIND_LABEL: Record<PickKind, string> = {
   house: 'House',
   street: 'Street',
   turf: 'Turf',
-  canvasser: 'Canvasser',
 }
 
 const oddsQuery = ref('')
 const oddsPick = ref<OddsHit | null>(null)
-const pickedDay = ref('') // canvasser only. '' = every day
 
 /** Doors currently sitting in each turf, for the hint and for the door set. */
 const doorsPerTurf = computed(() => {
@@ -1131,15 +1189,6 @@ const oddsHits = computed<OddsHit[]>(() => {
       sub: `${fmtCount(doorsPerTurf.value.get(t.id) ?? 0)} doors`,
     }))
 
-  const people: OddsHit[] = canvasserStats.value
-    .filter((c) => c.name.toUpperCase().includes(q))
-    .map((c) => ({
-      kind: 'canvasser' as const,
-      id: c.id,
-      label: c.name,
-      sub: `${fmtCount(c.knocks)} knocks`,
-    }))
-
   // Houses come from the raw address rows, so they need the same town filter
   // the model applied to everything else: without it the box happily offers a
   // house in a town the campaign has never knocked, whose odds would be the
@@ -1148,13 +1197,16 @@ const oddsHits = computed<OddsHit[]>(() => {
   const houses: OddsHit[] = doorRows.value
     .filter((d) => d.street.toUpperCase().includes(q) && (!onGround || onGround.has(d.city)))
     .slice(0, 60)
-    .map((d) => ({ kind: 'house' as const, id: d.id, label: d.street, sub: d.city }))
+    // Title cased like the street rows beside them: the voter file stores
+    // "12 GROVE CT" and a list mixing that with "Grove Ct" reads as two
+    // different kinds of thing.
+    .map((d) => ({ kind: 'house' as const, id: d.id, label: titleCase(d.street), sub: d.city }))
   houses.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }))
 
   const hasNumber = /\d/.test(q)
   const groups = hasNumber
-    ? [houses.slice(0, 25), streets.slice(0, 6), turfs.slice(0, 4), people.slice(0, 4)]
-    : [streets.slice(0, 10), turfs.slice(0, 6), people.slice(0, 6), houses.slice(0, 20)]
+    ? [houses.slice(0, 25), streets.slice(0, 8), turfs.slice(0, 6)]
+    : [streets.slice(0, 12), turfs.slice(0, 8), houses.slice(0, 20)]
   return groups.flat()
 })
 
@@ -1162,7 +1214,6 @@ const oddsHits = computed<OddsHit[]>(() => {
  *  something the box no longer names. */
 function pickOdds(hit: OddsHit) {
   oddsPick.value = hit
-  pickedDay.value = ''
   oddsQuery.value = ''
 }
 function clearOddsPick() {
@@ -1188,15 +1239,6 @@ function applyOddsDeepLink() {
   if (d) oddsPick.value = { kind: 'house', id: d.id, label: d.street, sub: d.city }
 }
 
-/** Days that canvasser was out, newest first. */
-const personDays = computed(() => {
-  const pick = oddsPick.value
-  if (pick?.kind !== 'canvasser') return []
-  const days = new Set<string>()
-  for (const k of knocks.value) if (k.canvasser === pick.id) days.add(k.day)
-  return [...days].sort().reverse().slice(0, 30)
-})
-
 /**
  * The doors one canvasser is responsible for, resolved in a stated order.
  *
@@ -1207,37 +1249,34 @@ const personDays = computed(() => {
  * asked for.
  */
 const personDoors = computed<{ ids: string[]; how: string }>(() => {
-  const pick = oddsPick.value
-  if (pick?.kind !== 'canvasser') return { ids: [], how: '' }
-  const person = pick.id
-  const day = pickedDay.value
-  const inDay = (k: Knock) => k.canvasser === person && (!day || k.day === day)
+  const person = canvasserFocus.value
+  if (!person) return { ids: [], how: '' }
 
   // 1. Turf handed to them by name.
   const mine = new Set(turfRows.value.filter((t) => t.assignee_id === person).map((t) => t.id))
   if (mine.size) {
     const ids = doorRows.value.filter((d) => d.turf_id && mine.has(d.turf_id)).map((d) => d.id)
-    if (ids.length) return { ids, how: 'Turf assigned to them' }
+    if (ids.length) return { ids, how: 'turf assigned to them by name' }
   }
 
   // 2. Turf dispatched to a crew they were out with, taken from the squad
   //    stamped on their own knocks.
   const squads = new Set<string>()
-  for (const k of knocks.value) if (inDay(k) && k.squadId) squads.add(k.squadId)
+  for (const k of knocks.value) if (k.canvasser === person && k.squadId) squads.add(k.squadId)
   if (squads.size) {
     const crew = new Set(
       turfRows.value.filter((t) => t.squad_id && squads.has(t.squad_id)).map((t) => t.id),
     )
     if (crew.size) {
       const ids = doorRows.value.filter((d) => d.turf_id && crew.has(d.turf_id)).map((d) => d.id)
-      if (ids.length) return { ids, how: "Their crew's turf" }
+      if (ids.length) return { ids, how: "turf dispatched to a crew they were out with" }
     }
   }
 
   // 3. The doors they actually knocked. Always something, and a perfectly good
   //    question: what is left at the doors they worked.
-  const ids = [...new Set(knocks.value.filter(inDay).map((k) => k.household))]
-  return { ids, how: 'Doors they knocked' }
+  const ids = [...new Set(knocks.value.filter((k) => k.canvasser === person).map((k) => k.household))]
+  return { ids, how: 'the doors they have knocked' }
 })
 
 /** The door ids the pick resolves to. Null for a single house, which has its
@@ -1263,24 +1302,177 @@ const oddsDoorSet = computed<{ ids: string[]; title: string; how: string } | nul
   if (pick.kind === 'street') {
     return { ids: m.doorsOnStreet.get(pick.id) ?? [], title: pick.label, how: pick.sub }
   }
-  if (pick.kind === 'turf') {
-    return {
-      ids: doorRows.value.filter((d) => d.turf_id === pick.id).map((d) => d.id),
-      title: pick.label,
-      how: 'Turf',
-    }
+  return {
+    ids: doorRows.value.filter((d) => d.turf_id === pick.id).map((d) => d.id),
+    title: pick.label,
+    how: 'Turf',
   }
-  if (pick.kind === 'canvasser') {
-    const { ids, how } = personDoors.value
-    return { ids, title: pick.label, how }
-  }
-  return null
 })
 
 const setResult = computed(() => {
   const m = oddsModel.value
   const set = oddsDoorSet.value
   return m && set && set.ids.length ? setOdds(m, set.ids) : null
+})
+
+// ------------------------------------------------- one canvasser's projection
+/**
+ * WHAT ONE PERSON SHOULD GET, over a day out or a week of them (2026-07-27,
+ * user call: "what I want is the ability to have projections for a person for
+ * a week or for today, or for a custom number of days working").
+ *
+ * The odds model says what a DOOR is worth. A projection needs the other
+ * half — how many doors this person gets through — and that is not a
+ * probability, it is a pace. So it comes from their own history and nowhere
+ * else: no target, no campaign average, no benchmark dressed up as an
+ * expectation.
+ *
+ * THE UNIT IS A DAY OUT, NOT A CALENDAR DAY. A volunteer who canvasses twice a
+ * week has a pace per shift; multiplying it by seven would project a week in
+ * which they never went to work. So "a week" resolves to how many days a week
+ * they actually go out, measured, and the panel says the number it used.
+ *
+ * The typical day is the MEDIAN, and the range is their own quartiles rather
+ * than anything modelled. A canvasser's daily door count is not a smooth
+ * quantity — a half day, a rained-off evening and a full Saturday are all in
+ * there — so the middle half of their own days is both the honest spread and
+ * the one a person can check against their memory.
+ *
+ * External sanity check, from the research notes: published field-organising
+ * guidance puts a canvasser at 10 to 25 doors an hour depending on housing
+ * density, over shifts of 3 to 5 hours. This campaign's median day out is 44
+ * doors, which sits squarely inside that. The benchmark is deliberately NOT on
+ * screen: it is a check on whether the arithmetic is sane, not a bar to hold
+ * anybody to.
+ */
+interface Pace {
+  /** Distinct doors on a typical day out. */
+  typical: number
+  lo: number
+  hi: number
+  /** Days they have actually been out. */
+  daysOut: number
+  /** Days a week they go out, measured across the span they have been active. */
+  perWeek: number
+}
+
+const personPace = computed<Pace | null>(() => {
+  const id = canvasserFocus.value
+  if (!id) return null
+  const perDay = new Map<string, Set<string>>()
+  for (const k of knocks.value) {
+    if (k.canvasser !== id) continue
+    let s = perDay.get(k.day)
+    if (!s) {
+      s = new Set()
+      perDay.set(k.day, s)
+    }
+    s.add(k.household)
+  }
+  if (!perDay.size) return null
+  const counts = [...perDay.values()].map((s) => s.size).sort((a, b) => a - b)
+  const at = (q: number) => counts[Math.min(counts.length - 1, Math.floor(q * counts.length))]
+  const daysOut = counts.length
+
+  // Span in whole days, built from the day strings rather than by subtracting
+  // 86.4M ms: across a DST boundary that arithmetic lands at 23:00 or 01:00 of
+  // the intended day and quietly loses one.
+  const days = [...perDay.keys()].sort()
+  const from = dayStrMs(days[0])
+  const to = dayStrMs(days[days.length - 1])
+  const span = from != null && to != null ? Math.round((to - from) / 86_400_000) + 1 : daysOut
+  const perWeek = Math.min(7, Math.max(1, Math.round((daysOut / Math.max(span, 1)) * 7)))
+
+  return {
+    typical: at(0.5),
+    lo: daysOut >= 4 ? at(0.25) : counts[0],
+    hi: daysOut >= 4 ? at(0.75) : counts[counts.length - 1],
+    daysOut,
+    perWeek,
+  }
+})
+
+/** The odds across the doors that canvasser is responsible for. */
+const personSet = computed(() => {
+  const m = oddsModel.value
+  const ids = personDoors.value.ids
+  return m && ids.length ? setOdds(m, ids) : null
+})
+
+type ProjMode = 'today' | 'week' | 'custom'
+const projMode = ref<ProjMode>('today')
+const projCustom = ref(3)
+
+/** Days out the projection covers. "A week" is THEIR week, not seven. */
+const projDays = computed(() => {
+  if (projMode.value === 'custom') return Math.min(60, Math.max(1, Math.round(projCustom.value || 1)))
+  if (projMode.value === 'week') return personPace.value?.perWeek ?? 1
+  return 1
+})
+
+/**
+ * Doors, conversations and signatures over `projDays` days out.
+ *
+ * Per-door averages come from the person's OWN ground rather than from the
+ * campaign, so somebody working a hard turf is projected on a hard turf. They
+ * are taken over the doors that are still open, because those are the ones
+ * anybody will be sent to.
+ *
+ * The range multiplies the slow day by the low end of the rate and the fast
+ * day by the high end. That is deliberately the widest honest reading: the two
+ * uncertainties are not independent — a person who gets through more doors on
+ * a good evening is having a good evening at the doors too — so treating them
+ * as independent and narrowing the band would be inventing precision.
+ */
+const projection = computed(() => {
+  const pace = personPace.value
+  const s = personSet.value
+  if (!pace || !s || !s.open) return null
+  const days = projDays.value
+  const perDoorConv = s.expectedConversations.value / s.open
+  const perDoorSig = s.expectedSignatures.value / s.open
+  const perDoorConvLo = s.expectedConversations.lo / s.open
+  const perDoorConvHi = s.expectedConversations.hi / s.open
+  const perDoorSigLo = s.expectedSignatures.lo / s.open
+  const perDoorSigHi = s.expectedSignatures.hi / s.open
+
+  const doors = pace.typical * days
+  const doorsLo = pace.lo * days
+  const doorsHi = pace.hi * days
+  return {
+    days,
+    doors,
+    conversations: { value: doors * perDoorConv, lo: doorsLo * perDoorConvLo, hi: doorsHi * perDoorConvHi },
+    signatures: { value: doors * perDoorSig, lo: doorsLo * perDoorSigLo, hi: doorsHi * perDoorSigHi },
+    /** Their ground runs out partway through. Not a cap on the projection —
+     *  the answer is more turf, and saying so is the actionable half. */
+    runsOut: doors > s.open ? Math.max(1, Math.floor(s.open / Math.max(1, pace.typical))) : 0,
+    open: s.open,
+  }
+})
+
+const projTiles = computed<Tile[]>(() => {
+  const p = projection.value
+  const pace = personPace.value
+  if (!p || !pace) return []
+  const range = (r: { lo: number; hi: number }) => `${r.lo.toFixed(0)} to ${r.hi.toFixed(0)}`
+  return [
+    {
+      label: p.days === 1 ? 'Doors in a day out' : `Doors over ${p.days} days out`,
+      value: fmtCount(Math.round(p.doors)),
+      hint: `${fmtCount(pace.typical)} on a typical day, ${pace.lo} to ${pace.hi}`,
+    },
+    {
+      label: 'Conversations',
+      value: p.conversations.value.toFixed(0),
+      hint: range(p.conversations),
+    },
+    {
+      label: 'Signatures',
+      value: p.signatures.value.toFixed(0),
+      hint: range(p.signatures),
+    },
+  ]
 })
 
 const houseResult = computed(() => {
@@ -1324,9 +1516,11 @@ function ordinal(n: number): string {
   return `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`
 }
 
-const scoreSubtitle = computed(() =>
-  oddsScore.value ? `tested on the last ${oddsScore.value.days} days, held back` : '',
-)
+const scoreSubtitle = computed(() => {
+  const s = oddsScore.value
+  if (!s) return ''
+  return `backtested over ${fmtCount(s.days)} days, refitting ${s.refits} times`
+})
 
 const oddsPct = (p: number) => fmtPct(p, 1)
 const oddsBand = (e: { lo: number; hi: number }) =>
@@ -1487,28 +1681,213 @@ const timeGrid = computed(() => {
 const timeRows = (values: (number | null)[][]) =>
   TIME_ROWS.map((r, i) => [r, ...values[i].map((v) => (v == null ? 'too few' : fmtPct(v, 1)))])
 
+// The "Doors off the walk" card is GONE (2026-07-27, user call). It broke the
+// closed doors down by reason and reported what going back to each had got.
+// Two things were wrong with it: nobody is going to be sent back to those
+// doors, so the row was not something a manager could act on; and the card
+// existed largely to explain why a set's open count is lower than its door
+// count, which is explaining an absence rather than showing anything. The
+// "still worth knocking" hint under the door count already says it in five
+// words. `closedBreakdown` and `reopened` stay in odds.ts: a single closed
+// house still says "Off the walk" with what happened the times somebody went
+// anyway, which is the one place that evidence answers a question somebody
+// asked.
+
 /**
- * Where each closed door went, so a small "still open" number explains itself
- * instead of just looking wrong.
+ * HOW MUCH IS THE NEIGHBOURHOOD PULLING THIS (2026-07-27, user call: "we can
+ * just put in a graph that has a knob that goes up and down that says how much
+ * it affects it... how much is the neighborhood pulling it down?").
  *
- * The third column is the point (2026-07-27, user call). Saying these are
- * "left out of the totals" on its own implies a refusal makes a door dead,
- * and it does not: it takes the door off the WALK. The only evidence about
- * what a refused door would actually do is the times somebody went back
- * anyway, so that is what the column reports, measured, per reason.
+ * The model already measures how much a neighbouring street's record carries
+ * to this one (`nearWeight`, fitted by regressing each street's own lean on its
+ * neighbourhood's). This exposes that constant as a control and draws what it
+ * does.
+ *
+ * WHY THIS IS THE RIGHT THING TO EXPOSE, rather than a tidy fixed value: the
+ * spatial-statistics literature is unusually direct about it. Quick, Song &
+ * Tabb (2020) show a spatial smoother can manufacture the smoothness it
+ * displays, and the CAR weight-matrix work finds model fit and estimates
+ * moving substantially with the neighbour specification — the standard advice
+ * is to explore the weighting rather than assume one. A knob is that
+ * exploration, in the one place somebody would want it.
+ *
+ * THE KNOB NEVER MOVES ANY OTHER NUMBER ON THE PAGE. It drives this card and
+ * nothing else, so a manager who leaves it pushed to one end cannot walk away
+ * with a tile that quietly disagrees with the model. What it answers is a
+ * what-if, and what-ifs belong inside their own frame.
+ *
+ * The curve is computed ONCE per scope, at eleven weights, and the slider only
+ * reads off it. Recomputing per drag would be several hundred door evaluations
+ * a frame.
  */
-const closedRows = computed(() => {
-  const back = new Map((oddsModel.value?.reopened ?? []).map((r) => [r.reason, r]))
-  return (setResult.value?.closedBreakdown ?? []).map((c) => {
-    if (c.reason === 'signed') return [c.label, c.count, 'nothing left to get']
-    const r = back.get(c.reason)
-    if (!r || r.went < 10) return [c.label, c.count, 'never gone back to']
-    return [
-      c.label,
-      c.count,
-      `gone back to ${fmtCount(r.went)} times: ${fmtPct(r.answered / r.went, 0)} answered, ${fmtCount(r.signed)} signed`,
-    ]
-  })
+const NEAR_STEPS = 11
+/** A mean over doors converges long before the whole set, and the curve is
+ *  redrawn every time the distance slider moves, so it has to stay cheap. */
+const NEAR_SAMPLE = 150
+/** The widest the distance slider goes, and therefore how far the lazy index
+ *  looks. Past a few hundred metres "the street that connects to this one"
+ *  stops meaning anything: it is just the rest of the neighbourhood. */
+const NEAR_MAX_METRES = 400
+
+const nearWeightAt = ref<number | null>(null) // null = wherever the fit put it
+const nearMetresAt = ref(FITTED_NEAR_METRES)
+
+/** The doors the card is about: one house, or the picked set. Deliberately
+ *  nothing when nothing is picked — "the average door" is every street in the
+ *  county, and a street's neighbourhood is not a meaningful idea there. */
+const nearScopeIds = computed<string[]>(() => {
+  const pick = oddsPick.value
+  if (!pick) return []
+  if (pick.kind === 'house') return houseResult.value && !houseResult.value.closed ? [pick.id] : []
+  return oddsDoorSet.value?.ids ?? []
+})
+
+/** Built once, lazily, and only for the card: it looks much further than the
+ *  model's own index and is correspondingly more expensive, so it must not be
+ *  on the path of anything else. */
+const nearReachIndex = computed(() => {
+  const m = oddsModel.value
+  if (!m || !nearScopeIds.value.length) return null
+  const onGround = m.cities ? new Set(m.cities) : null
+  return neighbourReach(
+    doorRows.value
+      .filter((d) => !onGround || onGround.has(d.city))
+      .map((d) => ({ id: d.id, street: d.street, city: d.city, lat: d.lat, lng: d.lng })),
+    NEAR_MAX_METRES,
+  )
+})
+
+/** The chance of a signature across the scope, swept over the weight, at the
+ *  distance the other slider is on. Recomputed when the distance moves, read
+ *  from when the weight moves — which is why the weight slider is smooth and
+ *  the distance one has coarse steps. */
+const nearCurve = computed(() => {
+  const m = oddsModel.value
+  const reach = nearReachIndex.value
+  const ids = nearScopeIds.value
+  if (!m || !reach || !ids.length) return null
+  const step = Math.max(1, Math.ceil(ids.length / NEAR_SAMPLE))
+  const sample = ids.filter((_, i) => i % step === 0)
+  const neighboursOf = neighboursWithin(reach, nearMetresAt.value)
+  const points: number[] = []
+  for (let s = 0; s < NEAR_STEPS; s++) {
+    const tweaked = withNeighbourhood(m, { weight: s / (NEAR_STEPS - 1), neighboursOf })
+    let sum = 0
+    let n = 0
+    for (const id of sample) {
+      const o = doorOdds(tweaked, id)
+      if (!o.signature) continue
+      sum += o.signature.p
+      n++
+    }
+    points.push(n ? sum / n : 0)
+  }
+  if (!points.some((p) => p > 0)) return null
+  const lo = Math.min(...points)
+  const hi = Math.max(...points)
+  // How many streets the reach pulls in, and — the part that decides what the
+  // sentence below may claim — how many conversations there actually are to
+  // borrow. A flat curve has two completely different causes: this street
+  // knows its own mind, or nobody has knocked anywhere near here. Saying the
+  // first when the second is true is the worst thing this card could do.
+  const streets = new Set<string>()
+  let scoped = 0
+  let nearN = 0
+  let ownN = 0
+  for (const id of sample) {
+    const st = m.streetOf.get(id)
+    if (!st || streets.has(st)) continue
+    streets.add(st)
+    const near = neighboursOf(st)
+    scoped += near.length
+    for (const n of near) nearN += m.streetSign.get(n)?.n ?? 0
+    ownN += m.streetSign.get(st)?.n ?? 0
+  }
+  return {
+    points,
+    doors: sample.length,
+    fitted: m.nearWeight,
+    swing: (hi - lo) * 100,
+    lo,
+    hi,
+    neighbours: streets.size ? Math.round(scoped / streets.size) : 0,
+    nearN,
+    ownN,
+  }
+})
+
+/** Where the weight slider sits, 0 to 1. Defaults to the fitted value. */
+const nearAt = computed(() => nearWeightAt.value ?? nearCurve.value?.fitted ?? 0)
+
+/** A reading off the curve, with a linear step between the two points either
+ *  side of the position asked for. */
+function nearReadAt(w: number): number | null {
+  const c = nearCurve.value
+  if (!c) return null
+  const x = Math.max(0, Math.min(1, w)) * (NEAR_STEPS - 1)
+  const i = Math.min(NEAR_STEPS - 2, Math.floor(x))
+  const f = x - i
+  return c.points[i] * (1 - f) + c.points[i + 1] * f
+}
+
+const nearReading = computed(() => nearReadAt(nearAt.value))
+const nearFittedReading = computed(() =>
+  nearCurve.value ? nearReadAt(nearCurve.value.fitted) : null,
+)
+
+/** Both sliders back where the campaign's own data put them. */
+const nearMoved = computed(
+  () => nearWeightAt.value !== null || nearMetresAt.value !== FITTED_NEAR_METRES,
+)
+function resetNear() {
+  nearWeightAt.value = null
+  nearMetresAt.value = FITTED_NEAR_METRES
+}
+
+const nearLabels = computed(() =>
+  Array.from({ length: NEAR_STEPS }, (_, i) => `${Math.round((100 * i) / (NEAR_STEPS - 1))}%`),
+)
+
+const nearSeries = computed<TimeSeries[]>(() => {
+  const c = nearCurve.value
+  const fit = nearFittedReading.value
+  if (!c || fit == null) return []
+  return [
+    { name: 'A signature this knock', color: cat.value[0], values: c.points, area: true },
+    {
+      name: 'Where the fit puts it',
+      color: cat.value[1],
+      values: c.points.map(() => fit),
+      dash: true,
+      width: 2,
+    },
+  ]
+})
+
+const nearRows = computed(() =>
+  (nearCurve.value?.points ?? []).map((p, i) => [nearLabels.value[i], fmtPct(p, 1)]),
+)
+
+/** Plain words for the whole point of the card, and the reason has to be the
+ *  real one: a flat curve because the street knows its own mind and a flat
+ *  curve because nobody has been near the place look identical on the chart
+ *  and mean opposite things. */
+const nearSentence = computed(() => {
+  const c = nearCurve.value
+  if (!c) return ''
+  const reach = `Reaching ${nearMetresAt.value}m takes in about ${c.neighbours} connecting ${c.neighbours === 1 ? 'street' : 'streets'}.`
+  if (c.nearN < 20) {
+    return `${reach} There is almost nothing to borrow from them: ${fmtCount(c.nearN)} conversations between them, so how much they count barely changes the answer. This is a reading of the campaign as a whole, not of here.`
+  }
+  // Deliberately NOT "because this street has enough of its own record": with
+  // 19 conversations of its own against 224 nearby, that would be plainly
+  // false. A flat curve on real neighbour evidence means the neighbourhood
+  // leans the way the campaign already does, so how much it counts is moot.
+  if (c.swing < 0.5) {
+    return `${reach} Their ${fmtCount(c.nearN)} conversations point much the same way as the campaign as a whole, so how much they count makes almost no difference: ignoring them and trusting them completely land within ${c.swing.toFixed(1)} of a point of each other. This street has ${fmtCount(c.ownN)} conversations of its own.`
+  }
+  const dir = c.points[NEAR_STEPS - 1] >= c.points[0] ? 'up' : 'down'
+  return `${reach} They are pulling this ${dir}: between ignoring their ${fmtCount(c.nearN)} conversations and trusting them completely there are ${c.swing.toFixed(1)} points, ${fmtPct(c.lo, 1)} to ${fmtPct(c.hi, 1)}.`
 })
 
 const streetsInSet = computed<BarItem[]>(() =>
@@ -2013,6 +2392,79 @@ const focusRanks = computed<FocusRank[]>(() => {
           >
             <BarChart :items="focusMix" :color="cat[0]" measure="Knocks logged" />
           </ChartCard>
+
+          <!-- WHAT THIS PERSON SHOULD GET NEXT. Everything above is what they
+               have already done; this is the one part of the panel that looks
+               forward, which is why it sits at the bottom and says out loud
+               which doors it is about. -->
+          <ChartCard
+            v-if="focus?.kind === 'canvasser' && projection && personPace"
+            title="What they should get next"
+            data-help="canvassers-projection"
+            :subtitle="`over ${projection.days === 1 ? 'one day out' : projection.days + ' days out'}`"
+            :columns="['', 'Expected', 'Range']"
+            :rows="projTiles.map((t) => [t.label, t.value, t.hint ?? ''])"
+          >
+            <div class="chip-row" role="group" aria-label="How long">
+              <button
+                type="button"
+                class="chip"
+                :class="{ on: projMode === 'today' }"
+                @click="projMode = 'today'"
+              >
+                One day out
+              </button>
+              <button
+                type="button"
+                class="chip"
+                :class="{ on: projMode === 'week' }"
+                @click="projMode = 'week'"
+              >
+                A week
+              </button>
+              <button
+                type="button"
+                class="chip"
+                :class="{ on: projMode === 'custom' }"
+                @click="projMode = 'custom'"
+              >
+                Set a number
+              </button>
+              <input
+                v-if="projMode === 'custom'"
+                v-model.number="projCustom"
+                class="day-input proj-days"
+                type="number"
+                min="1"
+                max="60"
+                aria-label="Days out"
+              />
+            </div>
+
+            <div class="tiles">
+              <div v-for="t in projTiles" :key="t.label" class="tile">
+                <span class="tile-label muted">{{ t.label }}</span>
+                <span class="tile-value">{{ t.value }}</span>
+                <span v-if="t.hint" class="tile-hint muted">{{ t.hint }}</span>
+              </div>
+            </div>
+
+            <p class="muted proj-note">
+              At their own pace over {{ fmtCount(personPace.daysOut) }}
+              {{ personPace.daysOut === 1 ? 'day' : 'days' }} out, on
+              {{ fmtCount(projection.open) }} doors still worth knocking:
+              {{ personDoors.how }}.<span v-if="projMode === 'week'">
+                A week is {{ personPace.perWeek }}
+                {{ personPace.perWeek === 1 ? 'day' : 'days' }} out, which is how often they
+                have been going.</span
+              >
+            </p>
+            <p v-if="projection.runsOut" class="proj-warn">
+              Their ground runs out after about
+              {{ projection.runsOut }} {{ projection.runsOut === 1 ? 'day' : 'days' }}. Past that
+              this assumes somebody cuts them more turf.
+            </p>
+          </ChartCard>
         </template>
 
         <!-- ============================== Overview -->
@@ -2279,8 +2731,8 @@ const focusRanks = computed<FocusRank[]>(() => {
             v-model="oddsQuery"
             class="odds-search"
             type="search"
-            placeholder="A house, a street, turf, or a canvasser"
-            aria-label="Find something to work out the odds for"
+            placeholder="A house, a street, or turf"
+            aria-label="Find somewhere to work out the odds for"
             data-help="odds-scope"
           />
           <ul v-if="oddsHits.length && !oddsPick" class="odds-hits">
@@ -2299,40 +2751,13 @@ const focusRanks = computed<FocusRank[]>(() => {
             Nothing by that name.
           </p>
 
-          <!-- Which day, once a canvasser is picked. -->
-          <div
-            v-if="oddsPick?.kind === 'canvasser' && personDays.length"
-            class="chip-row"
-            role="group"
-            aria-label="Which day"
-          >
-            <button
-              type="button"
-              class="chip"
-              :class="{ on: pickedDay === '' }"
-              @click="pickedDay = ''"
-            >
-              Every day
-            </button>
-            <button
-              v-for="d in personDays"
-              :key="d"
-              type="button"
-              class="chip"
-              :class="{ on: pickedDay === d }"
-              @click="pickedDay = d"
-            >
-              {{ dayLabel(d) }}
-            </button>
-          </div>
-
           <!-- ONE HOUSE -->
           <template v-if="houseResult">
             <div class="scope">
               <button class="chip back-chip" type="button" @click="clearOddsPick">
                 ‹ Something else
               </button>
-              <span class="focus-name">{{ pickedDoorRow?.street }}</span>
+              <span class="focus-name">{{ titleCase(pickedDoorRow?.street ?? '') }}</span>
               <span class="scope-right muted">{{ pickedDoorRow?.city }}</span>
             </div>
 
@@ -2398,35 +2823,79 @@ const focusRanks = computed<FocusRank[]>(() => {
               {{ fmtCount(setResult.streetRank.of) }} streets with enough knocks behind them.
             </p>
 
-            <div class="two-col">
-              <ChartCard
-                v-if="closedRows.length"
-                title="Doors off the walk"
-                data-help="odds-closed"
-                subtitle="not counted above, because nobody would be sent back"
-                :columns="['Why', 'Doors', 'What happened when somebody went anyway']"
-                :rows="closedRows"
-                table-only
+            <!-- Only once something is picked: unpicked this is every street
+                 in the county, which is a directory rather than a reading. -->
+            <ChartCard
+              v-if="oddsPick && streetsInSet.length > 1"
+              title="Streets in here"
+              data-help="odds-streets"
+              subtitle="doors still worth knocking"
+              :columns="['Street', 'Open doors', 'Detail']"
+              :rows="streetsInSet.map((i) => [i.label, i.value, i.detail ?? ''])"
+            >
+              <BarChart
+                :items="streetsInSet"
+                :color="cat[0]"
+                measure="Doors still worth knocking"
               />
-
-              <!-- Only once something is picked: unpicked this is every street
-                   in the county, which is a directory rather than a reading. -->
-              <ChartCard
-                v-if="oddsPick && streetsInSet.length > 1"
-                title="Streets in here"
-                data-help="odds-streets"
-                subtitle="doors still worth knocking"
-                :columns="['Street', 'Open doors', 'Detail']"
-                :rows="streetsInSet.map((i) => [i.label, i.value, i.detail ?? ''])"
-              >
-                <BarChart
-                  :items="streetsInSet"
-                  :color="cat[0]"
-                  measure="Doors still worth knocking"
-                />
-              </ChartCard>
-            </div>
+            </ChartCard>
           </template>
+
+          <!-- How much the streets around this one are moving it. Its own
+               frame, and it moves nothing else on the page. -->
+          <ChartCard
+            v-if="nearCurve"
+            title="How much the neighbourhood counts"
+            data-help="odds-near"
+            subtitle="the same doors, at every setting"
+            :columns="['Neighbours count for', 'A signature this knock']"
+            :rows="nearRows"
+          >
+            <TimeSeriesChart :labels="nearLabels" :series="nearSeries" percent :height="200" />
+            <!-- TWO sliders, and they are two different questions: how far the
+                 neighbourhood reaches, and how much of it counts. The distance
+                 one redraws the curve, so it steps coarsely; the weight one
+                 only reads along it, so it can be smooth. -->
+            <div class="slider-row">
+              <label class="slider-label muted" for="near-metres">How far they reach</label>
+              <input
+                id="near-metres"
+                class="slider-range"
+                type="range"
+                min="50"
+                :max="NEAR_MAX_METRES"
+                step="50"
+                :value="nearMetresAt"
+                @input="nearMetresAt = Number(($event.target as HTMLInputElement).value)"
+              />
+              <span class="slider-value">{{ nearMetresAt }}m</span>
+            </div>
+            <div class="slider-row">
+              <label class="slider-label muted" for="near-weight">How much they count</label>
+              <input
+                id="near-weight"
+                class="slider-range"
+                type="range"
+                min="0"
+                max="100"
+                step="5"
+                :value="Math.round(nearAt * 100)"
+                @input="nearWeightAt = Number(($event.target as HTMLInputElement).value) / 100"
+              />
+              <span class="slider-value">{{ fmtPct(nearAt, 0) }}</span>
+            </div>
+            <p class="slider-read">
+              At {{ nearMetresAt }}m and {{ fmtPct(nearAt, 0) }} these doors come to
+              <strong>{{ fmtPct(nearReading ?? 0, 1) }}</strong> a knock. The campaign's own
+              record puts it at {{ FITTED_NEAR_METRES }}m and
+              {{ fmtPct(nearCurve.fitted, 0) }}, which is
+              {{ fmtPct(nearFittedReading ?? 0, 1) }}.
+              <button v-if="nearMoved" type="button" class="chip" @click="resetNear">
+                Put them back
+              </button>
+            </p>
+            <p class="muted slider-note">{{ nearSentence }}</p>
+          </ChartCard>
 
           <!-- When to go. Two grids: answering moves with the clock, signing
                does not, so the second is the two multiplied. -->
@@ -2468,21 +2937,30 @@ const focusRanks = computed<FocusRank[]>(() => {
           </div>
 
           <!-- How much to trust any of it. Measured, not written. -->
-          <ChartCard
-            v-if="oddsScore"
-            title="How good is this guess"
-            data-help="odds-quality"
-            :subtitle="scoreSubtitle"
-            :columns="['It said', 'That many answered', 'Doors']"
-            :rows="oddsScore.bands.map((b) => [fmtPct(b.said), fmtPct(b.happened), b.n])"
-            table-only
-          >
-            <p class="odds-quality">
-              Given two doors it picked the livelier one
-              <strong>{{ oddsScore.pickedLivelier }} times out of 100</strong>. Fifty would be a
-              coin toss.
+          <!-- The claim sits OUTSIDE the card, and it has to: ChartCard's
+               `table-only` suppresses the default slot, so this paragraph was
+               written into that slot and never rendered at all — the one
+               sentence saying how well the model does was invisible on the
+               page it is the caveat for. Prose first, then the card carrying
+               the evidence table. -->
+          <template v-if="oddsScore">
+            <p class="card odds-quality" data-help="odds-quality">
+              Across {{ fmtCount(oddsScore.trials) }} knocks it had not seen, given two of them it
+              picked the one that got a signature
+              <strong>{{ oddsScore.pickedLivelier }} times out of 100</strong>, and the one that
+              was answered {{ oddsScore.answerPickedLivelier }} times. Fifty would be a coin toss.
+              The table below is the other half, and the better half: whether the numbers mean
+              what they say.
             </p>
-          </ChartCard>
+
+            <ChartCard
+              title="How good is this guess"
+              :subtitle="scoreSubtitle"
+              :columns="['It said', 'That many signed', 'Knocks']"
+              :rows="oddsScore.bands.map((b) => [fmtPct(b.said), fmtPct(b.happened), b.n])"
+              table-only
+            />
+          </template>
         </template>
 
         <!-- ============================== Canvassers (compare) -->
@@ -2779,8 +3257,60 @@ const focusRanks = computed<FocusRank[]>(() => {
   font-size: 0.82rem;
 }
 .odds-quality {
-  margin: 0 0 0.4rem;
+  margin: 0;
+  padding: 0.9rem 1rem;
   font-size: 0.9rem;
+}
+
+/* The two neighbourhood sliders. The only range inputs in the app, so they
+   style themselves rather than inheriting anything. */
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.55rem;
+}
+.slider-label {
+  font-size: 0.8rem;
+  flex: 0 0 auto;
+}
+.slider-range {
+  flex: 1 1 120px;
+  min-width: 110px;
+  accent-color: var(--accent);
+  /* A slider is a drag, and on a phone a horizontal drag inside a scrolling
+     page is otherwise ambiguous. */
+  touch-action: none;
+}
+.slider-value {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  flex: 0 0 auto;
+  min-width: 4ch;
+  text-align: right;
+}
+.slider-read {
+  margin: 0.6rem 0 0;
+  font-size: 0.9rem;
+}
+.slider-note {
+  margin: 0.3rem 0 0;
+  font-size: 0.82rem;
+}
+
+/* One canvasser's projection. */
+.proj-days {
+  width: 5.5rem;
+}
+.proj-note {
+  margin: 0.6rem 0 0;
+  font-size: 0.82rem;
+}
+.proj-warn {
+  margin: 0.4rem 0 0;
+  font-size: 0.85rem;
+  color: var(--warning, #b45309);
 }
 
 .tiles {
