@@ -39,13 +39,9 @@ import { wilson, linearRegression } from '@/lib/stats'
 import {
   buildOddsModel,
   doorOdds,
-  FITTED_NEAR_METRES,
-  neighbourReach,
-  neighboursWithin,
   percentileOf,
   scoreOddsModel,
   setOdds,
-  withNeighbourhood,
 } from '@/lib/odds'
 import { titleCase } from '@/lib/streetWalk'
 import { whenIdle } from '@/lib/idle'
@@ -1309,12 +1305,8 @@ const oddsDoorSet = computed<{ ids: string[]; title: string; how: string } | nul
   }
 })
 
-// Both of these read the TUNED model, so the two neighbourhood sliders move
-// the tiles above them the moment they are dragged. `tunedModel` is the same
-// object as `oddsModel` until a slider is touched, so nothing recomputes in
-// the ordinary case.
 const setResult = computed(() => {
-  const m = tunedModel.value
+  const m = oddsModel.value
   const set = oddsDoorSet.value
   return m && set && set.ids.length ? setOdds(m, set.ids) : null
 })
@@ -1480,7 +1472,7 @@ const projTiles = computed<Tile[]>(() => {
 })
 
 const houseResult = computed(() => {
-  const m = tunedModel.value
+  const m = oddsModel.value
   const pick = oddsPick.value
   if (!m || pick?.kind !== 'house') return null
   return doorOdds(m, pick.id)
@@ -1697,116 +1689,20 @@ const timeRows = (values: (number | null)[][]) =>
 // anyway, which is the one place that evidence answers a question somebody
 // asked.
 
-/**
- * HOW MUCH IS THE NEIGHBOURHOOD PULLING THIS (2026-07-27, user call: "we can
- * just put in a graph that has a knob that goes up and down that says how much
- * it affects it... how much is the neighborhood pulling it down?").
- *
- * The model already measures how much a neighbouring street's record carries
- * to this one (`nearWeight`, fitted by regressing each street's own lean on its
- * neighbourhood's). This exposes that constant as a control and draws what it
- * does.
- *
- * WHY THIS IS THE RIGHT THING TO EXPOSE, rather than a tidy fixed value: the
- * spatial-statistics literature is unusually direct about it. Quick, Song &
- * Tabb (2020) show a spatial smoother can manufacture the smoothness it
- * displays, and the CAR weight-matrix work finds model fit and estimates
- * moving substantially with the neighbour specification — the standard advice
- * is to explore the weighting rather than assume one. A knob is that
- * exploration, in the one place somebody would want it.
- *
- * THE KNOB NEVER MOVES ANY OTHER NUMBER ON THE PAGE. It drives this card and
- * nothing else, so a manager who leaves it pushed to one end cannot walk away
- * with a tile that quietly disagrees with the model. What it answers is a
- * what-if, and what-ifs belong inside their own frame.
- *
- * The curve is computed ONCE per scope, at eleven weights, and the slider only
- * reads off it. Recomputing per drag would be several hundred door evaluations
- * a frame.
- */
-/** The widest the distance slider goes, and therefore how far the lazy index
- *  looks. Past a few hundred metres "the street that connects to this one"
- *  stops meaning anything: it is just the rest of the neighbourhood. */
-const NEAR_MAX_METRES = 400
-
-const nearWeightAt = ref<number | null>(null) // null = wherever the fit put it
-const nearMetresAt = ref(FITTED_NEAR_METRES)
-
-/** The doors the card is about: one house, or the picked set. Deliberately
- *  nothing when nothing is picked — "the average door" is every street in the
- *  county, and a street's neighbourhood is not a meaningful idea there. */
-const nearScopeIds = computed<string[]>(() => {
-  const pick = oddsPick.value
-  const m = oddsModel.value
-  if (!pick || !m) return []
-  if (pick.kind === 'house') {
-    // The UNTUNED model on purpose, and this is load-bearing: whether a door
-    // is closed is a fact about its outcomes, not about the neighbourhood, and
-    // reading `houseResult` here would close a computed cycle —
-    // tunedModel -> nearReachIndex -> nearScopeIds -> houseResult ->
-    // tunedModel. It stayed invisible because `tunedModel` returns early
-    // before touching the reach index while both sliders are untouched, so the
-    // cycle only formed on a HOUSE scope the moment somebody dragged one.
-    return doorOdds(m, pick.id).closed ? [] : [pick.id]
-  }
-  return oddsDoorSet.value?.ids ?? []
-})
-
-/** Built once, lazily, and only for the card: it looks much further than the
- *  model's own index and is correspondingly more expensive, so it must not be
- *  on the path of anything else. */
-const nearReachIndex = computed(() => {
-  const m = oddsModel.value
-  if (!m || !nearScopeIds.value.length) return null
-  const onGround = m.cities ? new Set(m.cities) : null
-  return neighbourReach(
-    doorRows.value
-      .filter((d) => !onGround || onGround.has(d.city))
-      .map((d) => ({ id: d.id, street: d.street, city: d.city, lat: d.lat, lng: d.lng })),
-    NEAR_MAX_METRES,
-  )
-})
-
-/**
- * The model as the two sliders have it set.
- *
- * THE SLIDERS MOVE THE REAL NUMBERS NOW (2026-07-27, user call: 'have it
- * reflected in the numbers above immediately'). They used to drive a chart of
- * their own and nothing else, on the reasoning that a manager could otherwise
- * walk away from a tuned tile. That call reverses it, and the guard that
- * replaces the isolation is the 'Put them back' chip: it renders only while
- * the sliders are off the fitted setting, so a tuned number always has a
- * visible way home sitting under it.
- *
- * Returns the model UNCHANGED, by identity, while nothing has been touched, so
- * the ordinary case recomputes nothing at all.
- */
-const tunedModel = computed(() => {
-  const m = oddsModel.value
-  if (!m || !nearMoved.value) return m
-  const reach = nearReachIndex.value
-  return withNeighbourhood(m, {
-    weight: nearAt.value,
-    neighboursOf: reach ? neighboursWithin(reach, nearMetresAt.value) : undefined,
-  })
-})
-
-/** Where the weight slider sits, 0 to 1. Defaults to whatever the campaign's
- *  own data fitted. */
-const nearAt = computed(() => nearWeightAt.value ?? oddsModel.value?.nearWeight ?? 0)
-
-/** Both sliders back where the campaign's own data put them. */
-const nearMoved = computed(
-  () => nearWeightAt.value !== null || nearMetresAt.value !== FITTED_NEAR_METRES,
-)
-function resetNear() {
-  nearWeightAt.value = null
-  nearMetresAt.value = FITTED_NEAR_METRES
-}
-
-/** Only meaningful over ground somebody has picked, and only once the wider
- *  index they need has been built. */
-const showNearSliders = computed(() => !!nearReachIndex.value && !!nearScopeIds.value.length)
+// THE NEIGHBOURHOOD SLIDERS ARE GONE (2026-07-27, user call: "if they are not
+// gonna be doing anything in the demo... then there is no point in putting them
+// there"). They let a manager set how far the neighbourhood reaches and how
+// much it counts, and moved the tiles as they dragged. The reason they went is
+// worth keeping, because it is a fact about THIS DATA and not about the idea:
+// on well knocked ground the whole range of both sliders moved the answer by a
+// few tenths of a point, and on ground nobody has been near it moved nothing at
+// all, because there was no neighbour evidence to borrow. A control that cannot
+// show a difference teaches the opposite of what it is for.
+//
+// What stays in odds.ts is neighbourReach/neighboursWithin, because the model
+// builds its own index with them. withNeighbourhood and FITTED_NEAR_METRES
+// went with the sliders; git history has them if a campaign ever clusters hard
+// enough to be worth showing.
 
 const streetsInSet = computed<BarItem[]>(() =>
   (setResult.value?.streets ?? []).map((s) => ({
@@ -2759,45 +2655,6 @@ const focusRanks = computed<FocusRank[]>(() => {
             </ChartCard>
           </template>
 
-          <!-- The two neighbourhood sliders. No chart and no prose: the chart
-               drew a nearly flat line on a zero-based axis, which is honest
-               and reads as a grey rectangle, and the explanation belongs in
-               the help deck. What is left is the pair of controls, and they
-               move the numbers above (2026-07-27, user call). -->
-          <div v-if="showNearSliders" class="card near-sliders" data-help="odds-near">
-            <div class="slider-row slider-row--major">
-              <label class="slider-label" for="near-metres">Neighbourhood reaches</label>
-              <span class="slider-value">{{ nearMetresAt }}m</span>
-              <input
-                id="near-metres"
-                class="slider-range"
-                type="range"
-                min="50"
-                :max="NEAR_MAX_METRES"
-                step="25"
-                :value="nearMetresAt"
-                @input="nearMetresAt = Number(($event.target as HTMLInputElement).value)"
-              />
-            </div>
-            <div class="slider-row slider-row--minor">
-              <label class="slider-label muted" for="near-weight">How much it counts</label>
-              <input
-                id="near-weight"
-                class="slider-range"
-                type="range"
-                min="0"
-                max="100"
-                step="5"
-                :value="Math.round(nearAt * 100)"
-                @input="nearWeightAt = Number(($event.target as HTMLInputElement).value) / 100"
-              />
-              <span class="slider-value muted">{{ fmtPct(nearAt, 0) }}</span>
-              <button v-if="nearMoved" type="button" class="chip" @click="resetNear">
-                Put them back
-              </button>
-            </div>
-          </div>
-
           <!-- When to go. Two grids: answering moves with the clock, signing
                does not, so the second is the two multiplied. -->
           <div v-if="timeGrid.any" class="two-col">
@@ -3161,59 +3018,6 @@ const focusRanks = computed<FocusRank[]>(() => {
   margin: 0;
   padding: 0.9rem 1rem;
   font-size: 0.9rem;
-}
-
-/* The two neighbourhood sliders. The only range inputs in the app, so they
-   style themselves rather than inheriting anything. Distance is the major
-   control and gets a full-width track under its own label; how much it counts
-   is the trim on it and sits compact on one line. */
-.near-sliders {
-  padding: 0.85rem 1rem 0.95rem;
-}
-.slider-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem 0.6rem;
-  flex-wrap: wrap;
-}
-.slider-row--minor {
-  margin-top: 0.7rem;
-}
-.slider-label {
-  font-size: 0.85rem;
-  flex: 0 0 auto;
-}
-.slider-row--minor .slider-label {
-  font-size: 0.8rem;
-}
-.slider-range {
-  accent-color: var(--accent);
-  /* A slider is a drag, and on a phone a horizontal drag inside a scrolling
-     page is otherwise ambiguous. */
-  touch-action: none;
-}
-.slider-row--major .slider-range {
-  flex: 1 1 100%;
-  height: 1.6rem;
-}
-.slider-row--minor .slider-range {
-  flex: 1 1 90px;
-  min-width: 80px;
-  max-width: 190px;
-}
-.slider-value {
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-  flex: 0 0 auto;
-}
-.slider-row--major .slider-value {
-  margin-left: auto;
-  font-size: 1.05rem;
-}
-.slider-row--minor .slider-value {
-  font-size: 0.85rem;
-  min-width: 4ch;
-  text-align: right;
 }
 
 /* One canvasser's projection. */

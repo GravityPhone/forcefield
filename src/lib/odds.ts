@@ -1141,29 +1141,11 @@ export function neighboursWithin(
   }
 }
 
-/**
- * The same model with the neighbourhood set differently: how far it reaches,
- * and how much it counts.
- *
- * A shallow copy is the whole implementation, and that is not a trick — every
- * Map on the model is shared by reference and `geoChain` reads both of these
- * off the model, so this costs nothing and cannot desynchronise from the real
- * one. It exists so the Odds tab can draw what those two choices do without
- * refitting anything, and without any other number on the page moving.
- */
-export function withNeighbourhood(
-  model: OddsModel,
-  opts: { weight?: number; neighboursOf?: (street: string) => string[] },
-): OddsModel {
-  return {
-    ...model,
-    nearWeight: opts.weight ?? model.nearWeight,
-    neighboursOf: opts.neighboursOf ?? model.neighboursOf,
-  }
-}
-
-/** The reach the model's own numbers are fitted at. */
-export const FITTED_NEAR_METRES = NEAR_METRES
+// `withNeighbourhood` and FITTED_NEAR_METRES lived here from 2026-07-27
+// morning to that evening, for the Odds tab's two neighbourhood sliders. Both
+// are gone with them: a shallow copy of the model with a different weight and
+// reach is a two-line thing to write again, and git history has the original.
+// The reach index below stays because the model itself is built on it.
 
 // ---------------------------------------------------------------- prediction
 
