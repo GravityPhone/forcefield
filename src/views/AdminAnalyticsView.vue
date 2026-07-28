@@ -1815,12 +1815,25 @@ const timeRows = (values: (number | null)[][]) =>
 // went with the sliders; git history has them if a campaign ever clusters hard
 // enough to be worth showing.
 
+/**
+ * ORDERED BY THE BAR, WHICH IS OPEN DOORS (2026-07-28).
+ *
+ * `setOdds` hands its streets back biggest by TOTAL doors, and this chart
+ * plots the OPEN ones, so the bars arrived out of order: measured on the
+ * Tamarac Dr turf they read 28, 22, 24, 23. Worse with BarChart's 12-row cap,
+ * which then shows the twelve biggest streets rather than the twelve with the
+ * most left in them — the street this card exists to name can be the one it
+ * hides. Sorted here rather than in odds.ts, whose own ordering is documented
+ * and has no other consumer to break.
+ */
 const streetsInSet = computed<BarItem[]>(() =>
-  (setResult.value?.streets ?? []).map((s) => ({
-    label: titleCase(s.name),
-    value: s.open,
-    detail: `${fmtCount(s.doors)} doors, ${fmtCount(s.open)} still on the walk`,
-  })),
+  [...(setResult.value?.streets ?? [])]
+    .sort((a, b) => b.open - a.open || b.doors - a.doors)
+    .map((s) => ({
+      label: titleCase(s.name),
+      value: s.open,
+      detail: `${fmtCount(s.doors)} doors, ${fmtCount(s.open)} still on the walk`,
+    })),
 )
 
 // ---------------------------------------------------------------- canvassers
