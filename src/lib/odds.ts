@@ -1054,7 +1054,10 @@ export function doorOdds(model: OddsModel, household: string, residents?: number
   out.sign = estimate(chain.p, sCell.n, chain.groupN, chain.groupK)
   out.signWhy = [
     {
-      label: partlySigned ? 'Somebody here has already signed' : 'Signing, campaign wide',
+      // "After talking", not "campaign wide" (2026-07-27, user call): this
+      // whole stage is conditional on somebody having come to the door, and
+      // the label is the only thing on screen that can say so.
+      label: partlySigned ? 'Somebody here has already signed' : 'Signing after talking',
       detail: `${formatPct(sCell.p)} of conversations end in a signature`,
       p: sCell.p,
       shift: (sCell.p - model.signBase.global) * 100,

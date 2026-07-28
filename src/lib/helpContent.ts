@@ -627,7 +627,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'What this tab does',
         target: 'odds-scope',
-        body: 'One box. Type a house, a street, a turf or a canvasser, and tap it. It works out what the NEXT knock there is likely to get.\nTwo numbers, always in this order: the chance somebody comes to the door, and the chance they sign once somebody does. Multiply them and you have the chance one knock ends in a signature.\nFor a set of doors it also gives a total: knock all of these once, expect about this many conversations and this many signatures.\nA canvasser also gets day chips: their doors on one day, or across every day they were out.',
+        body: 'One box. Type a house, a street, a turf or a canvasser, and tap it. It works out what the NEXT knock there is likely to get.\nTwo numbers, always in this order: the chance somebody comes to the door, and the chance they sign once somebody does. Multiply them and you have the chance one knock ends in a signature.\nFor a set of doors it also gives a total: knock all of these once, expect about this many conversations and this many signatures.\nA canvasser also gets day chips: their doors on one day, or across every day they were out.\nType nothing and it shows the average door: every door in the campaign at once, which is what everything else here gets compared against.',
       },
       { heading: 'What counts as what', target: 'odds-scope', body: WHAT_COUNTS },
       {
@@ -663,7 +663,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'When to go',
         target: 'odds-times',
-        body: 'Chance somebody answers, by part of the day and weekday against weekend.\nA description of what the campaign has recorded, not advice: crews were not sent out at random times, so some of the gap is where they went and who was on.\nOn this campaign weekday mornings are the worst block by a wide margin and weekends are much the same all day.',
+        body: 'Two grids, weekday against weekend, by part of the day. Darker means better. Hold a square for its number and how many interactions are behind it.\nThe first is the chance somebody answers. The second is the chance a knock ends in a signature, which is the two chances multiplied.\nOnly answering moves with the clock. Signing, once somebody has answered, does not measurably change by time of day, so the second grid moves only because the first one does.\nA description of what the campaign has recorded, not advice: crews were not sent out at random times, so some of the gap is where they went and who was on.\nOn this campaign weekday mornings are the worst block by a wide margin and weekends are much the same all day.',
       },
       {
         heading: 'How much to trust it',

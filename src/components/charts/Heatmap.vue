@@ -16,10 +16,13 @@ const props = defineProps<{
   dark: boolean
   /** what one sample IS in the tooltip ("knocks", "interactions") */
   unit?: string
+  /** Room for the row labels. 44 fits "Mon"; a grid whose rows are words
+   *  ("Weekday") has to say so or they are clipped from the left. */
+  labelWidth?: number
 }>()
 
 const { el, width } = useChartWidth()
-const LABEL_W = 44
+const LABEL_W = props.labelWidth ?? 44
 const CELL_H = 26
 const GAP = 2
 

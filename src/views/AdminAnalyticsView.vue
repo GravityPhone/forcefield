@@ -24,6 +24,7 @@ import type { TimeSeries } from '@/components/charts/TimeSeriesChart.vue'
 import StackedBarChart from '@/components/charts/StackedBarChart.vue'
 import BarChart from '@/components/charts/BarChart.vue'
 import ScatterChart from '@/components/charts/ScatterChart.vue'
+import Heatmap from '@/components/charts/Heatmap.vue'
 import type { BarItem } from '@/components/charts/BarChart.vue'
 import type { ScatterPoint } from '@/components/charts/ScatterChart.vue'
 import { fetchAllRows, supabase } from '@/lib/supabase'
@@ -1219,7 +1220,18 @@ const personDoors = computed<{ ids: string[]; how: string }>(() => {
 const oddsDoorSet = computed<{ ids: string[]; title: string; how: string } | null>(() => {
   const m = oddsModel.value
   const pick = oddsPick.value
-  if (!m || !pick) return null
+  if (!m) return null
+  // Nothing typed yet: the whole county, which is the amalgamation of every
+  // door and the thing every other answer on this tab gets compared against
+  // (2026-07-27, user call). It is a real reading in its own right: how much
+  // is left out there, and what one knock is worth on average.
+  if (!pick) {
+    return {
+      ids: doorRows.value.map((d) => d.id),
+      title: 'The average door',
+      how: 'every door in the campaign',
+    }
+  }
   if (pick.kind === 'street') {
     return { ids: m.doorsOnStreet.get(pick.id) ?? [], title: pick.label, how: pick.sub }
   }
@@ -1347,15 +1359,52 @@ const setTiles = computed<Tile[]>(() => {
   ]
 })
 
-/** Answer chance by time of day for whatever is picked, best first. */
-const oddsTimes = computed<BarItem[]>(() => {
+/**
+ * When to go, as a grid rather than a bar chart (2026-07-27, user call: "a lot
+ * of the words are kind of cut off on the left, really we could just put a
+ * regular time grid like we have on the other page, and it should tell us the
+ * odds that they will answer and the odds that they will sign").
+ *
+ * A bar chart puts its labels in a 130px gutter and "Weekday afternoon, 3 to 5
+ * PM" does not fit in one. A grid gives the label two axes to live on.
+ *
+ * TWO grids, because they answer different questions and only one of them
+ * varies with the clock: the chance somebody ANSWERS moves a lot by time of
+ * day, and the chance they SIGN once they have answered does not move
+ * measurably at all (see odds.ts). So the second grid is the two multiplied,
+ * which is what a signature costs at that hour, and it varies for the honest
+ * reason rather than by pretending signing has a timetable.
+ */
+const TIME_ROWS = ['Weekday', 'Weekend']
+const TIME_COLS = ['Morning', 'Midday', 'Afternoon', 'Evening']
+const TIME_PARTS = ['morning', 'midday', 'afternoon', 'evening']
+
+const timeGrid = computed(() => {
   const list = setResult.value?.bestTimes ?? houseResult.value?.bestTimes ?? []
-  return list.map((b) => ({
-    label: `${b.label}, ${b.hours}`,
-    value: b.p,
-    detail: `${fmtCount(b.n)} interactions logged in this block`,
-  }))
+  const by = new Map(list.map((b) => [b.key, b]))
+  const signP = setResult.value?.sign?.p ?? houseResult.value?.sign?.p ?? 0
+  const answer: (number | null)[][] = []
+  const signature: (number | null)[][] = []
+  const counts: number[][] = []
+  for (const w of ['wd', 'we']) {
+    const a: (number | null)[] = []
+    const s: (number | null)[] = []
+    const c: number[] = []
+    for (const part of TIME_PARTS) {
+      const b = by.get(`${part}|${w}`)
+      a.push(b ? b.p : null)
+      s.push(b ? b.p * signP : null)
+      c.push(b?.n ?? 0)
+    }
+    answer.push(a)
+    signature.push(s)
+    counts.push(c)
+  }
+  return { answer, signature, counts, any: list.length > 0 }
 })
+
+const timeRows = (values: (number | null)[][]) =>
+  TIME_ROWS.map((r, i) => [r, ...values[i].map((v) => (v == null ? 'too few' : fmtPct(v, 1)))])
 
 /** Where each closed door went, so a small "still open" number explains
  *  itself instead of just looking wrong. */
@@ -2220,7 +2269,12 @@ const focusRanks = computed<FocusRank[]>(() => {
           <!-- A SET OF DOORS -->
           <template v-else-if="setResult && oddsDoorSet">
             <div class="scope">
-              <button class="chip back-chip" type="button" @click="clearOddsPick">
+              <button
+                v-if="oddsPick"
+                class="chip back-chip"
+                type="button"
+                @click="clearOddsPick"
+              >
                 ‹ Something else
               </button>
               <span class="focus-name">{{ oddsDoorSet.title }}</span>
@@ -2250,8 +2304,10 @@ const focusRanks = computed<FocusRank[]>(() => {
                 table-only
               />
 
+              <!-- Only once something is picked: unpicked this is every street
+                   in the county, which is a directory rather than a reading. -->
               <ChartCard
-                v-if="streetsInSet.length > 1"
+                v-if="oddsPick && streetsInSet.length > 1"
                 title="Streets in here"
                 data-help="odds-streets"
                 subtitle="doors still worth knocking"
@@ -2267,27 +2323,44 @@ const focusRanks = computed<FocusRank[]>(() => {
             </div>
           </template>
 
-          <p v-else class="muted odds-empty">Type a name above.</p>
+          <!-- When to go. Two grids: answering moves with the clock, signing
+               does not, so the second is the two multiplied. -->
+          <div v-if="timeGrid.any" class="two-col">
+            <ChartCard
+              title="When somebody answers"
+              data-help="odds-times"
+              subtitle="morning before noon, midday to 3 PM, afternoon to 5 PM, evening after 5"
+              :columns="['', ...TIME_COLS]"
+              :rows="timeRows(timeGrid.answer)"
+            >
+              <Heatmap
+                :row-labels="TIME_ROWS"
+                :col-labels="TIME_COLS"
+                :values="timeGrid.answer"
+                :counts="timeGrid.counts"
+                :label-width="66"
+                unit="interactions"
+                :dark="palette.dark.value"
+              />
+            </ChartCard>
 
-          <!-- When to go, for whatever is picked. -->
-          <ChartCard
-            v-if="oddsTimes.length"
-            title="When to go"
-            data-help="odds-times"
-            subtitle="chance somebody answers, by time of day"
-            :columns="['Time', 'Somebody answers', 'Detail']"
-            :rows="oddsTimes.map((i) => [i.label, fmtPct(i.value, 1), i.detail ?? ''])"
-          >
-            <BarChart
-              :items="oddsTimes"
-              :color="cat[0]"
-              percent
-              measure="Somebody answers"
-              :ref-value="overallRates.answer"
-              ref-label="all times"
-              :max="pctMax(oddsTimes, overallRates.answer)"
-            />
-          </ChartCard>
+            <ChartCard
+              title="When a knock gets a signature"
+              subtitle="the two chances multiplied"
+              :columns="['', ...TIME_COLS]"
+              :rows="timeRows(timeGrid.signature)"
+            >
+              <Heatmap
+                :row-labels="TIME_ROWS"
+                :col-labels="TIME_COLS"
+                :values="timeGrid.signature"
+                :counts="timeGrid.counts"
+                :label-width="66"
+                unit="interactions"
+                :dark="palette.dark.value"
+              />
+            </ChartCard>
+          </div>
 
           <!-- How much to trust any of it. Measured, not written. -->
           <ChartCard
