@@ -4,6 +4,7 @@ import BottomSheet from '@/components/ui/BottomSheet.vue'
 import UserPicker from '@/components/chat/UserPicker.vue'
 import ChatMemberList from '@/components/chat/ChatMemberList.vue'
 import GifPicker from '@/components/chat/GifPicker.vue'
+import EmojiSheet from '@/components/chat/EmojiSheet.vue'
 import { canLeaveChat, useChatStore, type ChatListItem, type OutgoingFile } from '@/stores/chat'
 import { useSquadsStore } from '@/stores/squads'
 import { useAuthStore } from '@/stores/auth'
@@ -13,6 +14,7 @@ import { useThemeStore } from '@/stores/theme'
 import { vacStyles } from '@/lib/themes'
 import { avatarUrl } from '@/lib/avatars'
 import { memberColor } from '@/lib/memberColors'
+import { afterScrollUnlock } from '@/lib/appChrome'
 import { hapticTap } from '@/lib/native'
 import type { ChatProfile } from '@/types'
 
@@ -450,19 +452,112 @@ async function onMessageReaction(e: Event) {
   }
 }
 
-/** The dropdown next to each message (reply/edit/etc. by default) — we only
- * support one action: jump to (or start) a DM with that message's sender.
- * Shows on your own messages too since the library has no per-message
- * "hide for self" option; clicking it there is just a silent no-op. */
-const messageActions = [{ name: 'messageUser', title: 'Message user' }]
+/** The dropdown next to each message. "Message user" jumps to (or starts) a DM
+ * with the sender — shown on your own messages too, since the library has no
+ * per-message "hide for self" option; clicking it there is a silent no-op.
+ * "Add reaction" is the way in to our own emoji sheet, and it's why the
+ * library's hover reaction picker is switched off (see :show-reaction-emojis). */
+const messageActions = [
+  { name: 'react', title: 'Add reaction' },
+  { name: 'messageUser', title: 'Message user' },
+]
 
 async function onMessageAction(e: Event) {
   const detail = (e as CustomEvent).detail?.[0] as
-    | { action?: { name?: string }; message?: { senderId?: string } }
+    | { action?: { name?: string }; message?: { _id?: string; senderId?: string } }
     | undefined
-  if (detail?.action?.name !== 'messageUser') return
-  const senderId = detail.message?.senderId
+  const name = detail?.action?.name
+  if (name === 'react') {
+    const id = detail?.message?._id
+    if (id) openEmojiSheet(id)
+    return
+  }
+  if (name !== 'messageUser') return
+  const senderId = detail?.message?.senderId
   if (senderId && senderId !== chat.myId) await chat.createChat('dm', null, [senderId])
+}
+
+// --- Emoji ---------------------------------------------------------------
+// vue-advanced-chat's built-in picker (emoji-picker-element) fetches its
+// dataset from jsdelivr, which netlify.toml's connect-src doesn't allow — on
+// the live site it only ever rendered "Could not load emoji." So both entry
+// points are ours: the composer's emoji button comes through the library's
+// own `emoji-picker` slot (which replaces its whole picker, button and all),
+// and reactions come through the message-actions dropdown above.
+//
+// Switching :show-reaction-emojis off is load-bearing, not just tidying: a
+// hovered message renders a SECOND <slot name="emoji-picker"> in the same
+// shadow root, and native slotting assigns our button to whichever comes
+// first in tree order. With reactions off there is exactly one.
+
+const emojiOpen = ref(false)
+/** Which message we're reacting to, or null when it's the composer. */
+const emojiTarget = ref<string | null>(null)
+
+const emojiTitle = computed(() => (emojiTarget.value ? 'React' : 'Emoji'))
+
+function openEmojiSheet(messageId: string | null) {
+  emojiTarget.value = messageId
+  emojiOpen.value = true
+}
+
+function onEmojiPick(char: string) {
+  const messageId = emojiTarget.value
+  if (messageId) {
+    // Picking one you've already used takes it back, same as tapping the chip.
+    const mine = chat.reactions[messageId]?.[char]?.includes(chat.myId ?? '') ?? false
+    void chat.toggleReaction(messageId, char, mine)
+    return
+  }
+  insertIntoComposer(char)
+}
+
+/** The composer is inside the widget's shadow root, so it takes a real DOM
+ * write plus a real `input` event — the library binds v-model, and a silent
+ * value assignment would leave its own copy of the draft empty. */
+function insertIntoComposer(char: string) {
+  const ta = vacEl.value?.shadowRoot?.querySelector<HTMLTextAreaElement>('textarea.vac-textarea')
+  if (!ta) return
+  const start = ta.selectionStart ?? ta.value.length
+  const end = ta.selectionEnd ?? ta.value.length
+  ta.value = ta.value.slice(0, start) + char + ta.value.slice(end)
+  const caret = start + char.length
+  ta.setSelectionRange(caret, caret)
+  ta.dispatchEvent(new Event('input', { bubbles: true }))
+  restoreComposerFocus(ta, caret)
+}
+
+/**
+ * Put the caret back where the emoji landed, so the next thing typed carries
+ * on from it rather than from wherever a tap on the box happens to be.
+ *
+ * This has to survive Reka putting focus back on the button that opened the
+ * sheet, which it does when DialogContent finally unmounts. Measured with a
+ * focus log: the scroll lock clears at t+245ms and the focus restore lands at
+ * t+263 — so afterScrollUnlock alone focuses the composer 8ms before the
+ * dialog takes it straight back, which is why the first attempt at this
+ * looked right in a frameless preview pane and failed in a real browser.
+ *
+ * So: focus, then take it back ONCE if something steals it. A second steal is
+ * the canvasser tapping somewhere on purpose, and we leave that alone.
+ */
+function restoreComposerFocus(ta: HTMLTextAreaElement, caret: number) {
+  const put = () => {
+    ta.focus()
+    ta.setSelectionRange(caret, caret)
+  }
+  afterScrollUnlock(() => {
+    put()
+    // Added after put(): focus events are synchronous, so our own focusin has
+    // already been and gone and can't trip this.
+    const reclaim = () => {
+      window.removeEventListener('focusin', reclaim, true)
+      clearTimeout(giveUp)
+      put()
+    }
+    window.addEventListener('focusin', reclaim, true)
+    const giveUp = setTimeout(() => window.removeEventListener('focusin', reclaim, true), 400)
+  })
 }
 
 /** The chat header's own menu (hamburger icon next to search) — gives a
@@ -675,6 +770,7 @@ async function addPeople() {
             :menuActions.prop="menuActions"
             :show-add-room="false"
             :show-audio="false"
+            :show-reaction-emojis="false"
             :single-room="true"
             :textarea-action-enabled="true"
             @fetch-messages="onFetchMessages"
@@ -687,6 +783,22 @@ async function addPeople() {
             <!-- The composer's extra action button (sits with emoji/attach)
                  becomes our GIF button via the library's icon slot. -->
             <span slot="custom-action-icon" class="gif-slot" aria-label="Send a GIF">GIF</span>
+            <!-- Filling this slot replaces the library's emoji picker outright
+                 — button, popup and all — with our own sheet. -->
+            <button
+              slot="emoji-picker"
+              class="emoji-slot"
+              type="button"
+              aria-label="Emoji"
+              @click="openEmojiSheet(null)"
+            >
+              <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+                <path
+                  fill="currentColor"
+                  d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z"
+                />
+              </svg>
+            </button>
           </vue-advanced-chat>
         </div>
         <p v-if="chat.sendError" class="send-error">{{ chat.sendError }}</p>
@@ -694,6 +806,7 @@ async function addPeople() {
     </aside>
 
     <GifPicker v-model:open="gifOpen" @pick="onGifPick" />
+    <EmojiSheet v-model:open="emojiOpen" :title="emojiTitle" @pick="onEmojiPick" />
 
     <!-- New chat / join squad sheet -->
     <BottomSheet v-model:open="composing" title="Start a chat" aria-label="Start a chat">
@@ -1040,6 +1153,26 @@ async function addPeople() {
   font-weight: 800;
   letter-spacing: 0.04em;
   line-height: 1.1;
+  color: var(--accent);
+}
+
+/* Stands in for the library's own emoji button, so it copies the sizing of
+   the paperclip and send icons beside it (.vac-svg-button is 26px). */
+.emoji-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.emoji-slot:hover {
   color: var(--accent);
 }
 
