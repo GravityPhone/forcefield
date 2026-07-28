@@ -193,6 +193,12 @@ const CELL_MIN_GROUP = 30
  *  one block over does not qualify: it gives a median of about 6 neighbours. */
 const NEAR_METRES = 150
 
+/**
+ * A town counts as the campaign's ground once it holds this share of the
+ * knocks. See `campaignCities`.
+ */
+const CITY_SHARE = 0.01
+
 /** Bounds on every estimated shrinkage constant. The floor stops a freak
  *  variance estimate handing a 6-knock street the whole answer; the ceiling
  *  stops a degenerate one silently switching an adjustment off. */
@@ -535,6 +541,10 @@ export interface OddsModel {
   campaignAnswer: number
   campaignSign: number
   campaignSignature: number
+  /** The towns the campaign is working, and the doors kept because of it.
+   *  Null when it has not knocked anywhere yet. */
+  cities: string[] | null
+  doorsOnGround: number
   /** Totals, for the "what this is built on" line. */
   visits: number
   interactions: number
@@ -547,15 +557,56 @@ export interface OddsModel {
  * Build the model. Pure: hand it knocks and doors and it holds no references
  * to anything else. Roughly 60ms on the live 11.7k knocks / 22.7k doors.
  */
+/**
+ * The towns this campaign is actually working, derived from where it has
+ * knocked rather than configured (2026-07-27, user call: "for all these
+ * calculations I want everything to be against just Marysville, because in
+ * this campaign I want to only include the Marysville doors, but I think that
+ * stuff outside of Marysville is actually getting counted").
+ *
+ * It WAS being counted, and only on the door side: measured on the live data,
+ * 100% of the 11,707 knocks are in Marysville, while the address table carries
+ * 22,746 doors across seventeen towns. So no out-of-town knock was ever
+ * polluting a rate, but 10,414 doors in places nobody has ever visited were
+ * inflating every denominator built on doors: the average door's "still worth
+ * knocking", the percentile a house is ranked against, and the search list,
+ * which happily offered streets in Dublin and Richwood.
+ *
+ * Derived, not hard-coded, because a town in a config file is a town somebody
+ * has to remember to change. A campaign's ground is where the campaign has
+ * been; on this data that resolves to Marysville by itself, and a campaign
+ * that spreads to three towns keeps all three with nobody editing anything.
+ *
+ * The 1% floor is what stops one stray knock in the next county dragging its
+ * whole address book back in. With no knocks at all every door is kept, since
+ * a campaign that has not started yet has not narrowed to anywhere.
+ */
+function campaignCities(visits: Visit[], doors: OddsDoor[]): Set<string> | null {
+  const cityOf = new Map(doors.map((d) => [d.id, d.city]))
+  const per = new Map<string, number>()
+  for (const v of visits) {
+    const c = cityOf.get(v.household)
+    if (c) per.set(c, (per.get(c) ?? 0) + 1)
+  }
+  let total = 0
+  for (const n of per.values()) total += n
+  if (!total) return null
+  const keep = new Set<string>()
+  for (const [c, n] of per) if (n / total >= CITY_SHARE) keep.add(c)
+  return keep.size ? keep : null
+}
+
 export function buildOddsModel(
   knocks: OddsKnock[],
-  doors: OddsDoor[],
-  // Ranking scores every door in the county, which is most of the build cost
-  // and is only ever read by the Analytics tab. Talk and the maps ask about
-  // one door and skip it.
+  allDoors: OddsDoor[],
+  // Ranking scores every door on the campaign's ground, which is most of the
+  // build cost and is only ever read by the Analytics tab. Talk and the maps
+  // ask about one door and skip it.
   opts: { rank?: boolean } = {},
 ): OddsModel {
   const { visits, state } = collapse(knocks)
+  const cities = campaignCities(visits, allDoors)
+  const doors = cities ? allDoors.filter((d) => cities.has(d.city)) : allDoors
 
   const streetOf = new Map<string, string>()
   const doorsOnStreet = new Map<string, string[]>()
@@ -638,6 +689,8 @@ export function buildOddsModel(
     campaignAnswer: answerBase.global,
     campaignSign: signBase.global,
     campaignSignature: answerBase.global * signBase.global,
+    cities: cities ? [...cities].sort() : null,
+    doorsOnGround: doors.length,
     visits: visits.length,
     interactions: visits.filter((v) => v.interacted).length,
     conversations: visits.filter((v) => v.answered).length,

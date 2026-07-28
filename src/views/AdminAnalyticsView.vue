@@ -182,12 +182,29 @@ onPageEnter(async () => {
       supabase.from('addresses').select('id', { count: 'exact', head: true }),
     ])
 
+    // The note used to name only the knocks, which was inaccurate and in the
+    // wrong order of importance (2026-07-27, user call): the DOORS are the
+    // bigger read by half again, and a door nobody has knocked has to be in
+    // here or half of this page cannot ask about it. Both are reported, doors
+    // first, and the two run concurrently so either can update the line.
+    let knocksDone = 0
+    let doorsDone = 0
+    const note = () => {
+      loadNote.value =
+        `Loading ${fmtCount(doorsDone)} of ${fmtCount(addrCount ?? 0)} doors ` +
+        `and ${fmtCount(knocksDone)} of ${fmtCount(knockCount ?? 0)} knocks…`
+    }
+    note()
+
     const [rows, addrs, profs, turfs, appts] = await Promise.all([
       fetchAllPages<KnockRow>(
         'knock_logs',
         'outcome, occurred_at, household_id, canvasser_id, squad_id, squad_name, turf_name',
         knockCount ?? 0,
-        (n) => (loadNote.value = `Loading knocks… ${fmtCount(n)} / ${fmtCount(knockCount ?? 0)}`),
+        (n) => {
+          knocksDone = n
+          note()
+        },
       ),
       // street/city/lat/lng/persons came back on 2026-07-27 for the Odds tab's
       // predictor: it needs to know which street a door is on, which streets
@@ -198,7 +215,10 @@ onPageEnter(async () => {
         'addresses',
         'id, turf_id, street, city, lat, lng, persons(count)',
         addrCount ?? 0,
-        () => {},
+        (n) => {
+          doorsDone = n
+          note()
+        },
       ),
       supabase
         .from('profiles')
@@ -1120,8 +1140,13 @@ const oddsHits = computed<OddsHit[]>(() => {
       sub: `${fmtCount(c.knocks)} knocks`,
     }))
 
+  // Houses come from the raw address rows, so they need the same town filter
+  // the model applied to everything else: without it the box happily offers a
+  // house in a town the campaign has never knocked, whose odds would be the
+  // bare campaign baseline dressed up as a reading about that house.
+  const onGround = m.cities ? new Set(m.cities) : null
   const houses: OddsHit[] = doorRows.value
-    .filter((d) => d.street.toUpperCase().includes(q))
+    .filter((d) => d.street.toUpperCase().includes(q) && (!onGround || onGround.has(d.city)))
     .slice(0, 60)
     .map((d) => ({ kind: 'house' as const, id: d.id, label: d.street, sub: d.city }))
   houses.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }))
@@ -1226,10 +1251,13 @@ const oddsDoorSet = computed<{ ids: string[]; title: string; how: string } | nul
   // (2026-07-27, user call). It is a real reading in its own right: how much
   // is left out there, and what one knock is worth on average.
   if (!pick) {
+    // The model's OWN door set, not every row fetched: it keeps only the towns
+    // the campaign has actually knocked in, so this cannot quietly average in
+    // 10k doors in places nobody has ever been.
     return {
-      ids: doorRows.value.map((d) => d.id),
+      ids: [...m.doorsOnStreet.values()].flat(),
       title: 'The average door',
-      how: 'every door in the campaign',
+      how: m.cities?.length ? `every door in ${m.cities.join(', ')}` : 'every door on file',
     }
   }
   if (pick.kind === 'street') {
@@ -1329,6 +1357,53 @@ const houseTiles = computed<Tile[]>(() => {
 const setTiles = computed<Tile[]>(() => {
   const s = setResult.value
   if (!s) return []
+  const perDoor = s.open ? s.expectedSignatures.value / s.open : 0
+  const rates: Tile[] = [
+    {
+      label: 'Somebody answers',
+      value: s.answer ? oddsPct(s.answer.p) : 'none yet',
+      hint: versusText(s.vsCampaign?.answer, 'answering'),
+    },
+    {
+      label: 'They sign, if they answer',
+      value: s.sign ? oddsPct(s.sign.p) : 'none yet',
+      hint: versusText(s.vsCampaign?.sign, 'signing'),
+    },
+  ]
+
+  // THE AVERAGE DOOR GETS RATES, NOT A FORECAST (2026-07-27, user call:
+  // "expected conversations and expected signatures doesn't make any sense
+  // [there], that's covered by somebody answers and they sign if they
+  // answer"). Over the whole campaign those totals are only the rates times
+  // the door count, so they add nothing and read as a projection nobody made;
+  // and "the same doors on average ground" is comparing the average with
+  // itself. For a street or a turf they are the whole point, because that is
+  // somebody deciding how to spend a morning.
+  if (!oddsPick.value) {
+    // These are FORWARD numbers over the doors that are left, so comparing
+    // them against the campaign is comparing the average with itself and
+    // reads as a verdict on nothing. What is worth saying is the contrast:
+    // the remaining doors answer less often than the ones already worked,
+    // because the easy ones have been done. Stating the historical figure
+    // beside it is also what keeps this from repeating the Overview tab,
+    // which reports that figure and only that figure.
+    const m = oddsModel.value
+    return [
+      { label: 'Doors', value: fmtCount(s.doors), hint: `${fmtCount(s.open)} still worth knocking` },
+      {
+        label: 'Somebody answers',
+        value: s.answer ? oddsPct(s.answer.p) : 'none yet',
+        hint: m ? `${oddsPct(m.campaignAnswer)} of interactions so far` : undefined,
+      },
+      {
+        label: 'They sign, if they answer',
+        value: s.sign ? oddsPct(s.sign.p) : 'none yet',
+        hint: m ? `${oddsPct(m.campaignSign)} of conversations so far` : undefined,
+      },
+      { label: 'A signature this knock', value: oddsPct(perDoor), hint: 'the two multiplied' },
+    ]
+  }
+
   return [
     { label: 'Doors', value: fmtCount(s.doors), hint: `${fmtCount(s.open)} still worth knocking` },
     {
@@ -1346,16 +1421,7 @@ const setTiles = computed<Tile[]>(() => {
       value: s.typicalYield.signatures.toFixed(0),
       hint: 'signatures, at the campaign average',
     },
-    {
-      label: 'Somebody answers',
-      value: s.answer ? oddsPct(s.answer.p) : 'none yet',
-      hint: versusText(s.vsCampaign?.answer, 'answering'),
-    },
-    {
-      label: 'They sign, if they answer',
-      value: s.sign ? oddsPct(s.sign.p) : 'none yet',
-      hint: versusText(s.vsCampaign?.sign, 'signing'),
-    },
+    ...rates,
   ]
 })
 
@@ -1834,13 +1900,13 @@ const focusRanks = computed<FocusRank[]>(() => {
             </button>
             <span class="focus-name">{{ focus.label }}</span>
           </template>
-          <!-- The Odds tab reads every knock on record and says so instead.
-               A day chip there would filter what the model LEARNS from, and
-               under "Today" it would have nothing to fit at all. -->
-          <div v-if="tab === 'odds'" class="chip-row">
-            <span class="muted">Every knock on record</span>
-          </div>
-          <div v-else class="chip-row" role="group" aria-label="Time window">
+          <!-- No day chips on the Odds tab: a chip there would filter what the
+               model LEARNS from, and under "Today" it would have nothing to
+               fit at all. It said "Every knock on record" instead until
+               2026-07-27; that came out with the user's call, because the tab
+               lands on the average door and the panel already names what is
+               being looked at, so the line was a caption for a caption. -->
+          <div v-if="tab !== 'odds'" class="chip-row" role="group" aria-label="Time window">
             <button
               v-for="r in RANGE_CHIPS"
               :key="r.value"
@@ -1852,7 +1918,7 @@ const focusRanks = computed<FocusRank[]>(() => {
               {{ r.label }}
             </button>
           </div>
-          <span class="scope-right muted">
+          <span v-if="tab !== 'odds'" class="scope-right muted">
             {{ fmtCount(scopeCount) }} knocks<span v-if="showTapHint">, tap once to read, again to open</span>
           </span>
           <!-- Its own line (flex-basis 100%): the pair needs ~340px, which is
