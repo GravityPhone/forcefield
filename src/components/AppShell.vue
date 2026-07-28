@@ -1045,7 +1045,20 @@ onUnmounted(() => {
   flex-direction: column;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  overflow: hidden;
+  /* THE LIST IS THE SCROLLER, AND `hidden` HERE WAS SILENTLY EATING ROWS.
+   * This is a flex item, and an overflow other than `visible` zeroes its
+   * automatic minimum size — so with the default flex-shrink it gave up
+   * height to fit the sheet's max-height and CLIPPED whatever didn't fit,
+   * with no way to scroll it back: the sheet's own overflow-y never engaged
+   * either, because the list had already shrunk the content to fit
+   * (scrollHeight stayed equal to clientHeight). Measured at 390x812 on a
+   * campaign manager's twelve rows: 555px of box for 648px of rows, so
+   * Settings showed 14px of its 54 and Campaign wasn't on screen at all —
+   * a manager could not reach either row from this sheet. `auto` on the y
+   * axis is the whole fix; x stays clipped so the rows keep the rounded
+   * corners. */
+  overflow: hidden auto;
+  overscroll-behavior: contain;
 }
 
 .more-row {
@@ -1093,14 +1106,17 @@ onUnmounted(() => {
 }
 
 .more-logout {
-  /* Sticks to the sheet's bottom edge while the nav list scrolls behind it —
-   * always visible no matter how many links a role has. */
-  position: sticky;
-  bottom: env(safe-area-inset-bottom, 0px);
+  /* Below the list and always on screen, whatever a role's link count — it
+   * used to be `position: sticky` OVER a scrolling list, which is a worse
+   * shape than it sounds: an opaque row parked mid-list slices whichever
+   * link it lands on and lets the one after it poke out underneath, so the
+   * sheet reads as a rendering fault rather than as an overlay. The list
+   * scrolls inside its own box now, so this just sits under it, separated
+   * by the sheet's own gap. */
+  flex-shrink: 0;
   color: var(--danger);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.12);
 }
 
 .more-logout .more-icon {
