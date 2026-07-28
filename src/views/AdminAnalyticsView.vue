@@ -15,6 +15,7 @@
 // until 2026-07-14 — removed as more than managers needed; stats.ts keeps
 // the machinery if it ever comes back.)
 import { computed, ref, shallowRef } from 'vue'
+import { useRoute } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
 import { onPageEnter } from '@/lib/pageState'
 import ChartCard from '@/components/charts/ChartCard.vue'
@@ -22,7 +23,6 @@ import TimeSeriesChart from '@/components/charts/TimeSeriesChart.vue'
 import type { TimeSeries } from '@/components/charts/TimeSeriesChart.vue'
 import StackedBarChart from '@/components/charts/StackedBarChart.vue'
 import BarChart from '@/components/charts/BarChart.vue'
-import Heatmap from '@/components/charts/Heatmap.vue'
 import ScatterChart from '@/components/charts/ScatterChart.vue'
 import type { BarItem } from '@/components/charts/BarChart.vue'
 import type { ScatterPoint } from '@/components/charts/ScatterChart.vue'
@@ -33,13 +33,22 @@ import {
   ensureAppointmentSettings,
   windowLabel,
 } from '@/lib/appointments'
-import { useChartPalette, ordinalRamp, fmtPct, fmtCount } from '@/lib/chartTheme'
+import { useChartPalette, fmtPct, fmtCount } from '@/lib/chartTheme'
 import { wilson, linearRegression } from '@/lib/stats'
+import {
+  buildOddsModel,
+  doorOdds,
+  percentileOf,
+  scoreOddsModel,
+  setOdds,
+} from '@/lib/odds'
+import { titleCase } from '@/lib/streetWalk'
 import { ANALYTICS_TAB_HELP } from '@/lib/helpContent'
 import type { KnockOutcome } from '@/types'
 
 const palette = useChartPalette()
 const cat = computed(() => palette.categorical.value)
+const route = useRoute()
 
 // ---------------------------------------------------------------- loading
 
@@ -51,6 +60,7 @@ interface KnockRow {
   // Stamped at knock time by the DB (see 20260714120000): the squad the
   // canvasser was crewing with that day and the (top-level) turf the door
   // sat in. Snapshotted names, so history survives squads/turf being re-cut.
+  squad_id: string | null
   squad_name: string | null
   turf_name: string | null
 }
@@ -59,15 +69,15 @@ interface Knock {
   outcome: KnockOutcome
   ts: number
   day: string // local YYYY-MM-DD
-  hour: number
-  weekday: number // 0 = Sunday
   household: string
   canvasser: string
   squad: string
+  /** The crew id stamped at knock time. Analytics groups by the NAME (squads
+   *  dissolve nightly, so a snapshot is the only honest key across days); the
+   *  id is what the Odds tab joins back to the turfs table to work out whose
+   *  doors are whose. */
+  squadId: string | null
   turf: string
-  attempt: number
-  priorNotHomes: number
-  experience: number // canvasser's knocks before this one
   /** Tried the door: every outcome except Skip. See the two sets below. */
   interacted: boolean
   /** Somebody answered. See CONVERSATION below. */
@@ -85,6 +95,29 @@ const knocks = shallowRef<Knock[]>([])
 /** Every address on file. Range-independent by nature — the denominator for
  * "doors never knocked". */
 const addressTotal = ref(0)
+
+/** The address rows themselves, kept for the Odds tab: it looks a house up by
+ * name, groups doors by street, and hands the lot to the predictor. */
+interface DoorRow {
+  id: string
+  turf_id: string | null
+  street: string
+  city: string
+  lat: number | null
+  lng: number | null
+  persons?: { count: number }[]
+}
+const doorRows = shallowRef<DoorRow[]>([])
+/** Turf rows, for the Odds tab's turf and canvasser scopes. */
+interface TurfRow {
+  id: string
+  name: string
+  parent_turf_id: string | null
+  assignee_id: string | null
+  squad_id: string | null
+  created_at: string
+}
+const turfRows = shallowRef<TurfRow[]>([])
 /** Doors currently sitting in each turf (by turf name) — the denominator for
  * turf coverage. Current cut only; historical knocks keep their stamped name
  * even if that turf no longer exists (they just get no coverage bar). */
@@ -151,13 +184,18 @@ onPageEnter(async () => {
     const [rows, addrs, profs, turfs, appts] = await Promise.all([
       fetchAllPages<KnockRow>(
         'knock_logs',
-        'outcome, occurred_at, household_id, canvasser_id, squad_name, turf_name',
+        'outcome, occurred_at, household_id, canvasser_id, squad_id, squad_name, turf_name',
         knockCount ?? 0,
         (n) => (loadNote.value = `Loading knocks… ${fmtCount(n)} / ${fmtCount(knockCount ?? 0)}`),
       ),
-      fetchAllPages<{ id: string; turf_id: string | null }>(
+      // street/city/lat/lng/persons came back on 2026-07-27 for the Odds tab's
+      // predictor: it needs to know which street a door is on, which streets
+      // touch it, and how many people live there (only to tell a fully signed
+      // door from a partly signed one). The read already pages all 22.7k rows,
+      // so the marginal cost is the wider row rather than another round trip.
+      fetchAllPages<DoorRow>(
         'addresses',
-        'id, turf_id',
+        'id, turf_id, street, city, lat, lng, persons(count)',
         addrCount ?? 0,
         () => {},
       ),
@@ -170,7 +208,7 @@ onPageEnter(async () => {
         }),
       supabase
         .from('turfs')
-        .select('id, name, parent_turf_id')
+        .select('id, name, parent_turf_id, assignee_id, squad_id, created_at')
         .then(({ data, error }) => {
           if (error) throw new Error(error.message)
           return data ?? []
@@ -202,6 +240,8 @@ onPageEnter(async () => {
     }))
 
     addressTotal.value = addrs.length
+    doorRows.value = addrs
+    turfRows.value = turfs
     // Doors per turf, resolved to the TOP-LEVEL turf name — same resolution
     // the knock stamps use, so numerator and denominator agree.
     const turfById = new Map(turfs.map((t) => [t.id, t]))
@@ -221,6 +261,7 @@ onPageEnter(async () => {
 
     loadNote.value = 'Crunching…'
     knocks.value = enrich(rows)
+    applyOddsDeepLink()
   } catch (e) {
     loadError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -265,15 +306,11 @@ function enrich(rows: KnockRow[]): Knock[] {
         outcome: r.outcome,
         ts: d.getTime(),
         day: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
-        hour: d.getHours(),
-        weekday: d.getDay(),
         household: r.household_id!,
         canvasser: r.canvasser_id,
         squad: r.squad_name ?? NO_SQUAD,
+        squadId: r.squad_id,
         turf: r.turf_name ?? NO_TURF,
-        attempt: 0,
-        priorNotHomes: 0,
-        experience: 0,
         interacted: r.outcome !== 'skip',
         conversed: CONVERSATION.has(r.outcome),
         signed: r.outcome === 'signed',
@@ -281,24 +318,22 @@ function enrich(rows: KnockRow[]): Knock[] {
     })
     .sort((a, b) => a.ts - b.ts)
 
-  // attempt number + prior not-homes per household, experience per canvasser
-  const perHouse = new Map<string, { attempts: number; notHomes: number; lastTs: number }>()
-  const perCanvasser = new Map<string, number>()
-  for (const k of parsed) {
-    const h = perHouse.get(k.household) ?? { attempts: 0, notHomes: 0, lastTs: 0 }
-    // knocks within 10 min at the same door are one visit (spouse signing too)
-    const sameVisit = k.ts - h.lastTs < 10 * 60 * 1000 && h.attempts > 0
-    if (!sameVisit) h.attempts++
-    h.lastTs = k.ts
-    k.attempt = h.attempts
-    k.priorNotHomes = h.notHomes
-    if (k.outcome === 'not_home') h.notHomes++
-    perHouse.set(k.household, h)
-
-    const xp = perCanvasser.get(k.canvasser) ?? 0
-    k.experience = xp
-    perCanvasser.set(k.canvasser, xp + 1)
-  }
+  /* This used to end with a per-household loop filling `attempt`,
+   * `priorNotHomes`, `experience`, `hour` and `weekday`, and CLAUDE.md warned
+   * at length that deleting the by-visit charts would orphan the predictor's
+   * own inputs. It has not: they all moved INTO src/lib/odds.ts, which
+   * recomputes them from raw knocks, because it had to anyway.
+   *
+   * It also had to compute them differently, and that is the part worth
+   * knowing. The rule that two knocks at one door within ten minutes are ONE
+   * visit lives there now (SAME_VISIT_MS), and it is applied to the OUTCOME as
+   * well as to the count: this loop numbered the visits but still scored every
+   * knock separately, which counted a couple both signing as two successful
+   * trials. Per knock that reads as a 71.1% answer rate on a second visit to a
+   * door somebody has answered before; per visit it is 43.3%.
+   *
+   * So the rule survives, in one place, with a reader, and the numbers it
+   * produces are no longer quietly wrong. Nothing here needs restoring. */
   return parsed
 }
 
@@ -505,7 +540,15 @@ function openCanvasserRow(i: number) {
   canvasserFocus.value = canvasserStats.value[i].id
 }
 
-const scopeCount = computed(() => (focus.value ? focusKnocks.value.length : filtered.value.length))
+const scopeCount = computed(() =>
+  // Odds reads everything, so the count beside it has to be everything too, or
+  // the row says "every knock on record" next to a filtered number.
+  tab.value === 'odds'
+    ? knocks.value.length
+    : focus.value
+      ? focusKnocks.value.length
+      : filtered.value.length,
+)
 const showTapHint = computed(
   () =>
     !focus.value &&
@@ -933,99 +976,400 @@ const signaturesBySquad = computed<BarItem[]>(() =>
 const signRateBySquad = computed(() => signRateBy((k) => k.squad, (k) => k.squad !== NO_SQUAD, 10))
 
 // ---------------------------------------------------------------- odds
+// The Odds tab is a PREDICTOR, not a set of charts (2026-07-27, user call:
+// "get rid of all of these and just have a place here that lets you put in a
+// particular address, and it gives you the probabilities of what will happen
+// on the next knock"). Four campaign-wide charts went: answer and sign rate by
+// visit, the weekday-by-hour heatmap, and the door funnel. The inputs they
+// used to justify still exist in enrich() and are read HERE now.
+//
+// IT DELIBERATELY IGNORES THE DAY CHIPS, and that is the one trap worth
+// naming: every other tab filters what it reports, so the default behaviour of
+// this shared scope row is that this tab would filter what it LEARNS FROM.
+// Under the Today chip the model would have nothing to fit at all. Same
+// reasoning the trailing 7-day mean already applies by reaching back past the
+// window: a door's odds are a fact about the door, not about which chip is
+// selected. The chips are hidden here and the scope row says what is in use.
 
-/** Visits, not "attempts" (2026-07-26, user call: "signed by attempt, attempt
- * four plus: does that mean BY attempt four we get 54%, or ON the fourth
- * attempt we have a 54% chance?").
+/** Built from every knock and every door, once. `rank: true` scores the whole
+ *  county so a single house can be placed against all of them, which is what
+ *  "compare one house to everything" needs. */
+const oddsModel = computed(() =>
+  knocks.value.length && doorRows.value.length
+    ? buildOddsModel(
+        knocks.value.map((k) => ({ household: k.household, ts: k.ts, outcome: k.outcome })),
+        doorRows.value.map((d) => ({
+          id: d.id,
+          street: d.street,
+          city: d.city,
+          lat: d.lat,
+          lng: d.lng,
+          residents: d.persons?.[0]?.count ?? 0,
+        })),
+        { rank: true },
+      )
+    : null,
+)
+
+/** How well it did on knocks it was not shown. Measured rather than claimed,
+ *  because the history it learns from is mostly simulated and any sentence
+ *  written here would be a claim about a simulator. */
+const oddsScore = computed(() =>
+  knocks.value.length && doorRows.value.length
+    ? scoreOddsModel(
+        knocks.value.map((k) => ({ household: k.household, ts: k.ts, outcome: k.outcome })),
+        doorRows.value.map((d) => ({
+          id: d.id,
+          street: d.street,
+          city: d.city,
+          lat: d.lat,
+          lng: d.lng,
+          residents: d.persons?.[0]?.count ?? 0,
+        })),
+      )
+    : null,
+)
+
+/**
+ * ONE BOX (2026-07-27, user call: "rather than have the toggles for a house, a
+ * street, or a canvasser, it should just have that all combined in one box that
+ * we can type anything, any of those things, and then when we select them, then
+ * it does the comparisons").
  *
- * It is the second one, and it always was: each bar counts only the knocks
- * that WERE that visit, so the bars are independent rather than cumulative.
- * The old "Attempt 4+" said nothing either way. "4th visit or later" plus a
- * spelled-out sentence in the tooltip says which one it is without anybody
- * having to guess. */
-const VISIT_LABELS = ['', '1st visit', '2nd visit', '3rd visit', '4th visit or later']
-const visitPhrase = (a: number) =>
-  a === 4 ? 'on a 4th or later visit' : `on a door's ${['', '1st', '2nd', '3rd'][a]} visit`
+ * Four scope chips and four different pickers underneath them was four controls
+ * for one intent, and it made you say what KIND of thing you were looking for
+ * before you could look for it, which is a question nobody has an opinion
+ * about. You know the name. Type the name.
+ */
+type PickKind = 'house' | 'street' | 'turf' | 'canvasser'
 
-function rateByVisit(
-  num: (k: Knock) => boolean,
-  den: (k: Knock) => boolean,
-  unit: string,
-  verb: string,
-): BarItem[] {
-  const per = new Map<number, { n: number; s: number }>()
-  for (const k of filtered.value) {
-    if (!den(k)) continue
-    const a = Math.min(k.attempt, 4)
-    const e = per.get(a) ?? { n: 0, s: 0 }
-    e.n++
-    if (num(k)) e.s++
-    per.set(a, e)
-  }
-  return [...per.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .filter(([, e]) => e.n >= 20)
-    .map(([a, e]) => {
-      const item = rateItem(VISIT_LABELS[a], e.s, e.n, `${unit} ${visitPhrase(a)}`)
-      item.detail = `${fmtCount(e.s)} of ${fmtCount(e.n)} ${unit} ${visitPhrase(a)} ${verb}`
-      return item
-    })
+interface OddsHit {
+  kind: PickKind
+  /** Household id, street key, turf id, or profile id. */
+  id: string
+  label: string
+  sub: string
 }
 
-const answerByVisit = computed(() =>
-  rateByVisit((k) => k.conversed, (k) => k.interacted, 'interactions', 'were answered'),
-)
-const signByVisit = computed(() =>
-  rateByVisit((k) => k.signed, (k) => k.conversed, 'conversations', 'ended in a signature'),
-)
+const KIND_LABEL: Record<PickKind, string> = {
+  house: 'House',
+  street: 'Street',
+  turf: 'Turf',
+  canvasser: 'Canvasser',
+}
 
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const HOURS = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-const heat = computed(() => {
-  const n: number[][] = WEEKDAYS.map(() => HOURS.map(() => 0))
-  const s: number[][] = WEEKDAYS.map(() => HOURS.map(() => 0))
-  for (const k of filtered.value) {
-    if (!k.interacted) continue // a skipped door was never tried at any hour
-    const c = HOURS.indexOf(Math.min(20, Math.max(10, k.hour)))
-    if (c < 0) continue
-    n[k.weekday][c]++
-    if (k.conversed) s[k.weekday][c]++
+const oddsQuery = ref('')
+const oddsPick = ref<OddsHit | null>(null)
+const pickedDay = ref('') // canvasser only. '' = every day
+
+/** Doors currently sitting in each turf, for the hint and for the door set. */
+const doorsPerTurf = computed(() => {
+  const held = new Map<string, number>()
+  for (const d of doorRows.value) {
+    if (d.turf_id) held.set(d.turf_id, (held.get(d.turf_id) ?? 0) + 1)
   }
-  const values = n.map((row, r) => row.map((cnt, c) => (cnt >= 15 ? s[r][c] / cnt : null)))
-  return { values, counts: n }
+  return held
 })
 
-/** Still three stages under the two-tier model: the funnel counts DOORS, and
- * at door level "tried" vs "knocked" differ only by doors that were only ever
- * skipped — a step that never loses anybody teaches nothing. The knock-level
- * ladder (interactions → conversations) is the rate tiles' job. */
-const funnel = computed<BarItem[]>(() => {
-  const f = filtered.value
-  const doors = new Set(f.map((k) => k.household)).size
-  const talkedDoors = new Set(f.filter((k) => k.conversed).map((k) => k.household)).size
-  const signedDoors = new Set(f.filter((k) => k.signed).map((k) => k.household)).size
-  const ramp = ordinalRamp(3, palette.dark.value)
-  const steps = [
-    { label: 'Knocked', value: doors, detail: 'doors visited at least once', of: '' },
+/**
+ * Everything the box can find, mixed.
+ *
+ * Order is by KIND rather than by score, because the kinds answer questions of
+ * very different sizes and a manager typing "mil" wants Milford Ave before
+ * 1465 Milford Ave. Houses come last for the same reason: there are 22.7k of
+ * them and they are the narrowest thing here. The exception is a query with a
+ * digit in it, which is somebody typing a house number, so houses go first.
+ */
+const oddsHits = computed<OddsHit[]>(() => {
+  const m = oddsModel.value
+  const q = oddsQuery.value.trim().toUpperCase()
+  if (!m || q.length < 2) return []
+
+  const streets: OddsHit[] = []
+  for (const [key, ids] of m.doorsOnStreet) {
+    const [name, city] = key.split('|')
+    if (!name.includes(q) && !city.toUpperCase().startsWith(q)) continue
+    streets.push({
+      kind: 'street',
+      id: key,
+      label: titleCase(name),
+      sub: `${city}, ${fmtCount(ids.length)} doors`,
+    })
+    if (streets.length > 200) break
+  }
+  streets.sort(
+    (a, b) => Number(b.label.toUpperCase().startsWith(q)) - Number(a.label.toUpperCase().startsWith(q)),
+  )
+
+  const turfs: OddsHit[] = turfRows.value
+    .filter((t) => t.name.toUpperCase().includes(q) && (doorsPerTurf.value.get(t.id) ?? 0) > 0)
+    .map((t) => ({
+      kind: 'turf' as const,
+      id: t.id,
+      label: t.name,
+      sub: `${fmtCount(doorsPerTurf.value.get(t.id) ?? 0)} doors`,
+    }))
+
+  const people: OddsHit[] = canvasserStats.value
+    .filter((c) => c.name.toUpperCase().includes(q))
+    .map((c) => ({
+      kind: 'canvasser' as const,
+      id: c.id,
+      label: c.name,
+      sub: `${fmtCount(c.knocks)} knocks`,
+    }))
+
+  const houses: OddsHit[] = doorRows.value
+    .filter((d) => d.street.toUpperCase().includes(q))
+    .slice(0, 60)
+    .map((d) => ({ kind: 'house' as const, id: d.id, label: d.street, sub: d.city }))
+  houses.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }))
+
+  const hasNumber = /\d/.test(q)
+  const groups = hasNumber
+    ? [houses.slice(0, 25), streets.slice(0, 6), turfs.slice(0, 4), people.slice(0, 4)]
+    : [streets.slice(0, 10), turfs.slice(0, 6), people.slice(0, 6), houses.slice(0, 20)]
+  return groups.flat()
+})
+
+/** Clearing the box clears the pick: the panel below must never be describing
+ *  something the box no longer names. */
+function pickOdds(hit: OddsHit) {
+  oddsPick.value = hit
+  pickedDay.value = ''
+  oddsQuery.value = ''
+}
+function clearOddsPick() {
+  oddsPick.value = null
+  oddsQuery.value = ''
+}
+
+/**
+ * Arriving from somewhere else with a door already in mind.
+ *
+ * Talk and the two maps carry a compact odds panel for managers, and its "Open
+ * on Odds" link lands here as `?tab=odds&door=<id>`. Resolved after the load
+ * rather than on mount, because the label comes out of the address rows and
+ * there are none until then.
+ */
+function applyOddsDeepLink() {
+  const q = route.query
+  if (q.tab !== 'odds') return
+  tab.value = 'odds'
+  const id = typeof q.door === 'string' ? q.door : ''
+  if (!id) return
+  const d = doorRows.value.find((x) => x.id === id)
+  if (d) oddsPick.value = { kind: 'house', id: d.id, label: d.street, sub: d.city }
+}
+
+/** Days that canvasser was out, newest first. */
+const personDays = computed(() => {
+  const pick = oddsPick.value
+  if (pick?.kind !== 'canvasser') return []
+  const days = new Set<string>()
+  for (const k of knocks.value) if (k.canvasser === pick.id) days.add(k.day)
+  return [...days].sort().reverse().slice(0, 30)
+})
+
+/**
+ * The doors one canvasser is responsible for, resolved in a stated order.
+ *
+ * Turf in this app is usually dispatched to a SQUAD rather than to a person,
+ * and on a fresh cut it may be dispatched to nobody at all, so a single rule
+ * would leave this empty most days. Three rules, and the panel says which one
+ * it used, so the number is never quietly about something other than what was
+ * asked for.
+ */
+const personDoors = computed<{ ids: string[]; how: string }>(() => {
+  const pick = oddsPick.value
+  if (pick?.kind !== 'canvasser') return { ids: [], how: '' }
+  const person = pick.id
+  const day = pickedDay.value
+  const inDay = (k: Knock) => k.canvasser === person && (!day || k.day === day)
+
+  // 1. Turf handed to them by name.
+  const mine = new Set(turfRows.value.filter((t) => t.assignee_id === person).map((t) => t.id))
+  if (mine.size) {
+    const ids = doorRows.value.filter((d) => d.turf_id && mine.has(d.turf_id)).map((d) => d.id)
+    if (ids.length) return { ids, how: 'Turf assigned to them' }
+  }
+
+  // 2. Turf dispatched to a crew they were out with, taken from the squad
+  //    stamped on their own knocks.
+  const squads = new Set<string>()
+  for (const k of knocks.value) if (inDay(k) && k.squadId) squads.add(k.squadId)
+  if (squads.size) {
+    const crew = new Set(
+      turfRows.value.filter((t) => t.squad_id && squads.has(t.squad_id)).map((t) => t.id),
+    )
+    if (crew.size) {
+      const ids = doorRows.value.filter((d) => d.turf_id && crew.has(d.turf_id)).map((d) => d.id)
+      if (ids.length) return { ids, how: "Their crew's turf" }
+    }
+  }
+
+  // 3. The doors they actually knocked. Always something, and a perfectly good
+  //    question: what is left at the doors they worked.
+  const ids = [...new Set(knocks.value.filter(inDay).map((k) => k.household))]
+  return { ids, how: 'Doors they knocked' }
+})
+
+/** The door ids the pick resolves to. Null for a single house, which has its
+ *  own panel. */
+const oddsDoorSet = computed<{ ids: string[]; title: string; how: string } | null>(() => {
+  const m = oddsModel.value
+  const pick = oddsPick.value
+  if (!m || !pick) return null
+  if (pick.kind === 'street') {
+    return { ids: m.doorsOnStreet.get(pick.id) ?? [], title: pick.label, how: pick.sub }
+  }
+  if (pick.kind === 'turf') {
+    return {
+      ids: doorRows.value.filter((d) => d.turf_id === pick.id).map((d) => d.id),
+      title: pick.label,
+      how: 'Turf',
+    }
+  }
+  if (pick.kind === 'canvasser') {
+    const { ids, how } = personDoors.value
+    return { ids, title: pick.label, how }
+  }
+  return null
+})
+
+const setResult = computed(() => {
+  const m = oddsModel.value
+  const set = oddsDoorSet.value
+  return m && set && set.ids.length ? setOdds(m, set.ids) : null
+})
+
+const houseResult = computed(() => {
+  const m = oddsModel.value
+  const pick = oddsPick.value
+  if (!m || pick?.kind !== 'house') return null
+  return doorOdds(m, pick.id)
+})
+
+const housePercentile = computed(() => {
+  const m = oddsModel.value
+  const h = houseResult.value
+  return m && h?.signature ? percentileOf(m, h.signature.p) : null
+})
+
+const pickedDoorRow = computed(() =>
+  oddsPick.value?.kind === 'house'
+    ? (doorRows.value.find((d) => d.id === oddsPick.value!.id) ?? null)
+    : null,
+)
+
+/** "1st", "2nd", "12th". Only ever used for a street's place in a ranking. */
+function ordinal(n: number): string {
+  const rem100 = n % 100
+  if (rem100 >= 11 && rem100 <= 13) return `${n}th`
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] ?? 'th'}`
+}
+
+const scoreSubtitle = computed(() =>
+  oddsScore.value ? `tested on the last ${oddsScore.value.days} days, held back` : '',
+)
+
+const oddsPct = (p: number) => fmtPct(p, 1)
+const oddsBand = (e: { lo: number; hi: number }) =>
+  `Likely between ${fmtPct(e.lo)} and ${fmtPct(e.hi)}`
+
+/** "9 points above the campaign average", or that it is not really different. */
+function versusText(b: { lift: number; verdict: string } | undefined, what: string): string {
+  if (!b) return ''
+  if (b.verdict === 'typical') return `About average for the campaign on ${what}`
+  return `${Math.abs(b.lift).toFixed(1)} points ${b.verdict} the campaign on ${what}`
+}
+
+const houseTiles = computed<Tile[]>(() => {
+  const h = houseResult.value
+  if (!h || !h.answer || !h.sign || !h.signature) return []
+  return [
     {
-      label: 'Talked to somebody',
-      value: talkedDoors,
-      detail: 'doors where anyone came out',
-      of: 'of the doors knocked',
+      label: 'Somebody answers',
+      value: oddsPct(h.answer.p),
+      hint: oddsBand(h.answer),
     },
     {
-      label: 'Got a signature',
-      value: signedDoors,
-      detail: 'doors where somebody signed',
-      of: 'of the doors that answered',
+      label: 'They sign, if they answer',
+      value: oddsPct(h.sign.p),
+      hint: oddsBand(h.sign),
+    },
+    {
+      label: 'A signature this knock',
+      value: oddsPct(h.signature.p),
+      hint: versusText(h.vsCampaign?.signature, 'a knock'),
+    },
+    {
+      // Said forwards, not as a percentile: "top 71%" is true of a door in the
+      // bottom three quarters and reads like praise.
+      label: 'Against every door',
+      value:
+        housePercentile.value == null ? 'none yet' : `better than ${housePercentile.value}%`,
+      hint: `of the ${fmtCount(oddsModel.value?.doorScores.length ?? 0)} doors still worth knocking`,
     },
   ]
-  return steps.map(({ of, ...st }, i) => ({
-    ...st,
-    color: ramp[i],
-    note: of ? `${fmtPct(st.value / Math.max(1, steps[i - 1].value), 1)} ${of}` : undefined,
+})
+
+const setTiles = computed<Tile[]>(() => {
+  const s = setResult.value
+  if (!s) return []
+  return [
+    { label: 'Doors', value: fmtCount(s.doors), hint: `${fmtCount(s.open)} still worth knocking` },
+    {
+      label: 'Expected conversations',
+      value: s.expectedConversations.value.toFixed(0),
+      hint: `${s.expectedConversations.lo.toFixed(0)} to ${s.expectedConversations.hi.toFixed(0)}`,
+    },
+    {
+      label: 'Expected signatures',
+      value: s.expectedSignatures.value.toFixed(0),
+      hint: `${s.expectedSignatures.lo.toFixed(0)} to ${s.expectedSignatures.hi.toFixed(0)}`,
+    },
+    {
+      label: 'The same doors, average ground',
+      value: s.typicalYield.signatures.toFixed(0),
+      hint: 'signatures, at the campaign average',
+    },
+    {
+      label: 'Somebody answers',
+      value: s.answer ? oddsPct(s.answer.p) : 'none yet',
+      hint: versusText(s.vsCampaign?.answer, 'answering'),
+    },
+    {
+      label: 'They sign, if they answer',
+      value: s.sign ? oddsPct(s.sign.p) : 'none yet',
+      hint: versusText(s.vsCampaign?.sign, 'signing'),
+    },
+  ]
+})
+
+/** Answer chance by time of day for whatever is picked, best first. */
+const oddsTimes = computed<BarItem[]>(() => {
+  const list = setResult.value?.bestTimes ?? houseResult.value?.bestTimes ?? []
+  return list.map((b) => ({
+    label: `${b.label}, ${b.hours}`,
+    value: b.p,
+    detail: `${fmtCount(b.n)} interactions logged in this block`,
   }))
 })
+
+/** Where each closed door went, so a small "still open" number explains
+ *  itself instead of just looking wrong. */
+const closedRows = computed(() =>
+  (setResult.value?.closedBreakdown ?? []).map((c) => [c.label, c.count]),
+)
+
+const streetsInSet = computed<BarItem[]>(() =>
+  (setResult.value?.streets ?? []).map((s) => ({
+    label: titleCase(s.name),
+    value: s.open,
+    detail: `${fmtCount(s.doors)} doors, ${fmtCount(s.open)} still worth knocking`,
+  })),
+)
 
 // ---------------------------------------------------------------- canvassers
 
@@ -1441,7 +1785,13 @@ const focusRanks = computed<FocusRank[]>(() => {
             </button>
             <span class="focus-name">{{ focus.label }}</span>
           </template>
-          <div class="chip-row" role="group" aria-label="Time window">
+          <!-- The Odds tab reads every knock on record and says so instead.
+               A day chip there would filter what the model LEARNS from, and
+               under "Today" it would have nothing to fit at all. -->
+          <div v-if="tab === 'odds'" class="chip-row">
+            <span class="muted">Every knock on record</span>
+          </div>
+          <div v-else class="chip-row" role="group" aria-label="Time window">
             <button
               v-for="r in RANGE_CHIPS"
               :key="r.value"
@@ -1459,7 +1809,7 @@ const focusRanks = computed<FocusRank[]>(() => {
           <!-- Its own line (flex-basis 100%): the pair needs ~340px, which is
                most of a phone, so letting it flow beside the chips would only
                wrap it there anyway, mid row. -->
-          <div v-if="rangeKey === 'custom'" class="custom-range">
+          <div v-if="rangeKey === 'custom' && tab !== 'odds'" class="custom-range">
             <input
               v-model="customFrom"
               type="date"
@@ -1773,75 +2123,187 @@ const focusRanks = computed<FocusRank[]>(() => {
           </ChartCard>
         </template>
 
-        <!-- ============================== Odds -->
+        <!-- ============================== Odds (the next-knock predictor) -->
         <template v-else-if="tab === 'odds'">
-          <div class="two-col">
-            <ChartCard
-              title="Answer rate by visit"
-              data-help="odds-attempts"
-              subtitle="counts that visit only, not a running total"
-              :columns="['Visit', 'Answer rate', 'Detail']"
-              :rows="rateRows(answerByVisit)"
-            >
-              <BarChart
-                :items="answerByVisit"
-                :color="cat[0]"
-                percent
-                measure="Answer rate on that visit"
-                :ref-value="overallRates.answer"
-                ref-label="all visits"
-                :max="pctMax(answerByVisit, overallRates.answer)"
-              />
-            </ChartCard>
+          <!-- One box for all four kinds of thing. Tap a result to see it. -->
+          <input
+            v-if="!oddsPick"
+            v-model="oddsQuery"
+            class="odds-search"
+            type="search"
+            placeholder="A house, a street, turf, or a canvasser"
+            aria-label="Find something to work out the odds for"
+            data-help="odds-scope"
+          />
+          <ul v-if="oddsHits.length && !oddsPick" class="odds-hits">
+            <li v-for="h in oddsHits" :key="h.kind + h.id">
+              <button type="button" class="odds-hit" @click="pickOdds(h)">
+                <span class="odds-hit-kind">{{ KIND_LABEL[h.kind] }}</span>
+                <span class="odds-hit-name">{{ h.label }}</span>
+                <span class="muted odds-hit-sub">{{ h.sub }}</span>
+              </button>
+            </li>
+          </ul>
+          <p
+            v-else-if="!oddsPick && oddsQuery.trim().length >= 2"
+            class="muted odds-empty"
+          >
+            Nothing by that name.
+          </p>
 
-            <ChartCard
-              title="Sign rate by visit"
-              subtitle="counts that visit only, not a running total"
-              :columns="['Visit', 'Sign rate', 'Detail']"
-              :rows="rateRows(signByVisit)"
+          <!-- Which day, once a canvasser is picked. -->
+          <div
+            v-if="oddsPick?.kind === 'canvasser' && personDays.length"
+            class="chip-row"
+            role="group"
+            aria-label="Which day"
+          >
+            <button
+              type="button"
+              class="chip"
+              :class="{ on: pickedDay === '' }"
+              @click="pickedDay = ''"
             >
-              <BarChart
-                :items="signByVisit"
-                :color="cat[0]"
-                percent
-                measure="Sign rate on that visit"
-                :ref-value="overallRates.sign"
-                ref-label="all visits"
-                :max="pctMax(signByVisit, overallRates.sign)"
-              />
-            </ChartCard>
+              Every day
+            </button>
+            <button
+              v-for="d in personDays"
+              :key="d"
+              type="button"
+              class="chip"
+              :class="{ on: pickedDay === d }"
+              @click="pickedDay = d"
+            >
+              {{ dayLabel(d) }}
+            </button>
           </div>
 
+          <!-- ONE HOUSE -->
+          <template v-if="houseResult">
+            <div class="scope">
+              <button class="chip back-chip" type="button" @click="clearOddsPick">
+                ‹ Something else
+              </button>
+              <span class="focus-name">{{ pickedDoorRow?.street }}</span>
+              <span class="scope-right muted">{{ pickedDoorRow?.city }}</span>
+            </div>
+
+            <p v-if="houseResult.closed" class="card odds-closed">
+              <strong>No next knock here.</strong> {{ houseResult.closedNote }}
+            </p>
+
+            <template v-else>
+              <div class="tiles" data-help="odds-house">
+                <div v-for="t in houseTiles" :key="t.label" class="tile">
+                  <span class="tile-label muted">{{ t.label }}</span>
+                  <span class="tile-value">{{ t.value }}</span>
+                  <span v-if="t.hint" class="tile-hint muted">{{ t.hint }}</span>
+                </div>
+              </div>
+
+              <ChartCard
+                title="Where this comes from"
+                data-help="odds-why"
+                :columns="['Taken into account', 'Running estimate', 'Evidence']"
+                :rows="
+                  [...houseResult.answerWhy, ...houseResult.signWhy].map((s) => [
+                    s.label,
+                    fmtPct(s.p, 1),
+                    s.detail,
+                  ])
+                "
+                table-only
+              />
+            </template>
+          </template>
+
+          <!-- A SET OF DOORS -->
+          <template v-else-if="setResult && oddsDoorSet">
+            <div class="scope">
+              <button class="chip back-chip" type="button" @click="clearOddsPick">
+                ‹ Something else
+              </button>
+              <span class="focus-name">{{ oddsDoorSet.title }}</span>
+              <span v-if="oddsDoorSet.how" class="scope-right muted">{{ oddsDoorSet.how }}</span>
+            </div>
+
+            <div class="tiles" data-help="odds-set">
+              <div v-for="t in setTiles" :key="t.label" class="tile">
+                <span class="tile-label muted">{{ t.label }}</span>
+                <span class="tile-value">{{ t.value }}</span>
+                <span v-if="t.hint" class="tile-hint muted">{{ t.hint }}</span>
+              </div>
+            </div>
+
+            <p v-if="setResult.streetRank" class="muted odds-rank">
+              {{ ordinal(setResult.streetRank.place) }} friendliest of
+              {{ fmtCount(setResult.streetRank.of) }} streets with enough knocks behind them.
+            </p>
+
+            <div class="two-col">
+              <ChartCard
+                v-if="closedRows.length"
+                title="Doors already closed"
+                subtitle="left out of the totals above"
+                :columns="['Why', 'Doors']"
+                :rows="closedRows"
+                table-only
+              />
+
+              <ChartCard
+                v-if="streetsInSet.length > 1"
+                title="Streets in here"
+                data-help="odds-streets"
+                subtitle="doors still worth knocking"
+                :columns="['Street', 'Open doors', 'Detail']"
+                :rows="streetsInSet.map((i) => [i.label, i.value, i.detail ?? ''])"
+              >
+                <BarChart
+                  :items="streetsInSet"
+                  :color="cat[0]"
+                  measure="Doors still worth knocking"
+                />
+              </ChartCard>
+            </div>
+          </template>
+
+          <p v-else class="muted odds-empty">Type a name above.</p>
+
+          <!-- When to go, for whatever is picked. -->
           <ChartCard
-            title="When doors answer"
-            data-help="odds-heatmap"
-            subtitle="share of interactions answered, by day and hour"
-            :columns="['Weekday', ...HOURS.map((h) => `${h}:00`)]"
-            :rows="
-              WEEKDAYS.map((w, r) => [
-                w,
-                ...heat.values[r].map((v) => (v == null ? 'too few' : fmtPct(v))),
-              ])
-            "
+            v-if="oddsTimes.length"
+            title="When to go"
+            data-help="odds-times"
+            subtitle="chance somebody answers, by time of day"
+            :columns="['Time', 'Somebody answers', 'Detail']"
+            :rows="oddsTimes.map((i) => [i.label, fmtPct(i.value, 1), i.detail ?? ''])"
           >
-            <Heatmap
-              :row-labels="WEEKDAYS"
-              :col-labels="HOURS.map((h) => (h <= 12 ? `${h}a` : `${h - 12}p`))"
-              :values="heat.values"
-              :counts="heat.counts"
-              unit="interactions"
-              :dark="palette.dark.value"
+            <BarChart
+              :items="oddsTimes"
+              :color="cat[0]"
+              percent
+              measure="Somebody answers"
+              :ref-value="overallRates.answer"
+              ref-label="all times"
+              :max="pctMax(oddsTimes, overallRates.answer)"
             />
           </ChartCard>
 
+          <!-- How much to trust any of it. Measured, not written. -->
           <ChartCard
-            title="How far doors get"
-            data-help="odds-funnel"
-            subtitle="doors counted once each"
-            :columns="['Stage', 'Doors', 'What it means']"
-            :rows="funnel.map((i) => [i.label, i.value, i.note ?? i.detail ?? ''])"
+            v-if="oddsScore"
+            title="How good is this guess"
+            data-help="odds-quality"
+            :subtitle="scoreSubtitle"
+            :columns="['It said', 'That many answered', 'Doors']"
+            :rows="oddsScore.bands.map((b) => [fmtPct(b.said), fmtPct(b.happened), b.n])"
+            table-only
           >
-            <BarChart :items="funnel" :color="cat[0]" measure="Doors" />
+            <p class="odds-quality">
+              Given two doors it picked the livelier one
+              <strong>{{ oddsScore.pickedLivelier }} times out of 100</strong>. Fifty would be a
+              coin toss.
+            </p>
           </ChartCard>
         </template>
 
@@ -2043,6 +2505,99 @@ const focusRanks = computed<FocusRank[]>(() => {
    belongs on the chart it changes, not in a page-level filter bar. */
 .base-row {
   margin-bottom: 0.5rem;
+}
+
+/* --- the Odds tab's own pickers --- */
+
+.odds-search {
+  width: 100%;
+}
+.odds-search {
+  min-height: 40px;
+  padding: 0.4rem 0.7rem;
+  font: inherit;
+  /* The 16px floor is not optional: iOS Safari zooms the whole page in on a
+     focused field under it. type=search is covered by style.css's global
+     field rule, and this restates the floor because the padding here is
+     custom and the two are read together. */
+  font-size: max(16px, calc(0.9rem * var(--ui-scale, 1)));
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.odds-search:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+.odds-hits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  max-height: 40vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.odds-hit {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9rem;
+  /* A <button> centres and clamps its contents under the UA styles, same
+     lesson as the Squad tiles and the streets list. */
+  text-align: left;
+  white-space: normal;
+  padding: 0.55rem 0.7rem;
+  cursor: pointer;
+}
+.odds-hits li:last-child .odds-hit {
+  border-bottom: none;
+}
+/* A fixed-width kind tag, so a mixed list reads as columns rather than as one
+   run-on sentence per row. */
+.odds-hit-kind {
+  flex: 0 0 4.6rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.odds-hit-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+}
+.odds-hit-sub {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+}
+.odds-hit:hover {
+  background: var(--row-tint-hover, color-mix(in srgb, var(--accent) 8%, var(--surface)));
+}
+.odds-empty,
+.odds-rank {
+  font-size: 0.85rem;
+  margin: 0;
+}
+.odds-closed {
+  padding: 0.9rem 1rem;
+  margin: 0;
+}
+.odds-quality {
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
 }
 
 .tiles {

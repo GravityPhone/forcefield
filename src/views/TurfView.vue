@@ -4211,6 +4211,14 @@ onUnmounted(() => {
           <div class="door-card-head">
             <strong class="door-card-street">{{ doorInfo.address.street }}</strong>
             <span class="muted">{{ doorInfo.address.city }}</span>
+            <!-- Managers only. Cutting turf is the moment somebody is deciding
+                 where to send a crew, so this is the map where the odds are
+                 most worth having. -->
+            <DoorOddsPanel
+              :household-id="doorInfo.address.id"
+              :label="doorInfo.address.street"
+              :residents="doorInfo.roster.length"
+            />
             <button class="door-card-x" aria-label="Close house history" @click="doorInfo = null">✕</button>
           </div>
           <!-- Which turf owns this door. Editing it lives one row down, on
@@ -4239,15 +4247,6 @@ onUnmounted(() => {
               :class="{ signed: p.signed }"
             >{{ p.name }}<span v-if="p.signed" aria-hidden="true"> ✓</span></span>
           </div>
-          <!-- Managers only. Cutting turf is the moment somebody is deciding
-               where to send a crew, so this is the map where the odds are
-               most worth having. -->
-          <DoorOddsPanel
-            class="door-card-odds"
-            compact
-            :household-id="doorInfo.address.id"
-            :residents="doorInfo.roster.length"
-          />
           <p v-if="doorInfo.loading" class="muted door-card-note">Loading history…</p>
           <p v-else-if="!doorInfo.knocks.length" class="muted door-card-note">Never knocked.</p>
           <ul v-else class="door-card-list">
@@ -5376,10 +5375,6 @@ onUnmounted(() => {
 
 .door-card-x:hover {
   color: var(--danger);
-}
-
-.door-card-odds {
-  margin: 0.4rem 0;
 }
 
 .door-card-note {

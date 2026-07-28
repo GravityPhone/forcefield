@@ -45,6 +45,7 @@ import {
 import { inkOn, memberColor } from '@/lib/memberColors'
 import { houseNumber, streetNameOf, titleCase } from '@/lib/streetWalk'
 import OutcomeSquare from './OutcomeSquare.vue'
+import DoorOddsPanel from '@/components/odds/DoorOddsPanel.vue'
 import { fadeUp } from '@/lib/motion'
 import type { Address, HouseholdKnockSummary, HouseholdLatestKnock, KnockLog, KnockOutcome, Person } from '@/types'
 
@@ -1825,6 +1826,13 @@ onUnmounted(() => {
           <span v-if="locatedTurfLabel" class="turf-tag">{{ locatedTurfLabel }}</span>
         </span>
         <span v-if="ratioFor(locatedAddress)" class="ratio-text">{{ ratioFor(locatedAddress) }}</span>
+        <!-- Managers only. A chip rather than a block: this card follows the
+             map into fullscreen and has no room for one. -->
+        <DoorOddsPanel
+          :household-id="locatedAddress.id"
+          :label="locatedAddress.street"
+          :residents="locatedAddress.persons?.[0]?.count ?? 0"
+        />
         <button
           class="btn btn-sm knock-btn"
           :style="knockStyleFor(locatedAddress.id)"
@@ -2569,6 +2577,12 @@ onUnmounted(() => {
 
 /* "2/4 signed" beside the square — a value, and the only part of the old
  * indicator grid worth keeping. */
+/* Manager-only odds inside the located card. Full width so it wraps under
+   the address rather than squeezing the Knock button. */
+.located-odds {
+  flex-basis: 100%;
+}
+
 .ratio-text {
   flex-shrink: 0;
   font-size: 0.78rem;

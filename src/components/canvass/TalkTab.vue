@@ -7,6 +7,7 @@ import AppSelect from '@/components/ui/AppSelect.vue'
 import { hapticTap } from '@/lib/native'
 import { OUTCOME_DOOR_LEVEL, OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, OUTCOME_SHORT, PIN_DEFAULT_HEX, outcomeRowTint } from '@/lib/outcomes'
 import OutcomeSquare from './OutcomeSquare.vue'
+import DoorOddsPanel from '@/components/odds/DoorOddsPanel.vue'
 import { appointmentLabel } from '@/lib/appointments'
 import { houseNumber } from '@/lib/streetWalk'
 import { useTalkStore, type KnockHistoryEntry } from '@/stores/talk'
@@ -135,7 +136,17 @@ const PARTLY_SIGNED_OPTIONS = [
             {{ banner.label }}
           </span>
         </div>
-        <button class="btn btn-sm" @click="talk.clearAddress()">Clear</button>
+        <!-- Managers only, and deliberately tucked into the header row beside
+             Clear: a planning number has no business in the middle of the
+             screen somebody reads at a stranger's porch. -->
+        <div class="head-actions">
+          <DoorOddsPanel
+            :household-id="talk.selectedAddress.id"
+            :label="talk.selectedAddress.street"
+            :residents="talk.roster.length"
+          />
+          <button class="btn btn-sm" @click="talk.clearAddress()">Clear</button>
+        </div>
       </div>
 
       <!-- Somebody said come back at a time. Reads before the roster does:
@@ -354,6 +365,14 @@ const PARTLY_SIGNED_OPTIONS = [
 }
 
 /* --- Door history --- */
+
+/* Odds chip and Clear, kept together at the right of the address header. */
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+}
 
 .history {
   border-top: 1px solid var(--border);

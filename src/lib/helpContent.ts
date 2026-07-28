@@ -625,27 +625,62 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
     title: 'Odds tab',
     sections: [
       {
-        heading: 'Visit numbers',
-        target: 'odds-attempts',
-        body: 'A visit is one trip to a door. Several knocks there within ten minutes count as one visit, so a couple both signing is not two visits.\nEach bar counts only what happened ON that visit. It is not a running total.\nSo "3rd visit, 54%" means: of the conversations that happened on a third visit, 54% signed. It does not mean 54% of doors have signed by the third visit.',
+        heading: 'What this tab does',
+        target: 'odds-scope',
+        body: 'One box. Type a house, a street, a turf or a canvasser, and tap it. It works out what the NEXT knock there is likely to get.\nTwo numbers, always in this order: the chance somebody comes to the door, and the chance they sign once somebody does. Multiply them and you have the chance one knock ends in a signature.\nFor a set of doors it also gives a total: knock all of these once, expect about this many conversations and this many signatures.\nA canvasser also gets day chips: their doors on one day, or across every day they were out.',
+      },
+      { heading: 'What counts as what', target: 'odds-scope', body: WHAT_COUNTS },
+      {
+        heading: 'A visit, not a knock',
+        target: 'odds-scope',
+        body: 'A visit is one trip to a door. Knocks there within ten minutes are one visit, so a couple both signing is one visit that signed, not two.\nEverything on this tab is per visit. "Visit 3" means the next trip would be the third.',
       },
       {
-        heading: 'What to do with it',
-        target: 'odds-attempts',
-        body: 'Answer rate usually climbs with each visit: the people who are never in at 6pm are still never in, so the ones you do reach are the reachable ones.\n' +
-          READING_A_RATE,
+        heading: 'Where the number comes from',
+        target: 'odds-why',
+        body: 'Three steps, and the card lists them with the running estimate after each.\nStart: what the whole campaign has got at doors in the SAME situation. Which visit it would be, and whether anybody has ever answered there.\nThen the streets that connect to this one.\nThen this street itself.\nEach step moves the number by an amount set by how many knocks are behind it. Nine knocks move it barely at all. Two hundred move it a long way. Nothing is hand set: the campaign\'s own spread between streets decides.',
       },
       {
-        heading: 'When doors answer',
-        target: 'odds-heatmap',
-        body: 'Answer rate by day of the week and hour. Darker means more doors opened.\nHold a square for its rate and how many interactions it is based on.\nA square with under 15 interactions is left blank rather than guessed at.',
+        heading: 'Which things move which number',
+        target: 'odds-why',
+        body: 'Whether somebody is HOME depends on the door\'s own history and the time of day. Not on the street: measured on this campaign, a street\'s answer rate does not carry to the next day once you take out the crew that walked it.\nWhether they SIGN depends on the street, and on very little else. Not the visit number, not how many people live there.\nSo a street with a good record raises the sign half and leaves the answer half alone. That is not a simplification, it is what the numbers do.',
       },
       {
-        heading: 'How far doors get',
-        target: 'odds-funnel',
-        body: 'Doors, counted once each, at three stages: knocked, somebody came out, somebody signed.\nHold a bar for what share of the stage above it reached that stage.\nThe drop between two bars is where the campaign is losing doors.',
+        heading: 'Comparing it to something',
+        target: 'odds-house',
+        body: 'Every figure is shown against the campaign average, and a house also gets its place among every door still worth knocking.\nIt only says above or below when the difference is bigger than the uncertainty. Otherwise it says about average, however different the two numbers look.',
       },
-      { heading: 'Folding cards away', target: 'odds-heatmap', body: FOLDING_CARDS },
+      {
+        heading: 'The range',
+        target: 'odds-house',
+        body: 'How sure the RATE is, not what this one door will do. A door either answers or it does not.\n40% means four doors in ten, not a door that is 40% open.\nWide range means little evidence: a street nobody has knocked leans entirely on the campaign average, and the range says so.',
+      },
+      {
+        heading: 'Totals over a set of doors',
+        target: 'odds-set',
+        body: 'Doors the walk would never return to are left out of the totals and counted separately: everybody signed, or the last visit was Not Interested, Skip or Hostile.\nThat is why "137 doors" can be "84 still worth knocking". The totals are about the 84.\n"The same doors, average ground" is what that many doors would be worth on an ordinary street. It is the comparison worth making before spending a morning.',
+      },
+      {
+        heading: 'When to go',
+        target: 'odds-times',
+        body: 'Chance somebody answers, by part of the day and weekday against weekend.\nA description of what the campaign has recorded, not advice: crews were not sent out at random times, so some of the gap is where they went and who was on.\nOn this campaign weekday mornings are the worst block by a wide margin and weekends are much the same all day.',
+      },
+      {
+        heading: 'How much to trust it',
+        target: 'odds-quality',
+        body: 'Measured, not claimed. The model is refitted without the last few days of knocks, then asked to predict them.\n"Picked the livelier one 60 times out of 100" is how often, given two doors, it put the one that answered ahead. Fifty is a coin toss. Sixty is real but modest.\nThe table under it is the more useful half: when it said 39%, this many actually answered.',
+      },
+      {
+        heading: 'When not to trust it',
+        target: 'odds-quality',
+        body: 'Most doors have been knocked once or not at all, so for an ordinary house there is nothing specific to go on and every unknocked door on a street gets nearly the same number. Treat a single house as a reading of its street.\nIt is much better at totals than at single doors. Errors cancel over a hundred doors; they do not over one.\nDoors that answered before and are still on the list are mostly doors that asked us back, so that group flatters itself.\nMost of this history is simulated for the demo. The numbers are real arithmetic on it, and they will change when real knocks replace it.',
+      },
+      {
+        heading: 'The day chips',
+        target: 'analytics-scope',
+        body: 'This tab has none. It reads every knock on record, because a door\'s odds are a fact about the door rather than about a window.',
+      },
+      { heading: 'Getting around', target: 'odds-streets', body: FOLDING_CARDS },
     ],
   },
 

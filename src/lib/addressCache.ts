@@ -53,7 +53,7 @@ const READ_TIMEOUT_MS = 2500
 
 /** Every cache name in use, so signing out can clear the lot without each
  *  caller having to be imported from the auth store. */
-const NAMES = ['cutter', 'scout'] as const
+const NAMES = ['cutter', 'scout', 'odds'] as const
 export type DoorCacheName = (typeof NAMES)[number]
 
 function metaKey(name: string) {
