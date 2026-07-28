@@ -1171,11 +1171,18 @@ function backToMatches() {
   openStreetKey.value = null
 }
 
-/** Tapping a person: go to their door. The full address row from the index
- * beats the person query's embedded stub — it carries coordinates and turf. */
+/** Tapping a person: fly to their door and leave the list exactly as it is
+ * (2026-07-27, user call). Locating from anywhere else pulls that door's whole
+ * street up underneath the map, which here would throw away the people you
+ * searched for and put a street you never asked about in their place. The full
+ * address row from the index beats the person query's embedded stub — it
+ * carries coordinates and turf. */
 function openPerson(p: PersonHit) {
   const full = (p.household_id ? addressById.get(p.household_id) : null) ?? p.addresses
-  if (full) void locateAddress(full as AddressWithRoster)
+  if (!full) return
+  // The person is under your finger; nothing in the list may move either.
+  listFollow = 'stay'
+  void locateAddress(full as AddressWithRoster, { openStreet: false })
 }
 
 function frameStreet(entry: StreetEntry) {
@@ -1460,11 +1467,13 @@ async function locateMe() {
 // and `overscroll-behavior: contain` stops that drag from chaining into the
 // page once the list hits its end, so the sheet and the page never fight.
 //
-// The grab handle stays, but it does the other job: it moves the SHEET.
-// Drag it up and the page scrolls so the sheet fills the screen; drag it
-// down and the map comes back. Releasing snaps to whichever end is nearer,
-// and a tap (no drag) toggles between them. That's the one gesture the rows
-// underneath can't offer, because they're buttons. ---
+// The bar at the top of the sheet is DECORATION and nothing else (2026-07-27,
+// user call: "all that's supposed to be is empty screen space for good design
+// purposes"). It used to drag the page 1:1 and snap to whichever end the drag
+// finished nearer, which meant a small pull down sprang back up and a slightly
+// larger one threw the page to the bottom — a control nobody asked for, doing
+// something nobody predicted, sitting exactly where a thumb rests. The page
+// scrolls the way every other page does now. ---
 
 const resultsListEl = ref<HTMLElement | null>(null)
 const sheetEl = ref<HTMLElement | null>(null)
@@ -1483,68 +1492,15 @@ function raisedOffset(): number {
   return Math.max(0, Math.min(el.scrollHeight - el.clientHeight, el.scrollTop + top - 6))
 }
 
-const RAISED_SLACK_PX = 24
-
-/** "As far up as it goes" — either the sheet's top edge reached the top of
- * the screen, or the page simply ran out of scroll (a short list can't be
- * pulled higher than the document allows, and the toggle has to know that or
- * it would keep trying to raise an already-raised sheet). */
-function sheetIsRaised(): boolean {
-  const el = pageScroller()
-  if (el.scrollTop >= el.scrollHeight - el.clientHeight - 8) return true
-  const sheet = sheetEl.value
-  return !!sheet && sheet.getBoundingClientRect().top - topInset() <= RAISED_SLACK_PX
-}
-
+/** Tapping the search box is an explicit "I want to search" — the one moment
+ * the list is worth more than the map, and the only thing left that moves the
+ * page on its own. */
 function raiseSheet() {
   pageScroller().scrollTo({ top: raisedOffset(), behavior: 'smooth' })
 }
 
 function lowerSheet() {
   pageScroller().scrollTo({ top: 0, behavior: 'smooth' })
-}
-
-function toggleSheet() {
-  if (sheetIsRaised()) lowerSheet()
-  else raiseSheet()
-}
-
-/** Drag the handle, and the page follows the finger 1:1 — the sheet feels
- * like the thing being moved rather than a scrollbar being operated. */
-function onGripPointerDown(event: PointerEvent) {
-  const grip = event.currentTarget as HTMLElement
-  event.preventDefault()
-  grip.setPointerCapture(event.pointerId)
-  const el = pageScroller()
-  const startY = event.clientY
-  const startTop = el.scrollTop
-  let dragged = false
-
-  function onMove(e: PointerEvent) {
-    const dy = startY - e.clientY
-    if (Math.abs(dy) > 4) dragged = true
-    el.scrollTop = Math.max(0, Math.min(el.scrollHeight - el.clientHeight, startTop + dy))
-  }
-  function onUp() {
-    grip.removeEventListener('pointermove', onMove)
-    grip.removeEventListener('pointerup', onUp)
-    grip.removeEventListener('pointercancel', onUp)
-    if (!dragged) {
-      toggleSheet()
-      return
-    }
-    // Snap to whichever end the drag ended up nearer — measured against the
-    // band between the header and the tab bar, which is what's on screen.
-    if (sheetIsRaised()) return
-    const sheet = sheetEl.value
-    if (!sheet) return
-    const safe = safeViewport()
-    if (sheet.getBoundingClientRect().top < safe.top + safe.height * 0.55) raiseSheet()
-    else lowerSheet()
-  }
-  grip.addEventListener('pointermove', onMove)
-  grip.addEventListener('pointerup', onUp)
-  grip.addEventListener('pointercancel', onUp)
 }
 
 /** Tap the row that's ALREADY located and the top of the page comes back
@@ -1593,13 +1549,11 @@ let listFollow: 'top' | 'stay' = 'top'
  *
  * "The top" is the top of the part of the list that's ON SCREEN, which is the
  * list's own top edge in every state the sheet actually reaches. Scrolls the
- * LIST only — never the page, which would yank you off the map you were just
- * reading. */
-/** Most the page may move to finish the job — a settle, never a jump. */
-function nudgeCap(safe: { height: number }): number {
-  return Math.max(120, safe.height * 0.25)
-}
-
+ * LIST only — NEVER the page (2026-07-27, user call: tapping a pin was
+ * scrolling the screen down under the canvasser, because this used to hand the
+ * page whatever the list couldn't deliver on its own). If the strip of list on
+ * screen is too short to show the row, it stays where the finger left it and
+ * the canvasser scrolls. */
 function scrollActiveIntoView() {
   // Fullscreen: the list is behind a map filling the screen, and so is the
   // page scroll this would move. Leave listFollow UNCONSUMED and let
@@ -1620,22 +1574,6 @@ function scrollActiveIntoView() {
   const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight)
   const applied = Math.max(0, Math.min(maxScroll, el.scrollTop + rowBox.top - winTop))
   el.scrollTo({ top: applied, behavior: 'smooth' })
-
-  // Where that leaves the row. Two ways it can still be cut off: the strip of
-  // list on screen is shorter than a row (the page is at the top and the map
-  // owns the screen), or the house is near the end of a street and the list
-  // can't scroll far enough to lift it to the top. Either way the PAGE gives
-  // the difference — the least it can, capped, so it settles rather than
-  // jumps. Tapping a pin has to end with the house you tapped on screen.
-  const shift = applied - el.scrollTop
-  const rowTop = rowBox.top - shift
-  const rowBottom = rowTop + rowBox.height
-  let nudge = 0
-  if (rowBottom > safe.bottom) nudge = rowBottom - safe.bottom
-  else if (rowTop < safe.top) nudge = rowTop - safe.top
-  if (nudge === 0) return
-  const cap = nudgeCap(safe)
-  window.scrollBy({ top: Math.max(-cap, Math.min(cap, nudge)), behavior: 'smooth' })
 }
 
 // Both halves of "tap a pin, find the house": the street's houses arriving,
@@ -1983,14 +1921,10 @@ onUnmounted(() => {
          and a plain natively-scrolling list. Streets first, then people;
          picking either one opens that street's houses in walk order. -->
     <section ref="sheetEl" class="results-sheet">
-      <div
-        class="list-grip"
-        role="separator"
-        aria-label="Drag to move the list up or down"
-        title="Drag to move the list"
-        @pointerdown="onGripPointerDown"
-      >
-        <span class="list-grip-bar" aria-hidden="true"></span>
+      <!-- Breathing room at the top of the sheet, with a bar in it. Not a
+           control: it drags nothing and snaps nowhere (2026-07-27). -->
+      <div class="list-grip" aria-hidden="true">
+        <span class="list-grip-bar"></span>
       </div>
 
       <input
@@ -2102,13 +2036,17 @@ onUnmounted(() => {
                 <span v-if="ratioFor(p.addresses, p.household_id)" class="ratio-text">{{
                   ratioFor(p.addresses, p.household_id)
                 }}</span>
+                <!-- "Talk", not "Knock" (2026-07-27, user call): this one
+                     carries the person, and where it lands is Talk with their
+                     name already picked. You knock on a door; you talk to a
+                     person. -->
                 <button
                   v-if="p.household_id"
                   class="btn btn-sm knock-btn"
                   :style="knockStyleFor(p.household_id)"
                   @click.stop="knock(p.household_id!, p.id)"
                 >
-                  Knock
+                  Talk
                 </button>
               </button>
             </template>
@@ -2427,24 +2365,19 @@ onUnmounted(() => {
   box-shadow: 0 -2px 18px rgba(0, 0, 0, 0.1);
 }
 
-/* Sheet-handle shape, because that's what it does: drag it and the sheet
- * comes up over the map (or back down). Full width so it's easy to land on
- * with a thumb; the visible bar sits in the middle. */
+/* The lip of the sheet: a little space and a bar, so the panel reads as
+ * sitting over the map. Nothing here responds to a finger — no cursor, no
+ * touch-action, no hover or active state — because none of it does anything
+ * (2026-07-27). A strip that lit up under a thumb was most of why it looked
+ * like a control. */
 .list-grip {
   display: flex;
   align-items: center;
   justify-content: center;
-  /* Trimmed from 26px (2026-07-25). It spans the full sheet width, so it's
-     still an easy thing to land a thumb on. */
+  /* Trimmed from 26px (2026-07-25) — every pixel here is one the first house
+     in the list doesn't get. */
   height: 20px;
   margin: 0 -0.55rem;
-  cursor: grab;
-  touch-action: none;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.list-grip:active {
-  cursor: grabbing;
 }
 
 .list-grip-bar {
@@ -2453,16 +2386,6 @@ onUnmounted(() => {
   border-radius: 999px;
   background: var(--text-muted);
   opacity: 0.4;
-  transition: opacity 0.12s ease, transform 0.12s ease;
-}
-
-.list-grip:hover .list-grip-bar {
-  opacity: 0.7;
-}
-
-.list-grip:active .list-grip-bar {
-  opacity: 1;
-  transform: scaleX(1.15);
 }
 
 /* The open street's header row: back out of it, and what you're looking at.
