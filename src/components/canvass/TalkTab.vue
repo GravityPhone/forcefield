@@ -3,13 +3,12 @@ import CanvassSearch from './CanvassSearch.vue'
 import RosterList from './RosterList.vue'
 import OutcomeButtons from './OutcomeButtons.vue'
 import { computed } from 'vue'
-import AppSelect from '@/components/ui/AppSelect.vue'
 import { hapticTap } from '@/lib/native'
 import { OUTCOME_DOOR_LEVEL, OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, OUTCOME_SHORT, PIN_DEFAULT_HEX, outcomeRowTint } from '@/lib/outcomes'
 import OutcomeSquare from './OutcomeSquare.vue'
 import DoorOddsPanel from '@/components/odds/DoorOddsPanel.vue'
 import { appointmentLabel } from '@/lib/appointments'
-import { houseNumber } from '@/lib/streetWalk'
+import { houseNumber, streetNameOf, titleCase } from '@/lib/streetWalk'
 import { useTalkStore, type KnockHistoryEntry } from '@/stores/talk'
 import type { Address, KnockOutcome } from '@/types'
 
@@ -27,7 +26,17 @@ function chipLabel(a: Address): string {
 function jumpChip(addressId: string) {
   hapticTap('light')
   void talk.jumpTo(addressId)
+  // Same landing as Next: a new door starts at the top of the screen.
+  window.scrollTo({ top: 0 })
 }
+
+/** The street the chips sit on (findUpcomingOnStreet never leaves the current
+ * door's street), so the label can already say whose numbers are coming while
+ * the spots below are still loading. */
+const upStreet = computed(() => {
+  const a = talk.selectedAddress
+  return a ? titleCase(streetNameOf(a.street)) : ''
+})
 
 // Address-banner status — the same rules as the map pins (doorStatusOutcome
 // in lib/outcomes.ts), with labels: green "Everyone signed" once the whole
@@ -88,20 +97,26 @@ function historyWhen(iso: string): string {
   return `${day} · ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
 }
 
-// Walk-order options — govern which house the Next button below advances to.
-const DIRECTION_OPTIONS = [
-  { value: 'ascending', label: 'Ascending' },
-  { value: 'descending', label: 'Descending' },
-]
-const PARITY_OPTIONS = [
-  { value: 'both', label: 'Both sides' },
-  { value: 'even', label: 'Evens only' },
-  { value: 'odd', label: 'Odds only' },
-]
-const PARTLY_SIGNED_OPTIONS = [
-  { value: 'knock', label: 'Knock partly-signed' },
-  { value: 'skip', label: 'Skip partly-signed' },
-]
+// Walk-order toggles — govern which house the Next button below advances to.
+// Press-to-flip, not dropdowns (2026-07-28, user call): direction flips
+// up/down, Evens and Odds are a radio-with-off pair (both off = both sides,
+// the map layer buttons' idiom — one tap reaches any of the three states,
+// which a single toggle can't), and the partly-signed square is symbol-only,
+// wearing the pins' own green-with-a-yellow-band.
+function flipDirection() {
+  hapticTap('light')
+  talk.setWalkDirection(talk.walkDirection === 'ascending' ? 'descending' : 'ascending')
+}
+
+function toggleParity(side: 'even' | 'odd') {
+  hapticTap('light')
+  talk.setWalkParity(talk.walkParity === side ? 'both' : side)
+}
+
+function togglePartlySigned() {
+  hapticTap('light')
+  talk.setKnockPartlySigned(!talk.knockPartlySigned)
+}
 </script>
 
 <template>
@@ -199,29 +214,58 @@ const PARTLY_SIGNED_OPTIONS = [
 
     <!-- Governs the "Next" button's auto-advance — which way to walk a
          street once you start logging outcomes. -->
-    <div class="walk-order">
+    <div class="walk-order" data-help="talk-walkorder">
       <span class="muted walk-label">Next house:</span>
-      <AppSelect
-        class="walk-select"
-        :model-value="talk.walkDirection"
-        :options="DIRECTION_OPTIONS"
-        aria-label="Walk direction"
-        @update:model-value="talk.setWalkDirection($event as 'ascending' | 'descending')"
-      />
-      <AppSelect
-        class="walk-select"
-        :model-value="talk.walkParity"
-        :options="PARITY_OPTIONS"
-        aria-label="Walk side of street"
-        @update:model-value="talk.setWalkParity($event as 'both' | 'even' | 'odd')"
-      />
-      <AppSelect
-        class="walk-select"
-        :model-value="talk.knockPartlySigned ? 'knock' : 'skip'"
-        :options="PARTLY_SIGNED_OPTIONS"
-        aria-label="Doors where someone already signed but others have not"
-        @update:model-value="talk.setKnockPartlySigned($event === 'knock')"
-      />
+      <div class="walk-toggles">
+        <button
+          type="button"
+          class="btn walk-btn dir-btn"
+          :title="
+            talk.walkDirection === 'ascending'
+              ? 'House numbers going up. Tap for going down'
+              : 'House numbers going down. Tap for going up'
+          "
+          @click="flipDirection"
+        >
+          <span aria-hidden="true">{{ talk.walkDirection === 'ascending' ? '↑' : '↓' }}</span>
+          {{ talk.walkDirection === 'ascending' ? 'Up' : 'Down' }}
+        </button>
+        <button
+          type="button"
+          class="btn walk-btn"
+          :class="{ on: talk.walkParity === 'even' }"
+          :aria-pressed="talk.walkParity === 'even'"
+          :title="talk.walkParity === 'even' ? 'Even numbers only. Tap for both sides' : 'Even numbers only'"
+          @click="toggleParity('even')"
+        >
+          Evens
+        </button>
+        <button
+          type="button"
+          class="btn walk-btn"
+          :class="{ on: talk.walkParity === 'odd' }"
+          :aria-pressed="talk.walkParity === 'odd'"
+          :title="talk.walkParity === 'odd' ? 'Odd numbers only. Tap for both sides' : 'Odd numbers only'"
+          @click="toggleParity('odd')"
+        >
+          Odds
+        </button>
+        <button
+          type="button"
+          class="btn walk-btn partly-btn"
+          :class="{ on: talk.knockPartlySigned }"
+          :aria-pressed="talk.knockPartlySigned"
+          aria-label="Partly signed doors"
+          :title="
+            talk.knockPartlySigned
+              ? 'Partly signed doors stay on the walk. Tap to skip them'
+              : 'Skipping partly signed doors. Tap to knock them'
+          "
+          @click="togglePartlySigned"
+        >
+          <OutcomeSquare :fill="OUTCOME_HEX.signed" :band="OUTCOME_HEX.maybe" small />
+        </button>
+      </div>
     </div>
 
     <OutcomeButtons />
@@ -231,33 +275,47 @@ const PARTLY_SIGNED_OPTIONS = [
          tap one to jump straight to it without logging anything. Dot =
          that door's status color (blue = never knocked). -->
     <div v-if="talk.selectedAddress" class="up-next" data-help="talk-upnext">
-      <span class="muted up-label">Up next:</span>
-      <span v-if="talk.upcoming === null" class="muted up-none">…</span>
-      <div v-else-if="talk.upcoming.length" class="up-grid">
-        <button
-          v-for="u in talk.upcoming"
-          :key="u.address.id"
-          class="up-chip"
-          :title="u.address.street"
-          @click="jumpChip(u.address.id)"
-        >
+      <span class="muted up-label">Up next{{ upStreet ? ' on ' + upStreet : '' }}:</span>
+      <!-- The grid keeps its two rows whatever is in them: dashed spots hold
+           the cells while the walk loads (or pads a short street), so chips
+           appear and disappear IN PLACE instead of growing a section of page
+           under a scrolling thumb — that height change was the jitter. -->
+      <div class="up-grid">
+        <template v-if="talk.upcoming === null">
+          <span v-for="i in 4" :key="'ghost-' + i" class="up-ghost" aria-hidden="true"></span>
+        </template>
+        <template v-else-if="talk.upcoming.length">
+          <button
+            v-for="u in talk.upcoming"
+            :key="u.address.id"
+            class="up-chip"
+            :title="u.address.street"
+            @click="jumpChip(u.address.id)"
+          >
+            <span
+              class="up-dot"
+              :style="{ background: u.status ? OUTCOME_HEX[u.status] : PIN_DEFAULT_HEX }"
+              aria-hidden="true"
+            ></span>
+            {{ chipLabel(u.address) }}
+          </button>
           <span
-            class="up-dot"
-            :style="{ background: u.status ? OUTCOME_HEX[u.status] : PIN_DEFAULT_HEX }"
+            v-for="i in 4 - talk.upcoming.length"
+            :key="'pad-' + i"
+            class="up-ghost"
             aria-hidden="true"
           ></span>
-          {{ chipLabel(u.address) }}
-        </button>
+        </template>
+        <!-- With "My turf" on, an empty grid usually means the rest of the
+             street isn't yours — not that the street ran out. Say which. -->
+        <span v-else class="muted up-none">
+          {{
+            talk.myDoorsOnly && talk.myTurfIds.size
+              ? 'No more of your turf on this street'
+              : 'End of the street'
+          }}
+        </span>
       </div>
-      <!-- With "My turf" on, an empty grid usually means the rest of the
-           street isn't yours — not that the street ran out. Say which. -->
-      <span v-else class="muted up-none">
-        {{
-          talk.myDoorsOnly && talk.myTurfIds.size
-            ? 'no more of your turf on this street'
-            : 'end of the street'
-        }}
-      </span>
     </div>
   </div>
 </template>
@@ -477,15 +535,57 @@ const PARTLY_SIGNED_OPTIONS = [
 .walk-label {
   font-size: 0.85rem;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
-/* AppSelect triggers share the row; the class lands on the trigger button
- * (attrs fall through) but parent-scoped rules don't, hence :deep. */
-.walk-order :deep(.walk-select) {
+.walk-toggles {
+  display: flex;
+  gap: 0.5rem;
+  flex: 1;
+  /* Never squeeze the buttons into clipping their words — on a narrow phone
+   * (or a big text scale) the whole group wraps below the label instead. */
+  min-width: fit-content;
+}
+
+/* Widths come from flex, not content, so the direction button swapping
+ * Up for Down never shifts its neighbors. */
+.walk-btn {
   flex: 1;
   min-width: 0;
-  width: auto;
+  min-height: 46px;
+  padding: 0.3rem 0.4rem;
   font-size: 0.92rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.dir-btn {
+  flex: 1.25;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+}
+
+/* Pressed = the accent, the way every other toggle in the app reads as on. */
+.walk-btn.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: var(--accent);
+}
+
+/* Symbol-only: the partly-signed square the pins draw. Dim it while those
+ * doors are being skipped. */
+.partly-btn {
+  flex: 0 0 auto;
+  min-width: 48px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.partly-btn:not(.on) .outcome-square {
+  opacity: 0.4;
 }
 
 /* --- Up next grid --- */
@@ -503,11 +603,21 @@ const PARTLY_SIGNED_OPTIONS = [
 }
 
 /* Always two side by side — an odd remainder near the end of the street
- * leaves a half-width cell rather than one stretched full-width chip. */
+ * leaves a half-width cell rather than one stretched full-width chip.
+ * Rows are pinned at two so the block is the same height loading, full,
+ * short, or empty — the page must not grow or shrink as chips land. */
 .up-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: repeat(2, minmax(52px, auto));
   gap: 0.6rem;
+}
+
+/* A spot a chip will land in (or an empty one at the end of the street). */
+.up-ghost {
+  border: 1.5px dashed var(--border);
+  border-radius: 999px;
+  opacity: 0.55;
 }
 
 .up-chip {
@@ -540,7 +650,15 @@ const PARTLY_SIGNED_OPTIONS = [
   flex-shrink: 0;
 }
 
+/* The end-of-street message sits centered across the same reserved rows the
+ * chips would occupy — saying it never changes the page's height either. */
 .up-none {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
   font-size: 0.85rem;
 }
 </style>

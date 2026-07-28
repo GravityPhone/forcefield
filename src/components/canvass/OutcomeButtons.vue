@@ -39,14 +39,24 @@ function logOutcome(value: KnockOutcome) {
   }
 }
 
+/** Moving to another door lands you at the top of the screen, where the new
+ * door's name and roster are — these buttons sit at the bottom, and staying
+ * there left you staring at the old door's history. Instant, never smooth:
+ * a glide dies to any stray touch mid-walk. */
+function showDoorTop() {
+  window.scrollTo({ top: 0 })
+}
+
 function confirmNext() {
   hapticNotify('success')
   void talk.confirmNext()
+  showDoorTop()
 }
 
 function confirmPrevious() {
   hapticNotify('success')
   void talk.confirmPrevious()
+  showDoorTop()
 }
 
 // Only Signed needs a name on it (see requiresPerson in lib/outcomes.ts) —

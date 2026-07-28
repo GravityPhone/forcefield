@@ -88,6 +88,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'Somebody promised to be back at this door. Whoever is on the street can take it.\nThe whole list is under More → Appointments.',
       },
       {
+        heading: 'Next house',
+        target: 'talk-walkorder',
+        body: 'Which door Next picks.\nUp or Down: house numbers rising or falling.\nEvens / Odds: one side of the street. Tap the lit one for both sides.\nThe green and yellow square: partly signed doors. Lit, the walk includes them. Off, it skips them.',
+      },
+      {
         heading: 'Next and Back',
         target: 'talk-advance',
         body: 'Next: next door on the walk.\nBack: doors you knocked, newest first.\nNeither needs an outcome logged first.\nMy turf: limits both to your crew’s turf today. On by default.',
