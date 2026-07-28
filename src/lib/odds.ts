@@ -618,12 +618,25 @@ export interface OddsModel {
  * The 1% floor is what stops one stray knock in the next county dragging its
  * whole address book back in. With no knocks at all every door is kept, since
  * a campaign that has not started yet has not narrowed to anywhere.
- */
-function campaignCities(visits: Visit[], doors: OddsDoor[]): Set<string> | null {
+ *
+ * EXPORTED (2026-07-28, user call: "it still says on the overview for
+ * analytics, it still says twenty two point seven k... I wanna make sure
+ * that it's all cohesive"). The 07-27 fix above scoped the MODEL's own doors
+ * — ranking, "still worth knocking", the search list — but Analytics' own
+ * `addressTotal`/`doorRows` (the Overview "doors on file" tile, turf
+ * coverage) still counted all 22.7k. Same derivation, called directly on the
+ * page's own knocks and doors rather than re-implemented, so the two totals
+ * can never disagree about which towns count. Loosened to the two fields
+ * this actually reads (`household` / `id`+`city`) so a caller doesn't have
+ * to build `Visit`/`OddsDoor` shapes just to ask the question. */
+export function campaignCities(
+  knocks: { household: string }[],
+  doors: { id: string; city: string }[],
+): Set<string> | null {
   const cityOf = new Map(doors.map((d) => [d.id, d.city]))
   const per = new Map<string, number>()
-  for (const v of visits) {
-    const c = cityOf.get(v.household)
+  for (const k of knocks) {
+    const c = cityOf.get(k.household)
     if (c) per.set(c, (per.get(c) ?? 0) + 1)
   }
   let total = 0

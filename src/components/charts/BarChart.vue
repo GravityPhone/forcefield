@@ -32,6 +32,21 @@
 // complaint was that the page acted too fast, and a 300ms double-tap would
 // only move the trap rather than remove it. A quick double tap still works,
 // because it is two taps on one row.
+//
+// THE SECOND TAP NOW CANCELS, AND THE POPUP ITSELF OPENS (2026-07-28, user
+// call: "the pop up looks nice, but it blocks the stuff below it... when you
+// tap the box that pops up, then that opens. So it says tap here to open.
+// That solves it so that you can just tap anywhere to get rid of the pop
+// up"). The tooltip is a floating box tall enough to cover whatever sits
+// below the chart, and there was no quick way out of it short of tapping a
+// different row. Tapping the armed row again now dismisses instead of
+// opening — always reachable, since the tooltip renders offset from its own
+// row, never on top of it. Opening now takes a tap on the popup itself
+// (`.tip.tappable`, armed rows only — an unarmed hover preview stays
+// click-through exactly as before, so a mouse can still click straight past
+// it to a different row). The "Tap here to open" line is what makes the box
+// tappable rather than just informative; it names the gesture rather than
+// hiding a click target behind plain text.
 import { computed, ref, watch } from 'vue'
 import { fmtCount, fmtPct } from '@/lib/chartTheme'
 import { useChartWidth } from './useChartWidth'
@@ -120,11 +135,24 @@ watch([() => props.items, expanded], () => {
 function onRowClick(i: number) {
   if (!props.selectable) return
   if (armed.value === i) {
-    emit('select', shown.value[i])
+    // Second tap on the row that's already armed CANCELS rather than opens
+    // — the popup can cover whatever sits below the chart, so there has to
+    // be an always-reachable way out. Opening now happens on the popup
+    // itself, via onTipOpen.
+    armed.value = null
+    hover.value = null
     return
   }
   armed.value = i
   hover.value = i
+}
+
+/** Tapping the popup while it's armed is what opens it now. */
+function onTipOpen() {
+  if (armed.value == null) return
+  emit('select', shown.value[armed.value])
+  armed.value = null
+  hover.value = null
 }
 
 function rowAt(ev: PointerEvent): number | null {
@@ -237,8 +265,9 @@ const tipArmed = computed(() => props.selectable && hover.value != null && hover
     <div
       v-if="hover !== null"
       class="tip"
-      :class="{ above: tipAbove }"
+      :class="{ above: tipAbove, tappable: tipArmed }"
       :style="{ top: tipRow + 'px' }"
+      @click="onTipOpen"
     >
       <div v-if="measure" class="tip-measure muted">{{ measure }}</div>
       <div class="tip-head">
@@ -247,7 +276,7 @@ const tipArmed = computed(() => props.selectable && hover.value != null && hover
       </div>
       <div v-if="shown[hover].detail" class="tip-detail muted">{{ shown[hover].detail }}</div>
       <div v-if="shown[hover].note" class="tip-note muted">{{ shown[hover].note }}</div>
-      <div v-if="tipArmed" class="tip-open">Tap again to open</div>
+      <div v-if="tipArmed" class="tip-open">Tap here to open</div>
     </div>
     <!-- Kept in the layout while a readout is up, so the button below it can't
          hop under a thumb that's about to press it. -->
@@ -342,6 +371,11 @@ svg {
 .tip.above {
   margin-top: -6px;
   transform: translateY(-100%);
+}
+.tip.tappable {
+  pointer-events: auto;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 .tip-measure {
   font-size: 0.7rem;

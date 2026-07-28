@@ -6,6 +6,11 @@
 // Dots drill on the SECOND tap, like the bars: nearest-point search means a
 // tap lands on SOMEBODY whether or not you aimed at them, so one tap opening a
 // person was the touchiest control on the page. See BarChart's header.
+//
+// The second tap CANCELS and the popup ITSELF opens, also like the bars
+// (2026-07-28): tapping the same dot again dismisses the tooltip instead of
+// opening, and a tap on the tooltip (armed only — see `.tooltip.tappable`)
+// is what opens it. See BarChart's header for the full reasoning.
 import { computed, ref, watch } from 'vue'
 import { niceTicks, fmtCount, fmtPct } from '@/lib/chartTheme'
 import type { LinearFit } from '@/lib/stats'
@@ -94,11 +99,20 @@ function onClick(ev: MouseEvent) {
   const i = nearestIdx(ev)
   if (i == null) return
   if (armed.value === i) {
-    emit('select', props.points[i])
+    // Second tap on the already-armed dot cancels; opening now happens on
+    // the tooltip itself (onTipOpen), same as BarChart.
+    armed.value = null
+    hover.value = null
     return
   }
   armed.value = i
   hover.value = i
+}
+function onTipOpen() {
+  if (armed.value == null) return
+  emit('select', props.points[armed.value])
+  armed.value = null
+  hover.value = null
 }
 const tipArmed = computed(() => props.selectable && hover.value != null && hover.value === armed.value)
 const fmtY = (v: number) => (props.yPercent ? fmtPct(v, 1) : fmtCount(v))
@@ -154,11 +168,17 @@ const tooltipLeft = computed(() => {
       />
     </svg>
 
-    <div v-if="hover != null" class="tooltip" :style="{ left: tooltipLeft + 'px' }">
+    <div
+      v-if="hover != null"
+      class="tooltip"
+      :class="{ tappable: tipArmed }"
+      :style="{ left: tooltipLeft + 'px' }"
+      @click="onTipOpen"
+    >
       <div class="tt-label">{{ points[hover].label }}</div>
       <div><strong>{{ fmtCount(points[hover].x) }}</strong> <span class="muted">{{ xLabel }}</span></div>
       <div><strong>{{ fmtY(points[hover].y) }}</strong> <span class="muted">{{ yLabel }}</span></div>
-      <div v-if="tipArmed" class="tt-open">Tap again to open</div>
+      <div v-if="tipArmed" class="tt-open">Tap here to open</div>
     </div>
   </div>
 </template>
@@ -220,6 +240,11 @@ svg.sel {
   font-size: 0.78rem;
   min-width: 120px;
   z-index: 3;
+}
+.tooltip.tappable {
+  pointer-events: auto;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
 }
 .tt-label {
   color: var(--text-muted);

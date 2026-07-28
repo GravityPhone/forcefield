@@ -38,6 +38,7 @@ import { useChartPalette, fmtPct, fmtCount } from '@/lib/chartTheme'
 import { wilson, linearRegression } from '@/lib/stats'
 import {
   buildOddsModel,
+  campaignCities,
   doorOdds,
   percentileOf,
   scoreOddsModel,
@@ -261,8 +262,24 @@ onPageEnter(async () => {
       canceled: a.status === 'canceled',
     }))
 
-    addressTotal.value = addrs.length
-    doorRows.value = addrs
+    loadNote.value = 'Crunching…'
+    knocks.value = enrich(rows)
+
+    // SCOPE ADDRESSES TO THE CAMPAIGN'S OWN GROUND (2026-07-28, user call:
+    // "it still says on the overview for analytics, it still says twenty two
+    // point seven k... I wanna make sure that it's all cohesive"). The Odds
+    // tab already narrows its OWN doors to the towns this campaign has
+    // actually knocked (`campaignCities`, 2026-07-27) — but this page's own
+    // "doors on file" and turf coverage still counted every address in the
+    // county: 22.7k across 21 towns against the model's 12.3k for Marysville
+    // alone. Same function, called here directly on the page's own knocks and
+    // doors, so the two totals can never quietly disagree about which towns
+    // count.
+    const cities = campaignCities(knocks.value, addrs)
+    const scopedAddrs = cities ? addrs.filter((a) => cities.has(a.city)) : addrs
+
+    addressTotal.value = scopedAddrs.length
+    doorRows.value = scopedAddrs
     turfRows.value = turfs
     // Doors per turf, resolved to the TOP-LEVEL turf name — same resolution
     // the knock stamps use, so numerator and denominator agree.
@@ -274,15 +291,13 @@ onPageEnter(async () => {
       return (parent ?? t).name
     }
     const turfTotals = new Map<string, number>()
-    for (const a of addrs) {
+    for (const a of scopedAddrs) {
       const name = topTurfName(a.turf_id)
       if (name) turfTotals.set(name, (turfTotals.get(name) ?? 0) + 1)
     }
     turfAddressTotals.value = turfTotals
     canvasserNames.value = new Map(profs.map((p) => [p.id, p.display_name || p.username]))
 
-    loadNote.value = 'Crunching…'
-    knocks.value = enrich(rows)
     applyOddsDeepLink()
     // THE ODDS MODEL IS BUILT ON AN IDLE CALLBACK, NOT DURING THE LOAD.
     // Measured on the live campaign: 2.1s to build with door ranking on, and
@@ -1151,9 +1166,10 @@ const doorsPerTurf = computed(() => {
  *
  * Order is by KIND rather than by score, because the kinds answer questions of
  * very different sizes and a manager typing "mil" wants Milford Ave before
- * 1465 Milford Ave. Houses come last for the same reason: there are 22.7k of
- * them and they are the narrowest thing here. The exception is a query with a
- * digit in it, which is somebody typing a house number, so houses go first.
+ * 1465 Milford Ave. Houses come last for the same reason: there are thousands
+ * of them and they are the narrowest thing here. The exception is a query
+ * with a digit in it, which is somebody typing a house number, so houses go
+ * first.
  */
 const oddsHits = computed<OddsHit[]>(() => {
   const m = oddsModel.value
@@ -1516,6 +1532,21 @@ const scoreSubtitle = computed(() => {
   const s = oddsScore.value
   if (!s) return ''
   return `backtested over ${fmtCount(s.days)} days, refitting ${s.refits} times`
+})
+
+/** How good the guess is, as two bars against a coin toss (2026-07-28, user
+ *  call: "rephrase it and maybe just put like a simple graph there that
+ *  doesn't have a huge explanation"). Replaced a paragraph that spelled out
+ *  both numbers in prose plus a "fifty would be a coin toss" aside — the
+ *  reference line says that part now, the same way every other rate chart
+ *  on this page marks the campaign average instead of writing it out. */
+const oddsScoreChart = computed<BarItem[]>(() => {
+  const s = oddsScore.value
+  if (!s) return []
+  return [
+    { label: 'Got the signature', value: s.pickedLivelier / 100 },
+    { label: 'Got an answer', value: s.answerPickedLivelier / 100 },
+  ]
 })
 
 const oddsPct = (p: number) => fmtPct(p, 1)
@@ -2694,30 +2725,32 @@ const focusRanks = computed<FocusRank[]>(() => {
             </ChartCard>
           </div>
 
-          <!-- How much to trust any of it. Measured, not written. -->
-          <!-- The claim sits OUTSIDE the card, and it has to: ChartCard's
-               `table-only` suppresses the default slot, so this paragraph was
-               written into that slot and never rendered at all — the one
-               sentence saying how well the model does was invisible on the
-               page it is the caveat for. Prose first, then the card carrying
-               the evidence table. -->
+          <!-- How much to trust any of it. Measured, not written.
+               A paragraph used to spell out both numbers plus a "fifty would
+               be a coin toss" aside (2026-07-28, user call: "rephrase it and
+               maybe just put like a simple graph there that doesn't have a
+               huge explanation"). The bars say the same thing at a glance —
+               the dashed line marks the coin toss instead of writing it out
+               — and the calibration table is still here, one tap away under
+               Table, for whoever wants the evidence behind it. -->
           <template v-if="oddsScore">
-            <p class="card odds-quality" data-help="odds-quality">
-              Across {{ fmtCount(oddsScore.trials) }} knocks it had not seen, given two of them it
-              picked the one that got a signature
-              <strong>{{ oddsScore.pickedLivelier }} times out of 100</strong>, and the one that
-              was answered {{ oddsScore.answerPickedLivelier }} times. Fifty would be a coin toss.
-              The table below is the other half, and the better half: whether the numbers mean
-              what they say.
-            </p>
-
             <ChartCard
               title="How good is this guess"
+              data-help="odds-quality"
               :subtitle="scoreSubtitle"
               :columns="['It said', 'That many signed', 'Knocks']"
               :rows="oddsScore.bands.map((b) => [fmtPct(b.said), fmtPct(b.happened), b.n])"
-              table-only
-            />
+            >
+              <BarChart
+                :items="oddsScoreChart"
+                :color="cat[0]"
+                percent
+                :max="1"
+                measure="Picked the door that got it, given two"
+                :ref-value="0.5"
+                ref-label="coin toss"
+              />
+            </ChartCard>
           </template>
         </template>
 
@@ -3014,12 +3047,6 @@ const focusRanks = computed<FocusRank[]>(() => {
   margin-top: 0.4rem;
   font-size: 0.82rem;
 }
-.odds-quality {
-  margin: 0;
-  padding: 0.9rem 1rem;
-  font-size: 0.9rem;
-}
-
 /* One canvasser's projection. */
 .proj-days {
   width: 5.5rem;
