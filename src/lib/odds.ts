@@ -302,10 +302,16 @@ interface Visit {
   /** State BEFORE this visit. */
   everAnswered: boolean
   partlySigned: boolean
+  /** The door was already off the walk when this visit happened, and somebody
+   *  went anyway. Null on an ordinary visit. See `reopened`. */
+  wasClosed: ClosedReason | null
   block: string
   interacted: boolean
   answered: boolean
   signed: boolean
+  /** Somebody came to the door and said no. NOT the complement of `signed`:
+   *  a Return is neither. */
+  refused: boolean
 }
 
 /** Time blocks. Four parts of the day crossed with weekday/weekend, which is
@@ -355,7 +361,10 @@ export const blockHours = (key: string) => BLOCK_HOURS[key.split('|')[0]] ?? ''
  * captured on a visit is the state BEFORE it, which is exactly what would have
  * been known standing on the porch.
  */
-function collapse(knocks: OddsKnock[]): { visits: Visit[]; state: Map<string, DoorState> } {
+function collapse(
+  knocks: OddsKnock[],
+  residentsOf: Map<string, number>,
+): { visits: Visit[]; state: Map<string, DoorState> } {
   const sorted = [...knocks].sort((a, b) => a.ts - b.ts)
   const state = new Map<string, DoorState>()
   // The open visit is tracked PER DOOR, not as one rolling "current". Knocks
@@ -380,10 +389,15 @@ function collapse(knocks: OddsKnock[]): { visits: Visit[]; state: Map<string, Do
         visit: st.visits,
         everAnswered: st.everAnswered,
         partlySigned: st.signed > 0,
+        // Was this door already off the walk when somebody knocked it anyway?
+        // Captured here because it is the only place the door's state BEFORE
+        // the visit is in hand. See `reopened`.
+        wasClosed: closedReasonOf(st, residentsOf.get(k.household) ?? 0),
         block: blockOf(k.ts),
         interacted: false,
         answered: false,
         signed: false,
+        refused: false,
       }
       visits.push(visit)
       open.set(k.household, visit)
@@ -391,6 +405,7 @@ function collapse(knocks: OddsKnock[]): { visits: Visit[]; state: Map<string, Do
     if (isInteraction(k.outcome)) visit.interacted = true
     if (CONVERSATION.has(k.outcome)) visit.answered = true
     if (k.outcome === 'signed') visit.signed = true
+    if (k.outcome === 'didnt_sign' || k.outcome === 'hostile') visit.refused = true
     st.lastTs = k.ts
     st.lastOutcome = k.outcome
     if (CONVERSATION.has(k.outcome)) st.everAnswered = true
@@ -541,6 +556,11 @@ export interface OddsModel {
   campaignAnswer: number
   campaignSign: number
   campaignSignature: number
+  /** Refusals per street. Shown, never modelled: the sign rate already
+   *  carries the signal. */
+  streetRefusals: Map<string, number>
+  /** What going back to a retired door has actually got. */
+  reopened: Reopened[]
   /** The towns the campaign is working, and the doors kept because of it.
    *  Null when it has not knocked anywhere yet. */
   cities: string[] | null
@@ -604,7 +624,9 @@ export function buildOddsModel(
   // ask about one door and skip it.
   opts: { rank?: boolean } = {},
 ): OddsModel {
-  const { visits, state } = collapse(knocks)
+  const residentsAll = new Map<string, number>()
+  for (const d of allDoors) if (d.residents) residentsAll.set(d.id, d.residents)
+  const { visits, state } = collapse(knocks, residentsAll)
   const cities = campaignCities(visits, allDoors)
   const doors = cities ? allDoors.filter((d) => cities.has(d.city)) : allDoors
 
@@ -664,6 +686,39 @@ export function buildOddsModel(
     e.expected += cellAt(signBase, signCell(v.visit, v.partlySigned)).p
     streetSign.set(key, e)
   }
+  // Refusals per street, kept apart from the sign tally because they are NOT
+  // its complement: a Return is a conversation that neither signed nor
+  // refused. This is only ever shown, never modelled — the street's sign rate
+  // already carries the signal, since every refusal is a conversation that
+  // did not sign. It exists because "12 signed, 19 turned it down" is the
+  // sentence a manager is actually reasoning about, and "12 of 39 signed"
+  // makes them do the subtraction and get it wrong.
+  const streetRefusals = new Map<string, number>()
+  for (const v of visits) {
+    if (!v.refused) continue
+    const key = streetOf.get(v.household)
+    if (key) streetRefusals.set(key, (streetRefusals.get(key) ?? 0) + 1)
+  }
+
+  // What happened the times somebody knocked a door the walk had retired.
+  // The whole point of measuring it: closing a door is a WALK rule, not a
+  // claim about the door, and this is the only evidence that can say which.
+  const reopenedBy = new Map<ClosedReason, Reopened>()
+  for (const v of visits) {
+    if (!v.wasClosed || !v.interacted) continue
+    const e = reopenedBy.get(v.wasClosed) ?? {
+      reason: v.wasClosed,
+      went: 0,
+      answered: 0,
+      signed: 0,
+    }
+    e.went++
+    if (v.answered) e.answered++
+    if (v.signed) e.signed++
+    reopenedBy.set(v.wasClosed, e)
+  }
+  const reopened = [...reopenedBy.values()].sort((a, b) => b.went - a.went)
+
   const kStreet = momentsK(streetSign.values())
   const neighboursOf = neighbourIndex(doors)
   // How much a street's neighbours are worth is MEASURED, not assumed. See
@@ -689,6 +744,8 @@ export function buildOddsModel(
     campaignAnswer: answerBase.global,
     campaignSign: signBase.global,
     campaignSignature: answerBase.global * signBase.global,
+    streetRefusals,
+    reopened,
     cities: cities ? [...cities].sort() : null,
     doorsOnGround: doors.length,
     visits: visits.length,
@@ -899,6 +956,37 @@ export interface EvidenceStep {
 
 export type ClosedReason = 'signed' | 'refused' | 'hostile' | 'skipped'
 
+/**
+ * What happened the times somebody knocked a door the walk had already
+ * retired, per reason it was retired.
+ *
+ * This exists because "closed" means two completely different things and the
+ * screen was blurring them (2026-07-27, user call: saying closed doors are
+ * "left out of the totals" "might make it seem like logging something as a not
+ * interested does actually have a meaningful impact on real world
+ * probability").
+ *
+ * EVERYBODY SIGNED is genuinely terminal: there is nothing left to obtain, and
+ * excluding those doors is not a probability claim at all.
+ *
+ * NOT INTERESTED, SKIP and HOSTILE are a WALK rule (streetWalk's
+ * CLOSED_OUTCOMES). The door is off the list; it is not dead. Measured on the
+ * live campaign, when somebody went back to a Not Interested door anyway, 157
+ * times, it behaved close to an ordinary door: 55 answered (35.0%, against a
+ * campaign 36.9%) and 28 of those signed (50.9%, against a campaign 45.0%).
+ *
+ * The obvious caveat, and it belongs on screen: those are doors a canvasser
+ * CHOSE to try again, not a random sample of refusals. So read it as "worth
+ * another look sometimes", never as "refusals mean nothing".
+ */
+export interface Reopened {
+  reason: ClosedReason
+  /** Times somebody knocked it anyway. */
+  went: number
+  answered: number
+  signed: number
+}
+
 const CLOSED_TEXT: Record<ClosedReason, string> = {
   signed: 'Everybody here has signed.',
   refused: 'Not Interested, so the walk does not come back.',
@@ -983,6 +1071,7 @@ function signChain(
       groupK = model.nearWeight > 0 ? model.kStreet / model.nearWeight : K_MAX
     }
     const own = model.streetSign.get(street) ?? emptyTally()
+    const refusals = model.streetRefusals.get(street) ?? 0
     if (own.n > 0) {
       // The street shrinks toward its neighbourhood, so the two levels are one
       // chain rather than two adjustments applied to the same baseline.
@@ -990,13 +1079,22 @@ function signChain(
       const after = clamp01(expit(logit(cellP) + withPrior.delta))
       why.push({
         label: 'This street',
-        // The expected count is what makes this hand-checkable, and it is the
-        // only line on the page a canvasser who knows the street can argue
-        // with: 29 signed where 27 were expected is a street a little above
-        // average, and anyone can see that is not much.
+        // Refusals are named rather than left as arithmetic, because that is
+        // the thing being reasoned about and it is the whole mechanism by
+        // which a street's record moves this number: every refusal is a
+        // conversation that did not sign, so a street where people say no
+        // predicts more people saying no. Measured on the live campaign,
+        // splitting each street's doors in half, the refusal rate in one half
+        // correlates 0.55 with the other, and streets over 60% refusal saw the
+        // remaining doors sign at 33.8% against 66.0% on streets under 20%.
+        //
+        // The expected count is what makes the line hand-checkable, and it is
+        // the only one on the page a canvasser who knows the street can argue
+        // with: 29 signed where 27 were expected is barely above average, and
+        // anyone can see that.
         detail:
-          `${own.hits} of ${own.n} conversations here ended in a signature, ` +
-          `against ${own.expected.toFixed(0)} expected`,
+          `${own.hits} signed and ${refusals} turned it down, of ${own.n} ` +
+          `conversations here. ${own.expected.toFixed(0)} signatures expected`,
         p: after,
         shift: (after - expit(z)) * 100,
         n: own.n,
@@ -1393,7 +1491,7 @@ export function scoreOddsModel(
   if (before.length < 300) return null
   const model = buildOddsModel(before, doors, { rank: false })
 
-  const { visits } = collapse(knocks.filter((k) => k.ts >= cutoff))
+  const { visits } = collapse(knocks.filter((k) => k.ts >= cutoff), model.residentsOf)
   const ps: number[] = []
   const ys: number[] = []
   for (const v of visits) {

@@ -658,7 +658,17 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Totals over a set of doors',
         target: 'odds-set',
-        body: 'Doors the walk would never return to are left out of the totals and counted separately: everybody signed, or the last visit was Not Interested, Skip or Hostile.\nThat is why "137 doors" can be "84 still worth knocking". The totals are about the 84.\n"The same doors, average ground" is what that many doors would be worth on an ordinary street. It is the comparison worth making before spending a morning.',
+        body: 'Doors off the walk are counted separately, not in the totals. That is why "137 doors" can be "84 still worth knocking". The totals are about the 84.\n"The same doors, average ground" is what that many doors would be worth on an ordinary street. It is the comparison worth making before spending a morning.',
+      },
+      {
+        heading: 'Doors off the walk',
+        target: 'odds-closed',
+        body: 'Two different things, and only one of them is final.\nEverybody signed: nothing left to get. Leaving it out is not a guess.\nNot Interested, Skip, Hostile: a rule about the WALK, not a fact about the door. It comes off the list so nobody wastes a trip. It is not dead.\nThe last column is the only evidence there is either way: what happened the times somebody went back anyway. Read it as "sometimes worth another look", never as "a refusal means nothing", because those were doors a canvasser chose to retry rather than a fair sample.\nA refused door gets no percentage because nobody will be sent, so there is no next knock to put odds on.',
+      },
+      {
+        heading: 'Refusals spread',
+        target: 'odds-why',
+        body: 'A refusal at one door does predict refusals at its neighbours, and that is most of what the street line does.\nSign rate is signatures out of conversations, so every refusal drags a street down and that lowered rate is what the next door on it inherits.\nMeasured here, splitting each street\'s doors in half: streets where under a fifth of conversations refused saw the other half sign at 66%. Streets where over three fifths refused saw 34%.\nNearby streets carry a much weaker version of the same thing.\nWhat it is NOT: logging a refusal does not change the door. The knock recorded what was already true, and the model reads it as evidence about the ground, never as a penalty.',
       },
       {
         heading: 'When to go',

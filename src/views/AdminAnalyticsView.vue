@@ -1296,6 +1296,21 @@ const housePercentile = computed(() => {
   return m && h?.signature ? percentileOf(m, h.signature.p) : null
 })
 
+/** For a closed house: what going back to doors closed the same way has got.
+ *  Silent for a fully signed door, where there is genuinely nothing left, and
+ *  silent when nobody has ever gone back, because then we do not know. */
+const reopenedNote = computed(() => {
+  const h = houseResult.value
+  if (!h?.closed || h.closed === 'signed') return ''
+  const r = oddsModel.value?.reopened.find((x) => x.reason === h.closed)
+  if (!r || r.went < 10) return ''
+  return (
+    `Somebody has gone back to a door closed this way ${fmtCount(r.went)} times: ` +
+    `${fmtCount(r.answered)} answered and ${fmtCount(r.signed)} signed. ` +
+    `Those were doors a canvasser chose to try again, not a fair sample.`
+  )
+})
+
 const pickedDoorRow = computed(() =>
   oddsPick.value?.kind === 'house'
     ? (doorRows.value.find((d) => d.id === oddsPick.value!.id) ?? null)
@@ -1472,11 +1487,29 @@ const timeGrid = computed(() => {
 const timeRows = (values: (number | null)[][]) =>
   TIME_ROWS.map((r, i) => [r, ...values[i].map((v) => (v == null ? 'too few' : fmtPct(v, 1)))])
 
-/** Where each closed door went, so a small "still open" number explains
- *  itself instead of just looking wrong. */
-const closedRows = computed(() =>
-  (setResult.value?.closedBreakdown ?? []).map((c) => [c.label, c.count]),
-)
+/**
+ * Where each closed door went, so a small "still open" number explains itself
+ * instead of just looking wrong.
+ *
+ * The third column is the point (2026-07-27, user call). Saying these are
+ * "left out of the totals" on its own implies a refusal makes a door dead,
+ * and it does not: it takes the door off the WALK. The only evidence about
+ * what a refused door would actually do is the times somebody went back
+ * anyway, so that is what the column reports, measured, per reason.
+ */
+const closedRows = computed(() => {
+  const back = new Map((oddsModel.value?.reopened ?? []).map((r) => [r.reason, r]))
+  return (setResult.value?.closedBreakdown ?? []).map((c) => {
+    if (c.reason === 'signed') return [c.label, c.count, 'nothing left to get']
+    const r = back.get(c.reason)
+    if (!r || r.went < 10) return [c.label, c.count, 'never gone back to']
+    return [
+      c.label,
+      c.count,
+      `gone back to ${fmtCount(r.went)} times: ${fmtPct(r.answered / r.went, 0)} answered, ${fmtCount(r.signed)} signed`,
+    ]
+  })
+})
 
 const streetsInSet = computed<BarItem[]>(() =>
   (setResult.value?.streets ?? []).map((s) => ({
@@ -2303,8 +2336,13 @@ const focusRanks = computed<FocusRank[]>(() => {
               <span class="scope-right muted">{{ pickedDoorRow?.city }}</span>
             </div>
 
+            <!-- A closed door gets no probability, because the walk will not
+                 send anybody, so there is no next knock to have odds about.
+                 That is a statement about the WALK, and the line below is
+                 what keeps it from reading as a statement about the door. -->
             <p v-if="houseResult.closed" class="card odds-closed">
-              <strong>No next knock here.</strong> {{ houseResult.closedNote }}
+              <strong>Off the walk.</strong> {{ houseResult.closedNote }}
+              <span v-if="reopenedNote" class="muted odds-closed-back">{{ reopenedNote }}</span>
             </p>
 
             <template v-else>
@@ -2363,9 +2401,10 @@ const focusRanks = computed<FocusRank[]>(() => {
             <div class="two-col">
               <ChartCard
                 v-if="closedRows.length"
-                title="Doors already closed"
-                subtitle="left out of the totals above"
-                :columns="['Why', 'Doors']"
+                title="Doors off the walk"
+                data-help="odds-closed"
+                subtitle="not counted above, because nobody would be sent back"
+                :columns="['Why', 'Doors', 'What happened when somebody went anyway']"
                 :rows="closedRows"
                 table-only
               />
@@ -2733,6 +2772,11 @@ const focusRanks = computed<FocusRank[]>(() => {
 .odds-closed {
   padding: 0.9rem 1rem;
   margin: 0;
+}
+.odds-closed-back {
+  display: block;
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
 }
 .odds-quality {
   margin: 0 0 0.4rem;
