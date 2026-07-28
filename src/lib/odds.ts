@@ -1287,6 +1287,12 @@ function closedReasonOf(st: DoorState | undefined, residents: number): ClosedRea
   return null
 }
 
+/** "1 conversation", "4 conversations". Every evidence line below quotes a
+ *  raw count, and a street with a single knock behind it is the common case
+ *  rather than the edge one: 37% of doors sit on a street anybody has knocked
+ *  at all, so "of 1 conversations here" was on screen a great deal. */
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+
 /**
  * The geography half of the sign estimate, as one chain: campaign base, then
  * the streets that connect to this one, then the street itself.
@@ -1308,7 +1314,6 @@ function geoChain(
   // street term is present and contributes nothing, which is what happens on
   // a campaign where answering does not vary by street.
   const geo = half === 'sign' ? model.signGeo.weight : model.answerGeo.weight
-  const verb = half === 'sign' ? 'ended in a signature' : 'were answered'
 
   let z = logit(cellP)
   const why: EvidenceStep[] = []
@@ -1327,8 +1332,9 @@ function geoChain(
         label: 'Streets that connect to this one',
         detail:
           half === 'sign'
-            ? `${near.hits} of ${near.n} conversations nearby ${verb}`
-            : `${near.hits} of ${near.n} interactions nearby ${verb}`,
+            ? `${near.hits} of ${plural(near.n, 'conversation')} nearby ended in a signature`
+            : `${near.hits} of ${plural(near.n, 'interaction')} nearby ` +
+              `${near.hits === 1 ? 'was' : 'were'} answered`,
         p: after,
         shift: (after - expit(z)) * 100,
         n: near.n,
@@ -1365,9 +1371,11 @@ function geoChain(
         // anyone can see that.
         detail:
           half === 'sign'
-            ? `${own.hits} signed and ${refusals} turned it down, of ${own.n} ` +
-              `conversations here. ${own.expected.toFixed(0)} signatures expected`
-            : `${own.hits} of ${own.n} interactions here ${verb}, ` +
+            ? `${own.hits} signed and ${refusals} turned it down, of ` +
+              `${plural(own.n, 'conversation')} here. ` +
+              `${plural(Math.round(own.expected), 'signature')} expected`
+            : `${own.hits} of ${plural(own.n, 'interaction')} here ` +
+              `${own.hits === 1 ? 'was' : 'were'} answered, ` +
               `against ${own.expected.toFixed(0)} expected`,
         p: after,
         shift: (after - expit(z)) * 100,

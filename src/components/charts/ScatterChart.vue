@@ -49,8 +49,8 @@ const plotH = computed(() => props.height - PAD.top - PAD.bottom)
 
 const xMaxData = computed(() => Math.max(...props.points.map((p) => p.x), 1))
 const yMaxData = computed(() => Math.max(...props.points.map((p) => p.y), props.yPercent ? 0.1 : 1))
-const xTicks = computed(() => niceTicks(0, xMaxData.value))
-const yTicks = computed(() => niceTicks(0, yMaxData.value))
+const xTicks = computed(() => niceTicks(0, xMaxData.value, 4, true))
+const yTicks = computed(() => niceTicks(0, yMaxData.value, 4, !props.yPercent))
 const xMax = computed(() => xTicks.value[xTicks.value.length - 1] || 1)
 const yMax = computed(() => yTicks.value[yTicks.value.length - 1] || 1)
 
@@ -116,6 +116,11 @@ function onTipOpen() {
 }
 const tipArmed = computed(() => props.selectable && hover.value != null && hover.value === armed.value)
 const fmtY = (v: number) => (props.yPercent ? fmtPct(v, 1) : fmtCount(v))
+// One decimal is a CAP, not a fixed width (see fmtCount): niceTicks lands on
+// round percentages, so the tooltip's "50.6%" is a measurement while a
+// gridline's "20.0%" is just noise on the axis.
+const fmtTick = (v: number) =>
+  props.yPercent ? fmtPct(v, Number.isInteger(v * 100) ? 0 : 1) : fmtCount(v)
 const tooltipLeft = computed(() => {
   if (hover.value == null) return 0
   const cx = px(props.points[hover.value].x)
@@ -137,7 +142,7 @@ const tooltipLeft = computed(() => {
     >
       <g v-for="t in yTicks" :key="'y' + t">
         <line class="grid" :x1="PAD.left" :x2="width - PAD.right" :y1="py(t)" :y2="py(t)" />
-        <text class="tick" :x="PAD.left - 6" :y="py(t) + 3" text-anchor="end">{{ fmtY(t) }}</text>
+        <text class="tick" :x="PAD.left - 6" :y="py(t) + 3" text-anchor="end">{{ fmtTick(t) }}</text>
       </g>
       <g v-for="t in xTicks" :key="'x' + t">
         <text class="tick" :x="px(t)" :y="height - 20" text-anchor="middle">{{ fmtCount(t) }}</text>

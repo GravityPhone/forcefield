@@ -51,7 +51,9 @@ const maxVal = computed(() => {
   for (const s of shown.value) for (const v of s.values) if (v != null && v > m) m = v
   return m || 1
 })
-const ticks = computed(() => niceTicks(0, maxVal.value))
+// Every caller here plots counts per day, so the axis holds whole things
+// unless it's showing a percentage.
+const ticks = computed(() => niceTicks(0, maxVal.value, 4, !props.percent))
 const yMax = computed(() => ticks.value[ticks.value.length - 1] || 1)
 
 const x = (i: number) =>

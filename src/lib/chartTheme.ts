@@ -93,13 +93,26 @@ export function useChartPalette() {
   }
 }
 
-/** Clean rounded axis ticks covering [0, max] (or [min,max] when min < 0). */
-export function niceTicks(min: number, max: number, count = 4): number[] {
+/**
+ * Clean rounded axis ticks covering [0, max] (or [min,max] when min < 0).
+ *
+ * `integer` is for an axis counting THINGS (2026-07-28). Signatures, knocks and
+ * appointments come in whole numbers, and on a chart whose whole range is
+ * smaller than the tick count the step falls below one: a quiet canvasser's
+ * "Signatures per day" drew an axis of 0, 0.3, 0.5, 0.8, 1, and the Appointments
+ * tab with nothing booked drew the same. There is no 0.3 of a signature, so the
+ * axis was reporting a precision the quantity does not have. It also drops 2.5
+ * from the step candidates, which is what put half a knock on any chart topping
+ * out under ten.
+ */
+export function niceTicks(min: number, max: number, count = 4, integer = false): number[] {
   if (max <= min) max = min + 1
   const span = max - min
   const step0 = span / count
   const mag = 10 ** Math.floor(Math.log10(step0))
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => span / s <= count) ?? mag * 10
+  const mults = integer ? [1, 2, 5, 10] : [1, 2, 2.5, 5, 10]
+  let step = mults.map((m) => m * mag).find((s) => span / s <= count) ?? mag * 10
+  if (integer) step = Math.max(1, Math.round(step))
   const start = Math.floor(min / step) * step
   const ticks: number[] = []
   for (let v = start; v <= max + step * 0.001; v += step) ticks.push(Number(v.toFixed(10)))

@@ -30,7 +30,7 @@ const plotH = computed(() => props.height - PAD.top - PAD.bottom)
 const totals = computed(() =>
   props.labels.map((_, i) => props.series.reduce((a, s) => a + (s.values[i] ?? 0), 0)),
 )
-const ticks = computed(() => niceTicks(0, Math.max(...totals.value, 1)))
+const ticks = computed(() => niceTicks(0, Math.max(...totals.value, 1), 4, true))
 const yMax = computed(() => ticks.value[ticks.value.length - 1] || 1)
 
 const slot = computed(() => plotW.value / Math.max(1, props.labels.length))

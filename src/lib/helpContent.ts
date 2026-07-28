@@ -511,7 +511,7 @@ const READING_A_RATE =
  * WHAT_COUNTS is: a walkthrough starts on whichever tab you are standing on. */
 const FOLDING_CARDS = 'Tap a card heading to fold it away. It stays folded next time.'
 const CARD_CONTROLS =
-  'Two taps to open something. The first lights it up and shows its numbers, the second goes there. Tapping a different bar just moves the highlight.\n' +
+  'Two taps to open something. The first lights it up and shows its numbers.\nOn a bar or a dot, the second tap goes on the popup, where it says "Tap here to open". Tapping the bar again puts the popup away instead.\nIn a table, tap the row again.\nTapping a different one just moves the highlight.\n' +
   FOLDING_CARDS +
   '\nLong lists show the first 12. "Show all" opens the rest.'
 
@@ -638,7 +638,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Where the number comes from',
         target: 'odds-why',
-        body: 'Three steps, and the card lists them with the running estimate after each.\nStart: what the whole campaign has got at doors in the SAME situation. Which visit it would be, and whether anybody has ever answered there.\nThen the streets that connect to this one.\nThen this street itself.\nEach step moves the number by an amount set by how many knocks are behind it. Nine knocks move it barely at all. Two hundred move it a long way. Nothing is hand set: the campaign\'s own spread between streets decides.',
+        body: 'Three steps, and the card lists them with the running estimate after each.\nStart: what the whole campaign has got at doors in the SAME situation. Which visit it would be, and whether anybody has ever answered there.\nThen the streets that connect to this one.\nThen this street itself.\nThe card runs those three for answering, then three more for signing. The running estimate jumps partway down because the second chain starts again from its own campaign rate.\nEach step moves the number by an amount set by how much evidence sits behind it. Nine conversations move it barely at all. Two hundred move it a long way. Nothing is hand set: the campaign\'s own spread between streets decides.',
       },
       {
         heading: 'Which things move which number',
@@ -648,7 +648,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Comparing it to something',
         target: 'odds-house',
-        body: 'Every figure is shown against the campaign average, and a house also gets its place among every door still on the walk.\nIt only says above or below when the difference is bigger than the uncertainty. Otherwise it says about average, however different the two numbers look.',
+        body: 'A house: the first two numbers carry their range, the chance of a signature is set against the campaign average, and the last tile places the house among every door still on the walk.\nA street or a turf: both rates are set against the campaign average.\nIt only says above or below when the difference is bigger than the uncertainty. Otherwise it says about average, however different the two numbers look.',
       },
       {
         heading: 'The range',
@@ -658,7 +658,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'Totals over a set of doors',
         target: 'odds-set',
-        body: 'Doors the walk would not send anybody back to are left out of the totals. That is why "137 doors" can be "84 still on the walk". The totals are about the 84.\nTwo different reasons a door is out, and only one of them is final. Everybody signed: nothing left to get. Not Interested, Skip or Hostile: a rule about the WALK, so nobody wastes a trip. That is not the same as the door being dead, and a single house says so when you open it.\n"The same doors, average ground" is what that many doors would be worth on an ordinary street. It is the comparison worth making before spending a morning.',
+        body: 'Doors the walk would not send anybody back to are left out of the totals, so the expected numbers cover fewer doors than the door count above them.\nTwo different reasons a door is out, and only one of them is final. Everybody signed: nothing left to get. Not Interested, Skip or Hostile: a rule about the WALK, so nobody wastes a trip. That is not the same as the door being dead, and a single house says so when you open it.\nThe range under each total is the per door ranges added up, not a narrower one: these doors mostly share a street, so they are wrong together or right together.',
       },
       {
         heading: 'Refusals spread',
@@ -673,7 +673,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'How much to trust it',
         target: 'odds-quality',
-        body: 'Measured, not claimed, and measured across the whole campaign rather than its last week.\nIt walks forward: fit on everything before a day, predict that day, move on, refitting each week. So every knock in the test was scored by a model that had not seen it.\n"Picked the one that got a signature 53 times out of 100" is how often, given two knocks, it put the right one ahead. Fifty is a coin toss.\nThe table is the more useful half, and the better result: rows are equal-sized groups from the knocks it was least hopeful about to the ones it liked most. When it said 17%, 17 in 100 signed. That is what makes a total over a street worth having even though single doors are close to a coin toss.',
+        body: 'Measured, not claimed, and measured across the whole campaign rather than its last week.\nIt walks forward: fit on everything before a day, predict that day, move on, refitting each week. So every visit in the test was scored by a model that had not seen it.\nEach bar is how often, given two visits, it put the right one ahead. Fifty is a coin toss, and the dashed line marks it.\nThe table is the more useful half, and the better result: rows are equal-sized groups of visits, from the ones it was least hopeful about to the ones it liked most. When it said 17%, 17 in 100 signed. That is what makes a total over a street worth having even though single doors are close to a coin toss.',
       },
       {
         heading: 'When not to trust it',

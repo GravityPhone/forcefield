@@ -743,7 +743,10 @@ const RATE_BASES: { value: RateBase; label: string }[] = [
   { value: 'conversation', label: 'Per conversation' },
   { value: 'door', label: 'Per door knocked' },
 ]
-const baseWord = computed(() => (rateBase.value === 'door' ? 'doors knocked' : 'conversations'))
+/** Names the denominator wherever a sign rate shows up away from the chips
+ *  that set it, in the chips' own words. It was an unused leftover reading
+ *  "doors knocked" / "conversations" until 2026-07-28. */
+const baseWord = computed(() => (rateBase.value === 'door' ? 'per door knocked' : 'per conversation'))
 const signRateSubtitle = computed(() =>
   rateBase.value === 'door'
     ? 'share of doors knocked where somebody signed'
@@ -972,19 +975,28 @@ interface GroupStats {
   label: string
   knocks: number
   doors: Set<string>
+  /** Doors where anybody ever signed — the numerator of the per-door base. */
+  signedDoors: Set<string>
   interactions: number
   conversations: number
   sigs: number
   days: Set<string>
-  signRate: number
 }
 
 function statsBy(key: (k: Knock) => string): GroupStats[] {
-  const per = new Map<string, Omit<GroupStats, 'label' | 'signRate'>>()
+  const per = new Map<string, Omit<GroupStats, 'label'>>()
   for (const k of filtered.value) {
     let e = per.get(key(k))
     if (!e) {
-      e = { knocks: 0, doors: new Set(), interactions: 0, conversations: 0, sigs: 0, days: new Set() }
+      e = {
+        knocks: 0,
+        doors: new Set(),
+        signedDoors: new Set(),
+        interactions: 0,
+        conversations: 0,
+        sigs: 0,
+        days: new Set(),
+      }
       per.set(key(k), e)
     }
     e.knocks++
@@ -992,12 +1004,40 @@ function statsBy(key: (k: Knock) => string): GroupStats[] {
     e.days.add(k.day)
     if (k.interacted) e.interactions++
     if (k.conversed) e.conversations++
-    if (k.signed) e.sigs++
+    if (k.signed) {
+      e.sigs++
+      e.signedDoors.add(k.household)
+    }
   }
   return [...per.entries()]
-    .map(([label, e]) => ({ label, ...e, signRate: e.conversations ? e.sigs / e.conversations : 0 }))
+    .map(([label, e]) => ({ label, ...e }))
     .sort((a, b) => b.sigs - a.sigs)
 }
+
+/**
+ * ONE "SIGN RATE" PER TAB, WHICHEVER BASE THE CHIPS ARE ON (2026-07-28).
+ *
+ * `signRateBy` above exists so "no two charts on screen can be on different
+ * bases", and these two readouts were quietly outside it: the group table's
+ * Sign rate column and the tooltip note on "Signatures by turf" were both
+ * hard-wired to signatures ÷ conversations while the chart between them
+ * followed the chips. Measured on the live campaign with "Per door knocked"
+ * selected, Emmaus Rd read 45.7% on the bar and 69.2% in the table on the same
+ * screen, under the same two words. Both now go through here.
+ *
+ * The Turf and Squads tabs are the only ones that carry the chips, and these
+ * are the only tabs `groupRows` serves. Where there are no chips — the drill
+ * panel, the Canvassers table — the rate stays per conversation and the hint
+ * beside it says so, which is unambiguous on its own.
+ */
+const signRateOf = (e: GroupStats): number =>
+  rateBase.value === 'door'
+    ? e.doors.size
+      ? e.signedDoors.size / e.doors.size
+      : 0
+    : e.conversations
+      ? e.sigs / e.conversations
+      : 0
 
 const turfStats = computed(() => statsBy((k) => k.turf))
 const squadStats = computed(() => statsBy((k) => k.squad))
@@ -1013,7 +1053,7 @@ const signaturesByTurf = computed<BarItem[]>(() =>
     label: t.label,
     value: t.sigs,
     detail: `${fmtCount(t.knocks)} knocks, ${fmtCount(t.conversations)} conversations`,
-    note: `Sign rate ${fmtPct(t.signRate, 1)}`,
+    note: `Sign rate ${fmtPct(signRateOf(t), 1)} ${baseWord.value}`,
   })),
 )
 const signRateByTurf = computed(() => signRateBy((k) => k.turf, (k) => k.turf !== NO_TURF, 10))
@@ -1040,7 +1080,7 @@ const groupRows = (stats: GroupStats[]) =>
     e.doors.size,
     e.conversations,
     e.sigs,
-    fmtPct(e.signRate, 1),
+    fmtPct(signRateOf(e), 1),
     fmtPct(e.interactions ? e.conversations / e.interactions : 0, 1),
   ])
 const GROUP_COLUMNS = ['', 'Days out', 'Knocks', 'Doors', 'Conversations', 'Signatures', 'Sign rate', 'Answer rate']
@@ -1050,7 +1090,7 @@ const signaturesBySquad = computed<BarItem[]>(() =>
     label: s.label,
     value: s.sigs,
     detail: `${s.days.size} day${s.days.size === 1 ? '' : 's'} out, ${fmtCount(s.knocks)} knocks`,
-    note: `Sign rate ${fmtPct(s.signRate, 1)}`,
+    note: `Sign rate ${fmtPct(signRateOf(s), 1)} ${baseWord.value}`,
   })),
 )
 const signRateBySquad = computed(() => signRateBy((k) => k.squad, (k) => k.squad !== NO_SQUAD, 10))
@@ -1577,9 +1617,15 @@ const scoreSubtitle = computed(() => {
 const oddsScoreChart = computed<BarItem[]>(() => {
   const s = oddsScore.value
   if (!s) return []
+  // The trial count belongs on the bar rather than only in the subtitle: a
+  // discrimination number with no n behind it is exactly the kind of figure
+  // this card exists to stop the page printing. It is VISITS, which is the
+  // unit everything on this tab is counted in — the calibration table's own
+  // third column said "Knocks" until 2026-07-28 and meant these same rows.
+  const behind = `over ${fmtCount(s.trials)} visits it had not seen`
   return [
-    { label: 'Got the signature', value: s.pickedLivelier / 100 },
-    { label: 'Got an answer', value: s.answerPickedLivelier / 100 },
+    { label: 'Got the signature', value: s.pickedLivelier / 100, detail: behind },
+    { label: 'Got an answer', value: s.answerPickedLivelier / 100, detail: behind },
   ]
 })
 
@@ -1986,7 +2032,10 @@ const apptOutcomeMix = computed<BarItem[]>(() => {
     counts.set(r.outcome, (counts.get(r.outcome) ?? 0) + 1)
     total++
   }
-  return OUTCOMES.map((o) => ({
+  // CHART_OUTCOMES, like every other outcome chart here: the four conversation
+  // outcomes first. This one alone still used OUTCOMES' own order, which puts
+  // Hostile last, so the same six bars appeared in two orders on one page.
+  return CHART_OUTCOMES.map((o) => ({
     label: o.short,
     value: counts.get(o.value) ?? 0,
     color: o.hex,
@@ -2210,7 +2259,10 @@ const focusRanks = computed<FocusRank[]>(() => {
             </button>
           </div>
           <span v-if="tab !== 'odds'" class="scope-right muted">
-            {{ fmtCount(scopeCount) }} knocks<span v-if="showTapHint">, tap once to read, again to open</span>
+            <!-- Just "read" now: since 2026-07-28 a second tap on a bar puts
+                 the popup away and the popup itself carries "Tap here to
+                 open", so promising that the second tap opens it was wrong. -->
+            {{ fmtCount(scopeCount) }} knocks<span v-if="showTapHint">, tap once to read</span>
           </span>
           <!-- Its own line (flex-basis 100%): the pair needs ~340px, which is
                most of a phone, so letting it flow beside the chips would only
@@ -2760,6 +2812,7 @@ const focusRanks = computed<FocusRank[]>(() => {
                 :counts="timeGrid.counts"
                 :label-width="66"
                 unit="interactions"
+                value-label="signed"
                 :dark="palette.dark.value"
               />
             </ChartCard>
@@ -2778,15 +2831,15 @@ const focusRanks = computed<FocusRank[]>(() => {
               title="How good is this guess"
               data-help="odds-quality"
               :subtitle="scoreSubtitle"
-              :columns="['It said', 'That many signed', 'Knocks']"
-              :rows="oddsScore.bands.map((b) => [fmtPct(b.said), fmtPct(b.happened), b.n])"
+              :columns="['It said', 'That many signed', 'Visits']"
+              :rows="oddsScore.bands.map((b) => [fmtPct(b.said), fmtPct(b.happened), fmtCount(b.n)])"
             >
               <BarChart
                 :items="oddsScoreChart"
                 :color="cat[0]"
                 percent
                 :max="1"
-                measure="Picked the door that got it, given two"
+                measure="Given two visits, picked the right one"
                 :ref-value="0.5"
                 ref-label="coin toss"
               />

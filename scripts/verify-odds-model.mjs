@@ -427,7 +427,7 @@ console.log('\n6. THE HONESTY STRIP, as the page will print it')
   } else {
     console.log(
       `  Backtested over ${s.days} days, refitting ${s.refits} times, in ${ms.toFixed(0)}ms. ` +
-        `Given two knocks it picked the one that got a signature ${s.pickedLivelier} times out of 100 ` +
+        `Given two visits it picked the one that got a signature ${s.pickedLivelier} times out of 100 ` +
         `(${s.answerPickedLivelier} on answering alone).`,
     )
     for (const b of s.bands) {

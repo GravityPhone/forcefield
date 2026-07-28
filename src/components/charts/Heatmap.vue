@@ -8,6 +8,9 @@
 // second, smaller line — colSubLabels — so a header says both what a block
 // is called and when it runs ("Midday" / "Noon to 2:30 PM") instead of
 // leaving the hours to a caption elsewhere on the page.
+//
+// The tooltip's verb is the CALLER's (valueLabel), because this grid is drawn
+// twice on the Odds tab with two different quantities in the cells.
 import { computed, ref } from 'vue'
 import { sequentialColor, fmtPct } from '@/lib/chartTheme'
 import { useChartWidth } from './useChartWidth'
@@ -25,6 +28,12 @@ const props = defineProps<{
   dark: boolean
   /** what one sample IS in the tooltip ("knocks", "interactions") */
   unit?: string
+  /** What the CELL's rate means, in the tooltip: "36.3% answered". The grid
+   *  is generic and the same component draws both "when somebody answers" and
+   *  "when a knock gets a signature" on the Odds tab; without this the second
+   *  one read "16.6% answered", which is the signature chance under the
+   *  answer chance's name. */
+  valueLabel?: string
   /** Room for the row labels. 44 fits "Mon"; a grid whose rows are words
    *  ("Weekday") has to say so or they are clipped from the left. */
   labelWidth?: number
@@ -136,15 +145,17 @@ const legendStops = Array.from({ length: 9 }, (_, i) => i / 8)
       </g>
     </svg>
 
+    <!-- "from", not "out of": the count is how much evidence sits behind the
+         cell, not the denominator the rate was taken over. -->
     <div v-if="hover && (values[hover.r]?.[hover.c] ?? null) != null" class="detail">
-      <strong>{{ rowLabels[hover.r] }} at {{ colLabels[hover.c] }}</strong>
+      <strong>{{ rowLabels[hover.r] }}, {{ colLabels[hover.c] }}</strong>
       <span class="muted">
-        {{ fmtPct(values[hover.r][hover.c]!, 1) }} answered, out of
+        {{ fmtPct(values[hover.r][hover.c]!, 1) }} {{ valueLabel ?? 'answered' }}, from
         {{ counts[hover.r][hover.c] }} {{ unit ?? 'knocks' }}</span
       >
     </div>
     <div v-else-if="hover" class="detail muted">
-      {{ rowLabels[hover.r] }} at {{ colLabels[hover.c] }}: too few {{ unit ?? 'knocks' }} to say
+      {{ rowLabels[hover.r] }}, {{ colLabels[hover.c] }}: too few {{ unit ?? 'knocks' }} to say
     </div>
     <div v-else class="detail muted">Tap a section for more info.</div>
 
