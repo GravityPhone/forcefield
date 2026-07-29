@@ -4145,6 +4145,25 @@ onUnmounted(() => {
             </button>
           </div>
         </div>
+        <!-- Save, on the map, FULLSCREEN ONLY (2026-07-28). Everywhere else
+             the draft card's Save sits directly under the map and is the one
+             Save in the app — two of them on one screen is the clunkiness the
+             Squad page's own map bar was cut back for. In fullscreen the page
+             chrome isn't on screen at all, so a sweep could not be saved
+             without leaving the surface it was made on. LAST in the stack, so
+             it holds the bottom edge whatever transient card opens above it,
+             and it carries the name, the door count and any save error —
+             the editing bar and the draft card that normally say those are
+             both behind the map. -->
+        <div v-if="isFullscreen && draftOpen" class="map-save-bar" :style="{ '--draft-color': draftColor }">
+          <span class="map-save-dot" aria-hidden="true"></span>
+          <span class="map-save-name">{{ draftName.trim() || defaultDraftName }}</span>
+          <span class="map-save-count">{{ draftDoorCount }} door{{ draftDoorCount === 1 ? '' : 's' }}</span>
+          <button class="btn btn-primary btn-sm map-save-btn" :disabled="saving" @click="saveTurf">
+            {{ saving ? 'Saving…' : editingTurfId ? 'Save changes' : 'Create turf' }}
+          </button>
+          <p v-if="saveError" class="error map-save-error">{{ saveError }}</p>
+        </div>
         </div>
       </div>
       <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
@@ -5068,6 +5087,58 @@ onUnmounted(() => {
    carries no buttons at all since the "Take them too" offer went. */
 .map-bottom > .sweep-bar {
   pointer-events: none;
+}
+
+/* Save, in fullscreen only. Wraps rather than clipping — the turf's name is
+   the one part of this that can be any length. */
+.map-save-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.45rem 0.55rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+.map-save-dot {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--draft-color, var(--accent));
+}
+
+.map-save-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  font-size: calc(0.9rem * var(--ui-scale));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.map-save-count {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  font-size: calc(0.8rem * var(--ui-scale));
+  white-space: nowrap;
+}
+
+.map-save-btn {
+  flex-shrink: 0;
+}
+
+/* A failed save has to say so here: the draft card's own error line is behind
+   the map. Full width, so it never squeezes the button that retries it. */
+.map-save-error {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: calc(0.8rem * var(--ui-scale));
 }
 
 .door-card {
