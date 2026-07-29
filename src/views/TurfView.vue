@@ -61,10 +61,9 @@ export function rememberCameraOf(map: google.maps.Map | null) {
 // turfs still hold doors, a prompt offers "Copy to today" (fresh rows, same
 // streets/assignee — day squads never carry) or "Clear" (their doors
 // release; the old rows stay behind, door-less, as history). Doors owned by
-// another turf never silently join a capture — they're skipped with a
-// flash that names who holds them and where to free them, and offers a
-// "Take them too" steal when this draft may re-cut the owner (a top-level
-// cut takes top-level turfs, a sub-cut takes siblings — canStealFrom).
+// another turf never silently join a capture — they're skipped, silently,
+// and the Take toggle is the one way to get them (a top-level cut takes
+// top-level turfs, a sub-cut takes siblings — canStealFrom).
 // Existing turfs live behind ONE dropdown — picking a turf zooms to it and
 // shows a single compact management card (edit / delete / reassign), not a
 // long list.
@@ -203,8 +202,9 @@ interface DraftSegment {
   memberIds: string[]
   doorCount: number
   /** Doors matching the range but claimed by a different (unstolen) turf —
-   * skipped, never painted or saved; surfaced only in the row editor when a
-   * hand-widened range sweeps over them. */
+   * skipped, never painted or saved. Nothing reads this since the skip notes
+   * went (2026-07-28); computeSegment still keeps it honest because it is
+   * what any future readout of "what this range couldn't have" would want. */
   takenCount: number
 }
 
@@ -867,19 +867,18 @@ const defaultDraftName = computed(() => {
   const who = assignChoice.value !== 'none' && opt ? opt.label.split(': ')[1] : ''
   return who ? `${who}'s turf` : `Turf ${todayTurfs.value.length + 1}`
 })
-const draftTakenCount = computed(() => segments.value.reduce((n, s) => n + s.takenCount, 0))
-
-/** Doors the user chose to STEAL from another turf ("Take them too" on the
- * skip flash). They count as claimable in every draft computation; at save
+/** Doors the draft is taking from another turf — swept while the Take toggle
+ * was armed. They count as claimable in every draft computation; at save
  * time the owning turf is re-cut around them first, so the draft's RPC can
  * actually claim them. Snapshotted/restored with Undo. */
 const stealIds = ref(new Set<string>())
 
 /** "Take" — destructive create (2026-07-25, user call). With it armed, every
  * sweep simply takes the doors it lands on, whoever holds them, instead of
- * skipping them and offering a "Take them too" button afterwards. The user's
- * words: "there is a toggle that lets you… but the button is called Take.
- * You take the turf. And that way, we don't have to have a dialogue."
+ * skipping them. The user's words: "there is a toggle that lets you… but the
+ * button is called Take. You take the turf. And that way, we don't have to
+ * have a dialogue." Since 2026-07-28 it is the ONLY way — the per-sweep
+ * "Take them too" offer and its explanation are gone.
  *
  * It changes nothing about what SAVING does — doors still get released from
  * their old turf first, honestly, by releaseStolenDoors(). It only removes
@@ -901,34 +900,19 @@ function toggleTakeMode() {
   doorLayer?.requestRepaint()
 }
 
-// Transient feedback line ("Added WALNUT ST — 41 doors") that temporarily
-// replaces the standing instructions in the sweep bar, optionally carrying
-// one action button ("Take them too").
+// Transient feedback line for the things that DIDN'T happen — a tap that hit
+// no door, a street already in the turf, a load still in flight. A change the
+// map itself shows (doors changing color, the streets list growing) says so
+// on its own and gets no popup (2026-07-28, user call).
 const flashMsg = ref('')
-const flashAction = ref<{ label: string; run: () => void } | null>(null)
 let flashTimer: ReturnType<typeof setTimeout> | undefined
 
-function flash(msg: string, action: { label: string; run: () => void } | null = null) {
+function flash(msg: string) {
   flashMsg.value = msg
-  flashAction.value = action
   clearTimeout(flashTimer)
-  // Messages with a decision on them hang around longer — and so do the long
-  // ones, which are the skip lines that name a holder and where to go next.
-  flashTimer = setTimeout(
-    () => {
-      flashMsg.value = ''
-      flashAction.value = null
-    },
-    action ? 8000 : msg.length > 80 ? 6500 : 3500,
-  )
-}
-
-function runFlashAction() {
-  const a = flashAction.value
-  flashMsg.value = ''
-  flashAction.value = null
-  clearTimeout(flashTimer)
-  a?.run()
+  flashTimer = setTimeout(() => {
+    flashMsg.value = ''
+  }, msg.length > 80 ? 6500 : 3500)
 }
 
 // The sweep bar used to carry a standing instruction that changed with every
@@ -2062,7 +2046,7 @@ function subtractRange(streetName: string, city: string | null, lo: number, hi: 
 
 type SegSnapshot = Pick<DraftSegment, 'street_name' | 'city' | 'range_start' | 'range_end' | 'parity'>
 /** Undo restores the street list AND which doors were marked stolen — a
- * "Take them too" is one gesture, so one Undo takes it back whole. */
+ * sweep with Take armed is one gesture, so one Undo takes it back whole. */
 interface DraftSnapshot {
   segs: SegSnapshot[]
   steals: string[]
@@ -2423,151 +2407,16 @@ function scrollMapIntoView() {
   mapEl.value?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 
-// --- Skipped-door stealing ---
-// A capture NEVER silently includes doors another turf owns: they're
-// skipped, the flash says so, and — when this cutter may re-cut the owner
-// (canStealFrom) — the flash carries a "Take them too" button. Stealing
-// marks the doors in stealIds (drafts treat them as claimable); the owning
-// turf is only actually re-cut around them at save time.
-
-/** Who holds a batch of skipped doors, and why this cutter can't have them.
- * The three cases are the three reasons canStealFrom() says no. */
-function skipSummary(doors: AddressLite[]): {
-  holders: TurfWithMeta[]
-  reason: 'past-day' | 'crew-split' | 'other-turf'
-} {
-  const holders = new Map<string, TurfWithMeta>()
-  for (const a of doors) {
-    const t = a.turf_id ? turfById.value.get(a.turf_id) : undefined
-    if (t) holders.set(t.id, t)
-  }
-  const list = [...holders.values()]
-  const every = (fn: (t: TurfWithMeta) => unknown) => list.length > 0 && list.every((t) => !!fn(t))
-  return {
-    holders: list,
-    reason: every((t) => !isTodayTurf(t))
-      ? 'past-day'
-      : every((t) => t.parent_turf_id)
-        ? 'crew-split'
-        : 'other-turf',
-  }
-}
-
-/** One dry line for a skipped batch: how many, who has them, and the way to
- * get them when there is one.
- *
- * Specific on purpose (2026-07-25, reported from the field: "it's saying that
- * they are in another turf, but obviously I know that, and that's why I'm
- * using the take toggle"). The old note said "another turf's" for every
- * refusal, so with Take armed the copy was word-for-word the copy with Take
- * off and the toggle read as broken. Each reason now names its holder and
- * points at the one place the doors can actually be freed.
- *
- * Doors in a per-member sub-turf are the common case, and the most confusing:
- * on this map they wear their PARENT's color, so while you're editing that
- * parent they look like they're already yours. They aren't — the crew divided
- * them on the Squad page, and that's where the split comes undone (see
- * canStealFrom for why Take must never swallow it silently). */
-function skipSentence(doors: AddressLite[], lead?: string): string {
-  const head = lead ?? `${doors.length} skipped`
-  const blocked = doors.filter(
-    (a) => !canStealFrom(a.turf_id ? turfById.value.get(a.turf_id) : undefined),
-  )
-  // Doors still one tap away (the "Take them too" button) aren't the
-  // friction. When part of a batch is out of reach entirely, that part is
-  // what the line has to be about.
-  const focus = blocked.length ? blocked : doors
-  const part = focus.length < doors.length ? `${focus.length} of them ` : ''
-  const them = focus.length === 1 ? 'it' : 'them'
-  const { holders, reason } = skipSummary(focus)
-  const one = holders.length === 1 ? holders[0] : null
-  if (reason === 'past-day') {
-    const who = one ? `${one.name}, cut ${prettyDay(turfDay(one))}` : `${holders.length} turfs from earlier days`
-    return `${head}: ${part ? `${part}in ` : ''}${who}. Copy or clear old turf above first.`
-  }
-  if (reason === 'crew-split') {
-    const who = one ? one.name : `${holders.length} crew splits`
-    return `${head}: ${part ? `${part}in ` : ''}${who}, split on the Squad page. Dissolve the split there to take ${them}.`
-  }
-  const who = one ? one.name : holders.length ? `${holders.length} other turfs` : 'another turf'
-  return `${head}: ${part}held by ${who}.`
-}
-
-/** The unclaimable doors a segment's range sweeps over — the ones behind
- * takenCount, resolved back to rows so a note can name who holds them. */
-function takenDoorsOf(seg: DraftSegment): AddressLite[] {
-  return streetRows(seg.street_name, seg.city).filter(
-    (a) => matchesSegment(a, seg) && !claimableDoor(a),
-  )
-}
-
-const expandedSegSkipNote = computed(() => {
-  const seg = expandedSeg.value
-  if (!seg?.takenCount) return ''
-  return skipSentence(takenDoorsOf(seg), `${seg.takenCount} in this range skipped`)
-})
-
-const draftSkipNote = computed(() => {
-  const n = draftTakenCount.value
-  if (!n) return ''
-  return skipSentence(
-    segments.value.flatMap(takenDoorsOf),
-    `${n} door${n === 1 ? '' : 's'} in these ranges skipped`,
-  )
-})
-
-/** The flash action for a batch of skipped doors, or null when none of
- * their owners can be stolen from. */
-function stealActionFor(doors: AddressLite[]): { label: string; run: () => void } | null {
-  // With Take armed there is nothing to offer — those doors were already
-  // claimed by the sweep that just ran. That's the whole point of the mode.
-  if (takeMode.value) return null
-  const stealable = doors.filter((a) =>
-    canStealFrom(a.turf_id ? turfById.value.get(a.turf_id) : undefined),
-  )
-  if (!stealable.length) return null
-  return {
-    label:
-      stealable.length === doors.length
-        ? 'Take them too'
-        : `Take ${stealable.length} of them`,
-    run: () => stealDoors(stealable),
-  }
-}
-
-function stealDoors(doors: AddressLite[]) {
-  snapshotDraft()
-  for (const d of doors) stealIds.value.add(d.id)
-  // Doors already inside a draft range just recompute in; the rest (a lasso
-  // capture that never built a segment for them) join as honest runs.
-  const uncovered = doors.filter((d) => {
-    const name = streetNameOf(d.street)
-    return !name || !matchingSegments(name, d.city).some((s) => matchesSegment(d, s))
-  })
-  for (const seg of segments.value) computeSegment(seg)
-  if (uncovered.length) addDoorsAsSegments(uncovered)
-  const n = doors.length
-  flash(`Took ${n} door${n === 1 ? '' : 's'}. The other turf gives them up when you save.`)
-}
-
-/** Post-add flash for a street: honest got/skipped counts, with the steal
- * offer when doors were skipped. */
-function flashAddResult(streetName: string, city: string | null, prefix: string) {
-  const segsNow = matchingSegments(streetName, city)
-  const got = segsNow.reduce((n, s) => n + s.doorCount, 0)
-  const taken = segsNow.reduce((n, s) => n + s.takenCount, 0)
-  if (!taken) {
-    flash(`${prefix}: ${got} door${got === 1 ? '' : 's'}.`)
-    return
-  }
-  const takenDoors = streetRows(streetName, city).filter(
-    (a) => segsNow.some((s) => matchesSegment(a, s)) && !claimableDoor(a),
-  )
-  flash(
-    `${prefix}: ${got} door${got === 1 ? '' : 's'}. ${skipSentence(takenDoors, `${taken} skipped`)}`,
-    stealActionFor(takenDoors),
-  )
-}
+// --- Skipped doors ---
+// A capture NEVER silently includes doors another turf owns: they're skipped,
+// and the Take toggle is how you get them. Nothing explains that any more
+// (2026-07-28, user call: "it gives us this long explanation when it's asking
+// us whether or not we wanna take certain streets… remove that completely
+// because the take toggle takes care of that anyway"). What replaced the
+// prose is the toggle itself — arm Take and sweep again — plus the map, where
+// a door that stayed another turf's color plainly didn't join. Taking marks
+// doors in stealIds (drafts treat them as claimable); the owning turf is only
+// actually re-cut around them at save time.
 
 /** The located row's Add: the entered house-number range joins the draft
  * (defaults to the whole street; overlapping ranges fold together). */
@@ -2580,7 +2429,6 @@ function addLocatedStreet(m: { street_name: string; city: string }) {
   }
   snapshotDraft()
   addSegment(m.street_name, m.city, lo, hi, 'both')
-  flashAddResult(m.street_name, m.city, `Added ${m.street_name} ${lo} to ${hi}`)
   void materializeStreetPins(m.street_name, m.city, false, true)
 }
 
@@ -2790,7 +2638,6 @@ function applyStreetTap(name: string, city: string) {
     }
     snapshotDraft()
     for (const s of segs) removeSegment(s)
-    flash(`Removed ${name} from the turf.`)
     return
   }
   if (fullyInDraft({ street_name: name, city })) {
@@ -2801,7 +2648,6 @@ function applyStreetTap(name: string, city: string) {
   const nums = rows.map((r) => houseNumber(r.street))
   snapshotDraft()
   addSegment(name, city, Math.min(...nums), Math.max(...nums), 'both')
-  flashAddResult(name, city, `Added ${name}`)
   void materializeStreetPins(name, city, false, true)
 }
 
@@ -2902,17 +2748,12 @@ function onLassoUp() {
       return
     }
     snapshotDraft()
-    const { doorCount, streetCount } = removeDoorsFromDraft(drafted)
+    removeDoorsFromDraft(drafted)
     // If the erased street was only painted because it's the search-located
     // one, its leftover dots would keep painting and read as "erase did
     // nothing" — drop the locate focus so removed doors actually vanish.
     const l = locatedStreet.value
     if (l && drafted.some((a) => doorOnStreet(a, l))) locatedStreet.value = null
-    flash(
-      wasTap
-        ? `${drafted[0].street} removed.`
-        : `Lasso: removed ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
-    )
     return
   }
   if (!doors.length) {
@@ -2923,32 +2764,23 @@ function onLassoUp() {
     )
     return
   }
-  // Doors another turf owns never silently join a capture — they're
-  // skipped, and the flash offers the steal when it's allowed.
+  // Doors another turf owns never silently join a capture — they're skipped,
+  // and the Take toggle is the way to get them. A sweep that took SOME doors
+  // says nothing: the ones that joined changed color, the ones that didn't
+  // kept theirs. A sweep that took NOTHING still needs a line, or the tool
+  // reads dead.
   const free = doors.filter(claimableDoor)
-  const taken = doors.filter((a) => !claimableDoor(a))
   if (!free.length) {
-    flash(
-      skipSentence(taken, wasTap ? taken[0].street : `Every door in that loop skipped`),
-      stealActionFor(taken),
-    )
+    flash(wasTap ? 'That door is in another turf.' : 'Those doors are all in another turf.')
     return
   }
   snapshotDraft()
-  const { doorCount, streetCount } = addDoorsAsSegments(free)
+  const { doorCount } = addDoorsAsSegments(free)
   if (!doorCount) {
     undoStack.value.pop()
     flash('Could not read streets for those doors. Try a tighter loop.')
     return
   }
-  flash(
-    wasTap
-      ? `${free[0].street} added.`
-      : taken.length
-        ? `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}. ${skipSentence(taken)}`
-        : `Lasso: swept ${doorCount} door${doorCount === 1 ? '' : 's'} across ${streetCount} street${streetCount === 1 ? '' : 's'}.`,
-    taken.length ? stealActionFor(taken) : null,
-  )
   // Populate the dots: the captured streets usually hold doors that were
   // never geocoded (the lasso can only see mapped ones), so without this
   // the sweep sits half-blank.
@@ -4199,11 +4031,6 @@ onUnmounted(() => {
         <div v-if="hint" class="sweep-bar" :style="{ '--draft-color': draftColor }">
           <span class="sweep-dot" aria-hidden="true"></span>
           <p class="sweep-hint">{{ hint }}</p>
-          <!-- One optional action on the flash — e.g. "Take them too" after a
-               capture skipped another turf's doors. -->
-          <button v-if="flashAction" class="btn btn-sm btn-primary sweep-action" @click="runFlashAction">
-            {{ flashAction.label }}
-          </button>
         </div>
         <!-- Compact house history: tap a dot (no tool armed) to see the
              door's last knocks. -->
@@ -4468,7 +4295,6 @@ onUnmounted(() => {
                     <option value="odd">Odd side</option>
                   </select>
                 </div>
-                <p v-if="expandedSegSkipNote" class="muted seg-trim-hint">{{ expandedSegSkipNote }}</p>
                 <div class="seg-panel-foot">
                   <span class="seg-panel-facts">
                     <span class="seg-doors" :class="{ 'seg-doors-empty': !expandedSeg.doorCount }">
@@ -4500,7 +4326,6 @@ onUnmounted(() => {
             aria-label="Turf name (optional)"
           />
           <AppSelect v-model="assignChoice" :options="assignOptions" aria-label="Assign this turf to" />
-          <p v-if="draftSkipNote" class="muted">{{ draftSkipNote }}</p>
         </div>
         </template>
       </div>
@@ -5239,14 +5064,10 @@ onUnmounted(() => {
 }
 
 /* The flash is a message, not a surface: it sits over the map's bottom edge
-   while you're tapping doors, so taps must pass straight through it. Only
-   its action button catches them. */
+   while you're tapping doors, so taps must pass straight through it. It
+   carries no buttons at all since the "Take them too" offer went. */
 .map-bottom > .sweep-bar {
   pointer-events: none;
-}
-
-.sweep-action {
-  pointer-events: auto;
 }
 
 .door-card {
@@ -5802,16 +5623,6 @@ onUnmounted(() => {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 6px;
-}
-
-.seg-trim-hint {
-  margin: 0;
-  font-size: 0.8rem;
-}
-
-/* Flash action button in the sweep bar ("Take them too"). */
-.sweep-action {
-  flex-shrink: 0;
 }
 
 /* Copy-or-clear prompt for a previous day's turfs. */
