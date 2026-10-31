@@ -32,11 +32,27 @@ watch(
        that is always mounted, deliberately: wrapping only some routes in it
        would unmount the cache itself the moment you visited an unwrapped one,
        taking every page it held with it. Which routes opt out is `exclude`. -->
-  <router-view v-if="auth.ready || !auth.isLoggedIn" v-slot="{ Component }">
+  <!-- Gated on `ready` alone: the router awaits auth.init() before the first
+       route, so until the boot answers there is no page to show and the old
+       `|| !auth.isLoggedIn` escape only ever rendered an empty router-view,
+       i.e. the bare background. That was the whole of what a phone saw while
+       the database was down (2026-10-30). -->
+  <router-view v-if="auth.ready" v-slot="{ Component }">
     <keep-alive :key="cacheOwner" :max="KEPT_PAGES" :exclude="NEVER_KEPT">
       <component :is="Component" />
     </keep-alive>
   </router-view>
+  <div v-else-if="auth.bootStalled" class="app-loading">
+    <p class="stalled-msg">Can't reach the server.</p>
+    <button
+      type="button"
+      class="btn btn-primary"
+      :disabled="auth.bootRetrying"
+      @click="auth.retryBoot()"
+    >
+      {{ auth.bootRetrying ? 'Retrying…' : 'Retry' }}
+    </button>
+  </div>
   <div v-else class="app-loading">
     <span class="spinner" aria-hidden="true"></span>
     <p class="muted">Loading…</p>
@@ -73,6 +89,10 @@ watch(
 
 .app-loading p {
   margin: 0;
+}
+
+.stalled-msg {
+  font-weight: 600;
 }
 
 /* --- The gutter note beside the phone frame --- */
