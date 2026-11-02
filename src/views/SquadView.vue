@@ -11,7 +11,13 @@ import { fadeUp } from '@/lib/motion'
 import { startOfLocalDayISO } from '@/lib/day'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { fetchDoors } from '@/lib/doorData'
-import { attachPoiTapGuard, loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
+import {
+  attachPoiTapGuard,
+  loadMaps,
+  mapsAuthError,
+  mapsErrorMessage,
+  MAP_RENDERING_TYPE,
+} from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
   readMapPref,
@@ -2458,7 +2464,8 @@ watch(
           </div>
           <p v-if="assignError" class="error assign-error">{{ assignError }}</p>
         </div>
-        <p v-if="mapsAuthError || mapFailed" class="error map-error">
+        <p v-if="mapsAuthError" class="error map-error">{{ mapsErrorMessage }}</p>
+        <p v-else-if="mapFailed" class="error map-error">
           Couldn't load Google Maps. Check the connection and reload.
         </p>
         <div

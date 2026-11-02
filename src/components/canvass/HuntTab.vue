@@ -3,7 +3,13 @@ import { computed, nextTick, onActivated, onMounted, onUnmounted, ref, watch } f
 import { useRoute, useRouter } from 'vue-router'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { Geolocation } from '@capacitor/geolocation'
-import { attachPoiTapGuard, loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
+import {
+  attachPoiTapGuard,
+  loadMaps,
+  mapsAuthError,
+  mapsErrorMessage,
+  MAP_RENDERING_TYPE,
+} from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
   CityLimitsLayer,
@@ -1912,8 +1918,7 @@ onUnmounted(() => {
     <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
     <p v-if="locateError" class="muted map-error">{{ locateError }}</p>
     <p v-if="mapsAuthError" class="muted map-error">
-      Google rejected the Maps API key. Usually quota, billing, or a referrer restriction on the
-      key. The exact reason is logged in the browser console. Search and knock logging still work.
+      {{ mapsErrorMessage }} Search and knock logging still work.
     </p>
     <p v-if="locating" class="muted map-error">Locating nearby doors…</p>
 

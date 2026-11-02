@@ -99,7 +99,13 @@ import AppSelect from '@/components/ui/AppSelect.vue'
 import type { SelectOption } from '@/components/ui/AppSelect.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import DoorOddsPanel from '@/components/odds/DoorOddsPanel.vue'
-import { attachPoiTapGuard, loadMaps, mapsAuthError, MAP_RENDERING_TYPE } from '@/lib/googleMaps'
+import {
+  attachPoiTapGuard,
+  loadMaps,
+  mapsAuthError,
+  mapsErrorMessage,
+  MAP_RENDERING_TYPE,
+} from '@/lib/googleMaps'
 import { GOOGLE_MAPS_MAP_ID } from '@/lib/config'
 import {
   CityLimitsLayer,
@@ -4167,10 +4173,7 @@ onUnmounted(() => {
         </div>
       </div>
       <p v-if="loadError" class="muted map-error">{{ loadError }}</p>
-      <p v-if="mapsAuthError" class="muted map-error">
-        Google rejected the Maps API key. Usually quota, billing, or a referrer restriction on
-        the key. The exact reason is logged in the browser console.
-      </p>
+      <p v-if="mapsAuthError" class="muted map-error">{{ mapsErrorMessage }}</p>
 
       <!-- Overview: cutting starts only when you ask for it. -->
       <div v-if="!draftOpen && !(isSubcutter && !myParentTurfs.length)" class="new-turf-bar">

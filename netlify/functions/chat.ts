@@ -20,7 +20,7 @@
 // in-progress Anthropic message array plus budget counters; tampering with
 // it buys nothing the plain messages payload doesn't already allow.
 
-import Anthropic from '@anthropic-ai/sdk'
+import Anthropic, { APIError } from '@anthropic-ai/sdk'
 import { createClient } from '@supabase/supabase-js'
 import * as ss from 'simple-statistics'
 
@@ -1195,23 +1195,57 @@ async function handleChat(req: Request): Promise<Response> {
       state.m.push({ role: 'user', content: results })
     }
   } catch (err) {
+    // Every reply here is read by a campaign manager or admin on a phone, with
+    // no way to open the Netlify function log — so the API's own sentence
+    // ("Your credit balance is too low…", "model: … not found") goes in the
+    // reply. Nothing in these messages is secret; the key never echoes back.
     if (err instanceof Anthropic.AuthenticationError) {
-      return json({ error: 'Invalid API key — check it in Settings.' }, 401)
+      return json({ error: `Anthropic rejected the API key — check it in Settings. (${apiReason(err)})` }, 401)
+    }
+    if (err instanceof Anthropic.PermissionDeniedError) {
+      console.error('Anthropic PermissionDenied:', err.message)
+      return json({ error: `Anthropic refused this key: ${apiReason(err)}` }, 403)
+    }
+    if (err instanceof Anthropic.NotFoundError) {
+      console.error('Anthropic NotFound:', err.message)
+      return json(
+        {
+          error: `Anthropic could not find the assistant's model (${MODEL}) — it may have been retired. ${apiReason(err)}`,
+        },
+        502,
+      )
     }
     if (err instanceof Anthropic.RateLimitError) {
-      return json({ error: 'Rate limited by Anthropic — try again in a moment.' }, 429)
+      return json({ error: `Rate limited by Anthropic — try again in a moment. (${apiReason(err)})` }, 429)
     }
     if (err instanceof Anthropic.BadRequestError) {
       console.error('Anthropic BadRequest:', err.message)
-      return json({ error: 'The assistant could not process that request. Try rephrasing.' }, 400)
+      return json({ error: `Anthropic could not process that request: ${apiReason(err)}` }, 400)
     }
     if (err instanceof Anthropic.APIError) {
       console.error('Anthropic APIError:', err.message)
-      return json({ error: 'The assistant is temporarily unavailable — try again in a moment.' }, 502)
+      return json(
+        { error: `Anthropic is temporarily unavailable (${err.status ?? 'no status'}): ${apiReason(err)}` },
+        502,
+      )
     }
     console.error('Chat function error:', err)
     return json({ error: 'Unexpected server error.' }, 500)
   }
+}
+
+/** The API's own explanation, without the status prefix the SDK prepends
+ * ("400 Your credit balance is too low…" → "Your credit balance is too low…").
+ * Bounded so a stray HTML error page can't become the whole chat bubble. */
+function apiReason(err: APIError): string {
+  const body = err.error as { error?: { message?: unknown } } | undefined
+  const fromBody = body?.error?.message
+  const raw =
+    typeof fromBody === 'string' && fromBody
+      ? fromBody
+      : err.message.replace(/^\d{3}\s+/, '')
+  const line = raw.replace(/\s+/g, ' ').trim()
+  return line.length > 300 ? `${line.slice(0, 297)}…` : line || 'no detail given'
 }
 
 export const config = { path: '/api/chat' }
