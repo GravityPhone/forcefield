@@ -4,6 +4,7 @@ import RosterList from './RosterList.vue'
 import OutcomeButtons from './OutcomeButtons.vue'
 import { computed } from 'vue'
 import { hapticTap } from '@/lib/native'
+import { knockLabel } from '@/lib/registration'
 import { OUTCOME_DOOR_LEVEL, OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, OUTCOME_SHORT, PIN_DEFAULT_HEX, outcomeRowTint } from '@/lib/outcomes'
 import OutcomeSquare from './OutcomeSquare.vue'
 import DoorOddsPanel from '@/components/odds/DoorOddsPanel.vue'
@@ -60,10 +61,10 @@ const banner = computed<{ outcome: KnockOutcome; label: string } | null>(() => {
   const householdLatest =
     latest && (OUTCOME_DOOR_LEVEL[latest.outcome] || !latest.person_id) ? latest.outcome : null
   if (householdLatest === 'skip' || householdLatest === 'hostile') {
-    return { outcome: householdLatest, label: OUTCOME_SHORT[householdLatest] }
+    return { outcome: householdLatest, label: knockLabel(latest, OUTCOME_SHORT) }
   }
   if (signedIds.size > 0) return { outcome: 'maybe', label: `${signedIds.size}/${total} signed` }
-  if (householdLatest) return { outcome: householdLatest, label: OUTCOME_SHORT[householdLatest] }
+  if (householdLatest) return { outcome: householdLatest, label: knockLabel(latest, OUTCOME_SHORT) }
   return null
 })
 
@@ -190,7 +191,7 @@ function togglePartlySigned() {
             <OutcomeSquare :fill="OUTCOME_HEX[h.outcome]" />
             <span class="history-main">
               <span class="history-what">
-                <strong>{{ OUTCOME_LABELS[h.outcome] }}</strong>
+                <strong>{{ knockLabel(h, OUTCOME_LABELS) }}</strong>
                 <template v-if="h.person?.name"> · {{ h.person.name }}</template>
               </span>
               <span class="muted history-meta">{{ historyWho(h) }} · {{ historyWhen(h.occurred_at) }}</span>

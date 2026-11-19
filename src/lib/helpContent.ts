@@ -321,6 +321,32 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     ],
   },
 
+  '/sites': {
+    title: 'Sites',
+    sections: [
+      {
+        target: 'sites-scope',
+        body: 'Voter registration shifts: one site, one day, one crew.\nUpcoming: today onward. Past: earlier shifts and their counts.',
+      },
+      {
+        target: 'sites-today',
+        body: 'Today across every site.\nRegistered: new registrations. Updated: address or name changes.\nConversations: everybody talked to, whatever came of it.',
+      },
+      {
+        target: 'sites-list',
+        body: 'Tap a shift to open its tally screen.\nYour own shifts sort first and wear a You tag.\nThe number is registered plus updated, against the goal if one is set.',
+      },
+      {
+        target: 'sites-plan',
+        body: 'Managers only.\nAdd shift: site, date, hours, goal, crew.\nImport: paste rows from a spreadsheet or choose a .csv, then match its columns.',
+      },
+      {
+        heading: 'What is not stored',
+        body: 'No form details: no birth date, licence number or SSN digits.\nNot eligible is one button. The reason is never recorded.',
+      },
+    ],
+  },
+
   '/appointments': {
     title: 'Appointments',
     sections: [
@@ -474,6 +500,10 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
   '/admin/settings': {
     title: 'Settings',
     sections: [
+      {
+        target: 'settings-mode',
+        body: 'Campaign type.\nPetition: signatures at doors.\nVoter registration: adds the Sites screens and swaps Talk to registration buttons.',
+      },
       {
         target: 'settings-key',
         body: 'A shared demo key is already configured. Your own Anthropic key is optional and follows your account.',

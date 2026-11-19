@@ -106,6 +106,13 @@ const router = createRouter({
     // too, which is why only they see the link when the feature is off.
     { path: '/appointments', name: 'appointments', component: () => import('@/views/AppointmentsView.vue'), meta: { roles: [] } },
 
+    // Voter registration: the site plan, and one site shift's tally screen.
+    // Neither has a map. Open to every logged-in role (a canvasser has to
+    // find their own shift); planning and import are manager-gated in the
+    // page and by RLS. With the campaign in petition mode the list says so.
+    { path: '/sites', name: 'sites', component: () => import('@/views/SitesView.vue'), meta: { roles: [] } },
+    { path: '/sites/:id', name: 'site-shift', component: () => import('@/views/SiteShiftView.vue'), meta: { roles: [] } },
+
     // Who signed AND said they'd knock doors — the read side of the one
     // follow-up after a signature. Managers recruit, so it's theirs; a
     // canvasser's own asks were already answered at the door.

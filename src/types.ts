@@ -134,6 +134,9 @@ export interface Campaign {
   /** Filing deadline as YYYY-MM-DD — the last day signatures can be turned
    * in. With the goal it becomes a rate (lib/pace.ts); null = no pace shown. */
   deadline: string | null
+  /** A petition (signatures at doors) or a voter registration drive (sites,
+   * and registration buttons on Talk). See lib/registration.ts. */
+  mode: 'petition' | 'registration'
   created_by: string | null
   created_at: string
 }
@@ -222,6 +225,9 @@ export interface KnockLog {
   occurred_at: string
   outcome: KnockOutcome
   notes: string | null
+  /** Registration campaigns: what the conversation came to. Null or absent
+   * on every petition knock. */
+  reg_result?: 'registered' | 'updated' | 'already_registered' | 'not_eligible' | 'declined' | null
   created_at: string
   /** Stamped by the DB at insert (20260714120000): which squad the canvasser
    * was crewing with that day, and the top-level turf the door sat in. Names
@@ -242,6 +248,9 @@ export interface NewKnock {
   occurred_at: string
   outcome: KnockOutcome
   notes: string | null
+  /** Registration campaigns only: what the conversation came to. A petition
+   * knock OMITS the key entirely, so its upsert never touches the column. */
+  reg_result?: 'registered' | 'updated' | 'already_registered' | 'not_eligible' | 'declined' | null
 }
 
 export interface HouseholdLatestKnock {

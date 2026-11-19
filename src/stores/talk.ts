@@ -15,6 +15,7 @@ import { fetchMyTurf } from '@/lib/myTurf'
 import { appointmentSettings } from '@/lib/appointments'
 import { useAuthStore } from './auth'
 import type { Address, Appointment, KnockLog, KnockOutcome, NewKnock, Person } from '@/types'
+import type { RegResult } from '@/lib/registration'
 
 const WALK_DIRECTION_KEY = 'forcefield.walk_direction'
 const WALK_PARITY_KEY = 'forcefield.walk_parity'
@@ -53,6 +54,11 @@ interface TalkState {
    * Tapping the same button again undoes it; tapping a different one swaps
    * it; both write through activeClientId so it's the same DB row. */
   pendingOutcome: KnockOutcome | null
+  /** Registration mode: which registration button is lit. Two of them share
+   * one knock outcome (Registered and Updated are both 'signed'), so the
+   * outcome alone can't say which. Only ever read alongside pendingOutcome,
+   * which every door change clears, so a stale value here is inert. */
+  pendingReg: RegResult | null
   activeClientId: string | null
   /** Set when the person signing is registered at a DIFFERENT door than the
    * one loaded — a spouse, an adult kid, a new tenant, or somebody who just
@@ -129,6 +135,7 @@ export const useTalkStore = defineStore('talk', {
     selectedPerson: null,
     notes: '',
     pendingOutcome: null,
+    pendingReg: null,
     activeClientId: null,
     signerHome: null,
     awayVisitClientId: null,
@@ -371,11 +378,16 @@ export const useTalkStore = defineStore('talk', {
      * activeClientId); tapping with nothing active creates a new log. The
      * button row itself never hides — this only changes which outcome is
      * highlighted. */
-    async logOutcome(outcome: KnockOutcome) {
+    async logOutcome(outcome: KnockOutcome, reg?: RegResult | null) {
       const auth = useAuthStore()
       if (!auth.profile) return
+      // `reg` is undefined on a petition (the key is then left off the knock
+      // entirely) and a result or an explicit null in registration mode, where
+      // null matters: swapping Registered for Not Home has to clear it.
+      const regMode = reg !== undefined
+      const sameReg = !regMode || this.pendingReg === reg
 
-      if (this.pendingOutcome === outcome && this.activeClientId) {
+      if (this.pendingOutcome === outcome && sameReg && this.activeClientId) {
         const clientId = this.activeClientId
         // An away signature wrote a visit row too — undo takes both, or the
         // door keeps a knock for a signature that no longer exists.
@@ -409,8 +421,10 @@ export const useTalkStore = defineStore('talk', {
         occurred_at: occurredAt,
         outcome,
         notes: this.notes.trim() || null,
+        ...(regMode ? { reg_result: reg } : {}),
       }
       this.pendingOutcome = outcome
+      this.pendingReg = reg ?? null
       this.activeClientId = clientId
 
       // AND THE VISIT STILL RECORDS WHERE YOU STOOD. Without this row the door
@@ -445,7 +459,12 @@ export const useTalkStore = defineStore('talk', {
       // tap a swap — either way this submission is stale and must not prepend
       // a ghost entry over the newer state (the roster bubbles and address
       // banner render straight from history[0]).
-      if (this.activeClientId !== clientId || this.pendingOutcome !== outcome) return
+      if (
+        this.activeClientId !== clientId ||
+        this.pendingOutcome !== outcome ||
+        this.pendingReg !== (reg ?? null)
+      )
+        return
       // Optimistic: reflect the (possibly corrected) knock in this
       // household's history, replacing any prior entry for the same log.
       // An away signature's row belongs to a DIFFERENT door's history, so what

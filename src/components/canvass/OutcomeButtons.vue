@@ -7,6 +7,7 @@ import { OUTCOMES } from '@/lib/outcomes'
 import { popIn } from '@/lib/motion'
 import { hapticNotify, hapticTap } from '@/lib/native'
 import { appointmentSettings, ensureAppointmentSettings } from '@/lib/appointments'
+import { REG_DOOR_BUTTONS, campaignMode, type RegResult } from '@/lib/registration'
 import { useTalkStore } from '@/stores/talk'
 import type { KnockOutcome } from '@/types'
 
@@ -25,6 +26,26 @@ const apptOpen = ref(false)
 // A physical tick under the finger confirms the tap registered without
 // looking down at the screen — this pair of buttons is the highest-frequency
 // interaction in the whole app.
+// REGISTRATION CAMPAIGNS swap the grid, not the plumbing. Each registration
+// button still logs an ordinary knock (so the maps, the walk and the offline
+// queue need to know nothing about it) and carries the registration result
+// alongside. Nobody on the roster is required: the person being registered
+// is, by definition, not in the voter file this roster came from.
+const regMode = computed(() => campaignMode.value === 'registration')
+
+function regActive(b: { outcome: KnockOutcome; reg: RegResult | null }): boolean {
+  return talk.pendingOutcome === b.outcome && talk.pendingReg === b.reg
+}
+
+function logReg(b: { outcome: KnockOutcome; reg: RegResult | null }) {
+  hapticTap('medium')
+  const undoing = regActive(b) && !!talk.activeClientId
+  void talk.logOutcome(b.outcome, b.reg)
+  if (!undoing && b.outcome === 'maybe' && appointmentSettings.value.enabled && talk.selectedAddress) {
+    apptOpen.value = true
+  }
+}
+
 function logOutcome(value: KnockOutcome) {
   hapticTap('medium')
   // Whether this tap SETS the outcome or undoes it, decided before the log
@@ -107,7 +128,21 @@ function disabledReason(requiresPerson: boolean): string {
 
 <template>
   <div class="outcome-row">
-    <div class="outcome-grid" data-help="talk-outcomes">
+    <div v-if="regMode" class="outcome-grid" data-help="talk-outcomes">
+      <button
+        v-for="b in REG_DOOR_BUTTONS"
+        :key="b.key"
+        class="btn outcome-btn"
+        :class="{ active: regActive(b) }"
+        :style="{ '--outcome-color': b.hex }"
+        :disabled="!hasHousehold"
+        :title="!hasHousehold ? 'Open a door first' : undefined"
+        @click="logReg(b)"
+      >
+        {{ b.label }}
+      </button>
+    </div>
+    <div v-else class="outcome-grid" data-help="talk-outcomes">
       <button
         v-for="o in OUTCOMES"
         :key="o.value"
@@ -125,7 +160,7 @@ function disabledReason(requiresPerson: boolean): string {
          goes there. Sits under the grid because that's where the thumb
          already is after Signed, which is where the old sheet used to open
          itself. -->
-    <VolunteerButton />
+    <VolunteerButton v-if="!regMode" />
     <!-- Back and Next ride here whenever a door is loaded — no outcome
          required (with one logged, moving on doubles as the confirm; nothing
          auto-advances). Next walks the street per the direction pref above;

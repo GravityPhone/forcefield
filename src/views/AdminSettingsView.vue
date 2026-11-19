@@ -9,6 +9,8 @@ import {
   windowLabel,
 } from '@/lib/appointments'
 import { useAuthStore } from '@/stores/auth'
+import AppSelect from '@/components/ui/AppSelect.vue'
+import { campaignMode, loadCampaignMode, saveCampaignMode, type CampaignMode } from '@/lib/registration'
 
 // Persisted server-side per admin account (admin_settings table, RLS-scoped
 // to owner_id) so the key follows the account across devices/browsers
@@ -85,6 +87,30 @@ async function saveKey() {
 // appear without a reload.
 
 const apptOpen = ref(false)
+
+// What kind of campaign this is. Like the appointments switch below, it
+// decides whether screens EXIST (the Sites tab, Talk's registration buttons),
+// so it cannot live on the screen it governs.
+const modeOpen = ref(false)
+const modeSaving = ref(false)
+const modeError = ref('')
+const MODE_OPTIONS = [
+  { value: 'petition', label: 'Petition signatures' },
+  { value: 'registration', label: 'Voter registration' },
+]
+const modePick = computed<string>({
+  get: () => campaignMode.value,
+  set: (v) => void setMode(v as CampaignMode),
+})
+async function setMode(mode: CampaignMode) {
+  if (mode === campaignMode.value) return
+  modeSaving.value = true
+  modeError.value = ''
+  const { error } = await saveCampaignMode(mode)
+  modeSaving.value = false
+  if (error) modeError.value = error
+}
+onMounted(() => void loadCampaignMode())
 const apptSaving = ref(false)
 const apptSaved = ref(false)
 const apptError = ref('')
@@ -163,6 +189,20 @@ async function saveAppointments() {
         <div class="source-row">
           <div><strong>Connect to Minivan</strong></div>
           <button class="btn btn-ghost" disabled>Coming soon</button>
+        </div>
+      </div>
+
+      <div class="card fold-card" data-help="settings-mode">
+        <button class="fold-head" :aria-expanded="modeOpen" @click="modeOpen = !modeOpen">
+          <span>Campaign type</span>
+          <span class="fold-state muted">{{ campaignMode === 'registration' ? 'Voter registration' : 'Petition' }}</span>
+          <span class="fold-caret" aria-hidden="true">{{ modeOpen ? '▴' : '▾' }}</span>
+        </button>
+        <div v-if="modeOpen" class="fold-body">
+          <p v-if="!auth.profile?.campaign_id" class="muted">No campaign selected.</p>
+          <AppSelect v-else v-model="modePick" :options="MODE_OPTIONS" />
+          <p v-if="modeSaving" class="muted">Saving…</p>
+          <p v-if="modeError" class="error">{{ modeError }}</p>
         </div>
       </div>
 

@@ -15,6 +15,7 @@ import { whileOnPage } from '@/lib/pageState'
 import { onAppResume } from '@/lib/appResume'
 import { syncTurfCache } from '@/lib/offlineCache'
 import { appointmentSettings, ensureAppointmentSettings } from '@/lib/appointments'
+import { campaignMode, loadCampaignMode } from '@/lib/registration'
 import { helpFor, type HelpTopic } from '@/lib/helpContent'
 
 // Easter-egg mini game (25 rapid taps on your own name, /profile) — async so the
@@ -102,6 +103,7 @@ const barItems = computed<NavItem[]>(() => {
   // everyone's job, so the home tab is called Canvass everywhere.
   return [
     { to: '/canvass', label: 'Canvass', icon: 'pin' },
+    ...(showSites.value ? [sitesItem] : []),
     { to: '/squad', label: 'Squad', icon: 'squads' },
     { to: '/activity', label: 'Feed', icon: 'pulse' },
     { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
@@ -118,6 +120,17 @@ const showAppointments = computed(() => {
   if (!role || role === 'admin') return false
   return appointmentSettings.value.enabled
 })
+
+/** Sites exist only in a voter registration campaign (campaigns.mode). For
+ * the people working a shift it is the screen they live on, so it rides the
+ * tab bar right after Canvass; a manager's bar is already full, so theirs is
+ * the first row of More. Admins run no campaign and get neither. */
+const showSites = computed(() => {
+  const role = auth.profile?.role
+  if (!role || role === 'admin') return false
+  return campaignMode.value === 'registration'
+})
+const sitesItem: NavItem = { to: '/sites', label: 'Sites', icon: 'site' }
 
 const moreItems = computed<NavItem[]>(() => {
   if (!auth.profile) return []
@@ -149,6 +162,7 @@ const moreItems = computed<NavItem[]>(() => {
   }
   if (auth.profile.role === 'campaign_manager') {
     return [
+      ...(showSites.value ? [sitesItem] : []),
       // Analytics is the bottom bar's first tab now, not a More item.
       { to: '/admin/roles', label: 'Roles', icon: 'shield' },
       // Every crew out today — the Squad tab is the manager's own crew now.
@@ -254,6 +268,8 @@ const ICONS = {
   chart: '<path d="M4 4v16h16"/><path d="M8 16v-5M12 16V7M16 16v-8"/>',
   sliders: '<path d="M4 8h10M18 8h2M4 16h4M12 16h8"/><circle cx="16" cy="8" r="2"/><circle cx="10" cy="16" r="2"/>',
   flag: '<path d="M6 21V4"/><path d="M6 5h11l-2.2 3.5L17 12H6z"/>',
+  // A table under a canopy: where a registration crew stands.
+  site: '<path d="M3 10l9-6 9 6z"/><path d="M5 10v10M19 10v10M8 15h8M9 15v5M15 15v5"/>',
   more: '<circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/>',
   logout: '<path d="M14 4h-8a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h8M10 12h11M18 8.5L21.5 12 18 15.5"/>',
 } as const
@@ -382,6 +398,10 @@ function kickTurfCache() {
 
 // The profile arrives after mount on a cold load, so watch rather than call.
 watch(() => auth.profile?.id, kickTurfCache, { immediate: true })
+
+// Which kind of campaign this is decides the nav and Talk's buttons, so it is
+// read wherever the shell is, and again whenever the active campaign changes.
+watch(() => auth.profile?.campaign_id, () => void loadCampaignMode(), { immediate: true })
 // And again whenever the app comes back — a phone that slept through the drive
 // to the turf should not still be holding yesterday's ground.
 const stopResumeSync = onAppResume(kickTurfCache)
