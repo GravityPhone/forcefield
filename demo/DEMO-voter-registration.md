@@ -14,7 +14,7 @@ Everything in the "Voter Registration Demo" campaign is sample data: the sites a
 
    Run it the morning of the demo. It replaces the demo campaign, so anyone who was switched into it lands back on their other campaign and has to switch in again (step 2 below).
 
-2. Have `demo/site-plan-sample.csv` open in Google Sheets on the device you'll demo from (File > Import > Upload). The rebuild rewrites it with next week's dates.
+2. Put the sample plan in Google Sheets: new sheet, File > Import > Upload, choose `demo/site-plan-sample.csv` (the rebuild rewrites it with next week's dates). Then Share > General access > **Anyone with the link**, Viewer. Keep the sheet open in a tab and copy its link.
 
 3. Log in as a campaign manager.
 
@@ -55,12 +55,16 @@ Back to Sites, tap the **Sites** chip. One row per place, with its all-time regi
 - **+ Add site**, give it a name, Save.
 - Tap the new site, then **+ Add a shift here**. Pick a date, hours, a goal and crew, and Save. It appears on the schedule.
 
-### 7. Import an existing plan
+### 7. Link your Google Sheet
 
-- In Google Sheets, select all the rows of the sample plan and copy.
-- On Sites, tap **Import**, paste, and tap **Read rows**.
+- On Sites, tap **Import**. Paste the sheet's link and tap **Read**.
 - Point out the column matching: the sheet says Location, Hours, Target and Staff, and the app matched them to Site name, Start time, Goal and Crew. Any guess can be changed.
-- Tap **Import 4**. "County fairgrounds, gate B" was not a site before; the import created it.
+- Tap **Link and import 4**. "County fairgrounds, gate B" was not a site before; the import created it.
+- Now change something in the Google Sheet: raise a Target, or add a row. Back in the app, tap **Import**, then **Refresh** next to the sheet's name. The plan updates to match.
+
+A refresh only touches shifts that came from that sheet, never past shifts, and never deletes a shift that already has registrations on it.
+
+If the link fails in the room, paste the rows instead: copy them in Sheets, paste under "or paste rows", and tap Read rows.
 
 ### 8. Doors, for campaigns that knock
 
@@ -74,6 +78,7 @@ Open **Canvass**, search a street and open a house. The buttons are now Register
 
 - **What do you store about a registrant?** Nothing. No birth date, licence number or SSN digits, and Not eligible never records a reason. The form or the state portal is the legal record.
 - **Can it take our own sheet?** If it has one row per site per day, yes, whatever the columns are called. A calendar grid would need its own handling.
+- **Does the sheet have to be public?** For now it has to be shared as "Anyone with the link", so anyone holding the link could read it. A private connection (share the sheet with one app account) is the next step and is not built.
 - **MiniVAN or VAN?** Not connected. An export in VAN's bulk-upload format is the first step and is not built yet.
 - **Crew names in an import** have to match people who already have accounts. Names with no match are listed, not created.
 

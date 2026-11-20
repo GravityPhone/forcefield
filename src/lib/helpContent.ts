@@ -338,7 +338,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       },
       {
         target: 'sites-plan',
-        body: 'Managers only.\nAdd shift: site, date, hours, goal, crew.\nAdd site (on the Sites chip): a place, before anyone is scheduled there.\nImport: paste rows from a spreadsheet or choose a .csv, then match its columns.',
+        body: 'Managers only.\nAdd shift: site, date, hours, goal, crew.\nAdd site (on the Sites chip): a place, before anyone is scheduled there.\nImport: a Google Sheets link (shared as Anyone with the link), pasted rows, or a .csv. Then match its columns.\nA linked sheet gets a Refresh button: it adds, updates and removes upcoming shifts to match. Past shifts and worked shifts are left alone.',
       },
       {
         target: 'sites-directory',

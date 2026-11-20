@@ -1,9 +1,53 @@
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import type { Plugin } from 'vite'
+import { SheetError, fetchSheetCsv } from './netlify/shared/sheetFetch'
+
+/**
+ * /api/sheet under `npm run dev`.
+ *
+ * On the live site that path is a Netlify function (netlify/functions/sheet.ts)
+ * and plain Vite has no functions, so the Google Sheets link import would 404
+ * in dev and be untestable. This serves the same route from the same shared
+ * code. DEV ONLY: `configureServer` never runs in a build, and it skips the
+ * manager check the real function makes because the dev server only listens
+ * on localhost.
+ */
+function devSheetApi(): Plugin {
+  return {
+    name: 'dev-sheet-api',
+    configureServer(server) {
+      server.middlewares.use('/api/sheet', (req, res) => {
+        const send = (status: number, body: unknown) => {
+          res.statusCode = status
+          res.setHeader('content-type', 'application/json')
+          res.end(JSON.stringify(body))
+        }
+        if (req.method !== 'POST') return send(405, { error: 'POST only.' })
+        let raw = ''
+        req.on('data', (c) => (raw += c))
+        req.on('end', () => {
+          let url = ''
+          try {
+            url = String(JSON.parse(raw).url ?? '')
+          } catch {
+            return send(400, { error: 'Bad request.' })
+          }
+          fetchSheetCsv(url)
+            .then((out) => send(200, out))
+            .catch((e) =>
+              e instanceof SheetError ? send(e.status, { error: e.message }) : send(500, { error: 'Could not read that sheet.' }),
+            )
+        })
+      })
+    },
+  }
+}
 
 export default defineConfig({
   plugins: [
+    devSheetApi(),
     vue({
       template: {
         compilerOptions: {
