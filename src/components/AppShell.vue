@@ -88,6 +88,20 @@ const barItems = computed<NavItem[]>(() => {
     // Turf is a first-class tab: cutting and dispatching happen daily, not
     // from a dashboard detour. The Dashboard tab went away 2026-07-25 with
     // the route itself — Analytics took its slot and its home-screen job.
+    // A registration campaign is run from the site plan, so Sites takes the
+    // first tab and Leaders gives up its slot (it moves to More). The bar
+    // stays six wide (2026-11-19: Sites as the first row of More was not
+    // where a manager looked for it).
+    if (showSites.value) {
+      return [
+        sitesItem,
+        { to: '/canvass', label: 'Canvass', icon: 'pin' },
+        { to: '/squad', label: 'Squad', icon: 'squads' },
+        { to: '/turf', label: 'Turf', icon: 'map' },
+        { to: '/activity', label: 'Feed', icon: 'pulse' },
+        { to: '/admin/analytics', label: 'Analytics', icon: 'chart' },
+      ]
+    }
     return [
       { to: '/admin/analytics', label: 'Analytics', icon: 'chart' },
       { to: '/canvass', label: 'Canvass', icon: 'pin' },
@@ -163,7 +177,7 @@ const moreItems = computed<NavItem[]>(() => {
   }
   if (auth.profile.role === 'campaign_manager') {
     return [
-      ...(showSites.value ? [sitesItem] : []),
+      ...(showSites.value ? [{ to: '/leaderboard', label: 'Leaders', icon: 'trophy' } as NavItem] : []),
       // Analytics is the bottom bar's first tab now, not a More item.
       { to: '/admin/roles', label: 'Roles', icon: 'shield' },
       // Every crew out today — the Squad tab is the manager's own crew now.

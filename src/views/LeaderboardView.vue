@@ -4,7 +4,8 @@ import type { RealtimeChannel } from '@supabase/supabase-js'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import AppShell from '@/components/AppShell.vue'
 import { onPageEnter, whileOnPage } from '@/lib/pageState'
-import { supabase } from '@/lib/supabase'
+import { fetchAllRows, supabase } from '@/lib/supabase'
+import { campaignMode } from '@/lib/registration'
 import { localDayRangeISO, localToday } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
 import { METRIC_LABELS } from '@/types'
@@ -59,6 +60,51 @@ async function saveOptions() {
   setTimeout(() => (optionsSaved.value = false), 2000)
 }
 
+// REGISTRATION CAMPAIGNS rank on registration_logs, not knock_logs
+// (2026-11-19). Most registrations happen at a site table and never touch a
+// door, so the knock-based boards would show a crew that registered fifty
+// people as having done nothing. registration_logs holds both kinds (door
+// registrations are mirrored into it by trigger), so it is the whole count.
+// The two columns keep their slots and change meaning: "signatures" is
+// people registered or updated, "doors" is everybody talked to.
+const regMode = computed(() => campaignMode.value === 'registration')
+const labels = computed<Record<LeaderboardMetric, string>>(() =>
+  regMode.value ? { signatures: 'Registrations', doors: 'Conversations' } : METRIC_LABELS,
+)
+interface RegLog {
+  canvasser_id: string
+  result: string
+  occurred_at: string
+}
+const regLogs = ref<RegLog[]>([])
+async function loadRegLogs() {
+  const cid = auth.profile?.campaign_id
+  if (!regMode.value || !cid) {
+    regLogs.value = []
+    return
+  }
+  regLogs.value = await fetchAllRows<RegLog>((from, to) =>
+    supabase
+      .from('registration_logs')
+      .select('canvasser_id, result, occurred_at')
+      .eq('campaign_id', cid)
+      .order('id')
+      .range(from, to),
+  ).catch(() => [] as RegLog[])
+}
+/** Per person, all time: everybody talked to, and how many registered. */
+function regTally() {
+  const talked = new Map<string, number>()
+  const got = new Map<string, number>()
+  for (const r of regLogs.value) {
+    talked.set(r.canvasser_id, (talked.get(r.canvasser_id) ?? 0) + 1)
+    if (r.result === 'registered' || r.result === 'updated') {
+      got.set(r.canvasser_id, (got.get(r.canvasser_id) ?? 0) + 1)
+    }
+  }
+  return { talked, got }
+}
+
 const settings = ref<LeaderboardSettings | null>(null)
 const canvassersAllTime = ref<CanvasserLeaderboardRow[]>([])
 const canvassersForDay = ref<CanvasserLeaderboardRow[]>([])
@@ -85,6 +131,15 @@ async function loadAllTime() {
   // Board options edits while the card is open.
   if (s.data && !optionsOpen.value) settings.value = s.data as LeaderboardSettings
   if (c.data) canvassersAllTime.value = c.data as CanvasserLeaderboardRow[]
+  if (regMode.value) {
+    await loadRegLogs()
+    const { talked, got } = regTally()
+    canvassersAllTime.value = canvassersAllTime.value.map((row) => ({
+      ...row,
+      doors_knocked: talked.get(row.canvasser_id) ?? 0,
+      signatures: got.get(row.canvasser_id) ?? 0,
+    }))
+  }
 }
 
 /** One day's standings: that day's squads (squad_date scopes squads to a
@@ -106,10 +161,25 @@ async function loadDayBoard(dateStr: string) {
 
   const doorsBy = new Map<string, number>()
   const signaturesBy = new Map<string, number>()
-  for (const k of knocks) {
-    doorsBy.set(k.canvasser_id, (doorsBy.get(k.canvasser_id) ?? 0) + 1)
-    if (k.outcome === 'signed') {
-      signaturesBy.set(k.canvasser_id, (signaturesBy.get(k.canvasser_id) ?? 0) + 1)
+  if (regMode.value) {
+    // Timestamps from Postgres and toISOString() differ in format, so compare
+    // instants, not strings.
+    const a = Date.parse(startISO)
+    const b = Date.parse(endISO)
+    for (const r of regLogs.value) {
+      const t = Date.parse(r.occurred_at)
+      if (t < a || t >= b) continue
+      doorsBy.set(r.canvasser_id, (doorsBy.get(r.canvasser_id) ?? 0) + 1)
+      if (r.result === 'registered' || r.result === 'updated') {
+        signaturesBy.set(r.canvasser_id, (signaturesBy.get(r.canvasser_id) ?? 0) + 1)
+      }
+    }
+  } else {
+    for (const k of knocks) {
+      doorsBy.set(k.canvasser_id, (doorsBy.get(k.canvasser_id) ?? 0) + 1)
+      if (k.outcome === 'signed') {
+        signaturesBy.set(k.canvasser_id, (signaturesBy.get(k.canvasser_id) ?? 0) + 1)
+      }
     }
   }
 
@@ -146,6 +216,9 @@ async function refreshAll() {
 }
 
 watch(selectedDate, () => void loadDayBoard(effectiveDay.value))
+// The mode strip can flip the campaign while this page is on screen: the
+// labels follow by themselves, the numbers have to be re-read.
+watch(regMode, () => void refreshAll())
 
 function onPickDate(value: string) {
   selectedDate.value = value || null
@@ -343,7 +416,7 @@ onPageEnter(() => void refreshAll())
 
         <div class="card" data-board="primary" data-help="board-canvassers">
           <div class="board-head">
-            <h3>Canvassers: {{ METRIC_LABELS[primaryMetric] }}{{ dateSuffix }}</h3>
+            <h3>Canvassers: {{ labels[primaryMetric] }}{{ dateSuffix }}</h3>
             <button
               v-if="myCanvasserStanding"
               class="standing"
@@ -358,8 +431,8 @@ onPageEnter(() => void refreshAll())
               <tr>
                 <th class="rank">#</th>
                 <th>Canvasser</th>
-                <th class="num">{{ METRIC_LABELS[primaryMetric] }}</th>
-                <th class="num">{{ METRIC_LABELS[primaryMetric === 'doors' ? 'signatures' : 'doors'] }}</th>
+                <th class="num">{{ labels[primaryMetric] }}</th>
+                <th class="num">{{ labels[primaryMetric === 'doors' ? 'signatures' : 'doors'] }}</th>
               </tr>
             </thead>
             <tbody>
@@ -381,7 +454,7 @@ onPageEnter(() => void refreshAll())
 
         <div v-if="showDoorsBoard" class="card" data-board="doors">
           <div class="board-head">
-            <h3>Canvassers: Doors knocked{{ dateSuffix }}</h3>
+            <h3>Canvassers: {{ labels.doors }}{{ dateSuffix }}</h3>
             <button v-if="myDoorsStanding" class="standing" @click="jumpToMyRow('doors')">
               You: #{{ myDoorsStanding.rank }} of {{ myDoorsStanding.total }}
             </button>
@@ -392,7 +465,7 @@ onPageEnter(() => void refreshAll())
               <tr>
                 <th class="rank">#</th>
                 <th>Canvasser</th>
-                <th class="num">Doors knocked</th>
+                <th class="num">{{ labels.doors }}</th>
               </tr>
             </thead>
             <tbody>
@@ -425,8 +498,8 @@ onPageEnter(() => void refreshAll())
                   <th class="rank">#</th>
                   <th>Squad</th>
                   <th class="num">Members</th>
-                  <th class="num">{{ METRIC_LABELS[primaryMetric] }}</th>
-                  <th class="num">{{ METRIC_LABELS[primaryMetric === 'doors' ? 'signatures' : 'doors'] }}</th>
+                  <th class="num">{{ labels[primaryMetric] }}</th>
+                  <th class="num">{{ labels[primaryMetric === 'doors' ? 'signatures' : 'doors'] }}</th>
                 </tr>
               </thead>
               <tbody>

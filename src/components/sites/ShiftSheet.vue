@@ -12,6 +12,7 @@ import UserPicker from '@/components/chat/UserPicker.vue'
 import { supabase } from '@/lib/supabase'
 import { localToday } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
+import { useSquadsStore } from '@/stores/squads'
 import type { SiteShift } from '@/lib/registration'
 import type { ChatProfile } from '@/types'
 
@@ -25,6 +26,23 @@ const emit = defineEmits<{ saved: []; deleted: [] }>()
 const open = defineModel<boolean>('open', { required: true })
 
 const auth = useAuthStore()
+
+// A whole squad onto the crew in one tap (2026-11-19, user call: "any squad
+// to any site"). Squads last a day, so these are today's; adding one copies
+// its people onto the shift, and the crew stays a plain list of people, which
+// is what lets a shift next week outlive the squad it was staffed from.
+const squads = useSquadsStore()
+function addSquad(id: string) {
+  const squad = squads.squads.find((s) => s.id === id)
+  if (!squad) return
+  const have = new Set(crew.value.map((p) => p.id))
+  crew.value = [...crew.value, ...squad.members.filter((m) => !have.has(m.id)).map((m) => ({ ...m }))]
+}
+function squadAllIn(id: string): boolean {
+  const squad = squads.squads.find((s) => s.id === id)
+  const have = new Set(crew.value.map((p) => p.id))
+  return !!squad && squad.members.every((m) => have.has(m.id))
+}
 
 const name = ref('')
 const address = ref('')
@@ -66,6 +84,7 @@ watch(open, (isOpen) => {
   error.value = ''
   deleteArmed.value = false
   void loadSites()
+  void squads.loadToday()
   const s = props.shift
   name.value = s?.site.name ?? props.presetSite ?? ''
   address.value = s?.site.address ?? ''
@@ -227,6 +246,19 @@ async function remove() {
       <div class="field">
         <label>Crew</label>
         <UserPicker v-model="crew" />
+        <div v-if="squads.squads.length" class="squad-chips" data-help="sites-add-squad">
+          <span class="muted squad-chips-label">Add a squad:</span>
+          <button
+            v-for="s in squads.squads"
+            :key="s.id"
+            type="button"
+            class="squad-chip"
+            :disabled="squadAllIn(s.id)"
+            @click="addSquad(s.id)"
+          >
+            {{ s.name }} ({{ s.members.length }})
+          </button>
+        </div>
       </div>
       <div class="field">
         <label for="shift-notes">Notes</label>
@@ -254,6 +286,33 @@ async function remove() {
 </template>
 
 <style scoped>
+.squad-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.squad-chips-label {
+  font-size: 0.82rem;
+}
+
+.squad-chip {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  min-height: 32px;
+}
+
+.squad-chip:disabled {
+  opacity: 0.5;
+}
+
 .shift-form {
   display: flex;
   flex-direction: column;

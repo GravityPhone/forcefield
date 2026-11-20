@@ -78,6 +78,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'Signed: pick a person first.\nAll others: the person picked, or the household if none.\nReturn: offers a window to come back in, when the campaign has appointments on. Optional: close it and the knock still logged.',
       },
       {
+        heading: 'Registration buttons',
+        target: 'talk-outcomes',
+        body: 'Registration campaigns swap the grid.\nRegistered, Updated, Already registered, Not eligible, Declined: one tap each, no name needed.\nInaccessible: could not reach the door. Both modes.',
+      },
+      {
         heading: 'Wants to volunteer',
         target: 'talk-volunteer',
         body: 'Marks the picked person as willing to knock doors. Press again to remove.\nNeeds a person picked, like Signed.\nYes only. Nothing is recorded for a no.\nThe list is under More → Volunteers, for managers.',
@@ -141,6 +146,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         target: 'squad-map',
         body: 'A squad is one day of crew: shared chat, page and turf. Resets at midnight.\nOne squad at a time. Leave and join another whenever.',
+      },
+      {
+        heading: 'Sites today',
+        target: 'squad-sites',
+        body: 'Registration campaigns only. Replaces the map.\nLists the site shifts this squad is on today.\nSend squad to a site: managers. Adds every member to that shift.',
       },
       {
         heading: 'The map',
@@ -345,6 +355,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         target: 'sites-list',
         body: 'Tap a shift to open its tally screen.\nYour own shifts sort first and wear a You tag.\nThe number is registered plus updated, against the goal if one is set.',
+      },
+      {
+        heading: 'Crew',
+        target: 'sites-add-squad',
+        body: 'Managers set the crew when adding or editing a shift.\nSearch anybody by name, or tap a squad to add all of it.\nThe crew is a list of people, so it stays after the squad ends.',
       },
       {
         target: 'sites-plan',

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { knockLabel } from '@/lib/registration'
+import { campaignMode, fetchShifts, knockLabel, shiftTimeLabel, type SiteShift } from '@/lib/registration'
+import { localToday } from '@/lib/day'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { RealtimeChannel } from '@supabase/supabase-js'
@@ -2312,6 +2313,83 @@ whileOnPage(
 // moves nothing on screen.
 onPageEnter(() => void squads.loadToday())
 
+// ---- Registration campaigns: sites instead of a map -----------------------
+// A registration crew stands at a table, so the turf map, the turf progress
+// card and the claim-your-doors switch have nothing to say (2026-11-19, user
+// call: "there doesn't need to be a map on the squad page in registration
+// mode"). In their place: where this squad is working today, and for a
+// manager one tap to send the whole squad to a site. The map card is v-if'd
+// off, and the map only ever initialises when its div appears, so a
+// registration crew never loads Google Maps on this page at all.
+const regMode = computed(() => campaignMode.value === 'registration')
+const todayShifts = ref<SiteShift[]>([])
+const shiftsLoaded = ref(false)
+async function loadTodayShifts() {
+  if (!regMode.value) return
+  try {
+    const today = localToday()
+    todayShifts.value = (await fetchShifts('upcoming', today)).filter((s) => s.shift_date === today)
+  } catch {
+    todayShifts.value = []
+  }
+  shiftsLoaded.value = true
+  void loadRegToday()
+}
+
+/** Each member's day in a registration campaign: how many people they
+ * talked to and how many of those registered. Site taps and door
+ * registrations both land in registration_logs, so this is the whole day. */
+const regToday = ref(new Map<string, { talked: number; got: number }>())
+async function loadRegToday() {
+  const ids = (mySquad.value?.members ?? []).map((m) => m.id)
+  if (!ids.length) return
+  const { data } = await supabase
+    .from('registration_logs')
+    .select('canvasser_id, result')
+    .in('canvasser_id', ids)
+    .gte('occurred_at', startOfLocalDayISO())
+    .limit(1000)
+  const tally = new Map<string, { talked: number; got: number }>()
+  for (const r of (data ?? []) as { canvasser_id: string; result: string }[]) {
+    const t = tally.get(r.canvasser_id) ?? { talked: 0, got: 0 }
+    t.talked += 1
+    if (r.result === 'registered' || r.result === 'updated') t.got += 1
+    tally.set(r.canvasser_id, t)
+  }
+  regToday.value = tally
+}
+watch(() => mySquad.value?.members.length, () => void loadTodayShifts())
+onPageEnter(() => void loadTodayShifts())
+watch(regMode, () => void loadTodayShifts())
+
+/** How many of this squad are on a shift's crew. */
+function squadOnShift(s: SiteShift): number {
+  const ids = new Set((mySquad.value?.members ?? []).map((m) => m.id))
+  return s.members.filter((m) => ids.has(m.id)).length
+}
+const squadShifts = computed(() => todayShifts.value.filter((s) => squadOnShift(s) > 0))
+// Writing a shift's crew is a manager's job (RLS on site_shift_members).
+const canSendSquad = computed(() => ['campaign_manager', 'admin'].includes(auth.profile?.role ?? ''))
+const sendOpen = ref(false)
+const sending = ref('')
+const sendError = ref('')
+async function sendSquadTo(s: SiteShift) {
+  const members = mySquad.value?.members ?? []
+  if (!members.length || sending.value) return
+  sending.value = s.id
+  sendError.value = ''
+  const { error } = await supabase
+    .from('site_shift_members')
+    .upsert(members.map((m) => ({ shift_id: s.id, user_id: m.id })), { onConflict: 'shift_id,user_id', ignoreDuplicates: true })
+  sending.value = ''
+  if (error) {
+    sendError.value = error.message
+    return
+  }
+  sendOpen.value = false
+  await loadTodayShifts()
+}
+
 // The map div only exists while you're IN a squad (the no-squad branch has
 // no map), so init keys off the element appearing — not off mount. Firing
 // again after leave/rejoin is fine: initMap re-inits only for a fresh div.
@@ -2410,7 +2488,28 @@ watch(
 
       <!-- Map first (2026-07-25, user call): the ground the crew is standing
            on is what the page is for. The numbers read under it. -->
-      <div ref="mapCardEl" class="card map-card">
+      <div v-if="regMode" class="card sites-card" data-help="squad-sites">
+        <div class="sites-card-head">
+          <strong>Sites today</strong>
+          <button v-if="canSendSquad" class="btn btn-sm btn-primary" @click="sendOpen = true">Send squad to a site</button>
+        </div>
+        <p v-if="!shiftsLoaded" class="muted">Loading…</p>
+        <p v-else-if="!squadShifts.length" class="muted">This squad is not on a site shift today.</p>
+        <router-link v-for="s in squadShifts" :key="s.id" :to="`/sites/${s.id}`" class="site-line">
+          <span class="site-line-main">
+            <span class="site-line-name">{{ s.site.name }}</span>
+            <span class="muted site-line-sub">
+              {{ shiftTimeLabel(s) }} · {{ squadOnShift(s) }} of {{ mySquad.members.length }} here
+            </span>
+          </span>
+          <span class="site-line-count">
+            {{ s.counts.registered + s.counts.updated }}<template v-if="s.goal"> / {{ s.goal }}</template>
+          </span>
+        </router-link>
+        <router-link to="/sites" class="sites-all">All sites ›</router-link>
+      </div>
+
+      <div v-if="!regMode" ref="mapCardEl" class="card map-card">
         <div
           v-if="assigningMember"
           class="assign-bar"
@@ -2726,7 +2825,7 @@ watch(
       </div>
 
       <!-- Turf progress, under the map -->
-      <div class="card progress-card" data-help="squad-progress">
+      <div v-if="!regMode" class="card progress-card" data-help="squad-progress">
         <template v-if="squadTurfs.length">
           <div class="progress-row">
             <strong>Our turf</strong>
@@ -2850,6 +2949,10 @@ watch(
                 <span class="recent-time muted">{{ knockTime(r.occurredAt) }}</span>
               </span>
             </span>
+            <span v-else-if="regMode" class="no-knocks" :class="{ muted: !regToday.get(m.id) }">
+              {{ regToday.get(m.id)?.got ?? 0 }} registered today
+              <template v-if="regToday.get(m.id)"> · {{ regToday.get(m.id)!.talked }} talked to</template>
+            </span>
             <span v-else class="muted no-knocks">No doors yet today.</span>
           </span>
 
@@ -2907,7 +3010,7 @@ watch(
            managers, admins and whoever started the crew can flip it; it dies
            with the squad at midnight. -->
       <button
-        v-if="canToggleClaim"
+        v-if="canToggleClaim && !regMode"
         type="button"
         class="claim-btn"
         data-help="squad-claim"
@@ -2921,6 +3024,26 @@ watch(
     </div>
 
     <p v-else class="muted">Loading your squad…</p>
+
+    <BottomSheet v-model:open="sendOpen" title="Send squad to a site">
+      <p v-if="!todayShifts.length" class="muted">No shifts planned today. Add one on Sites.</p>
+      <div class="send-list">
+        <button
+          v-for="s in todayShifts"
+          :key="s.id"
+          class="send-row"
+          :disabled="!!sending"
+          @click="sendSquadTo(s)"
+        >
+          <span class="site-line-main">
+            <span class="site-line-name">{{ s.site.name }}</span>
+            <span class="muted site-line-sub">{{ shiftTimeLabel(s) }} · crew of {{ s.members.length }}</span>
+          </span>
+          <span class="muted">{{ sending === s.id ? 'Sending…' : squadOnShift(s) ? 'Add the rest' : 'Send' }}</span>
+        </button>
+      </div>
+      <p v-if="sendError" class="error">{{ sendError }}</p>
+    </BottomSheet>
 
     <!-- One member's whole run — the card's last-five, opened out. -->
     <BottomSheet
@@ -2949,7 +3072,7 @@ watch(
       <div v-if="sheetMember" class="sheet-body">
         <div class="sheet-actions">
           <button
-            v-if="canAssignTo(sheetMember.id)"
+            v-if="canAssignTo(sheetMember.id) && !regMode"
             class="btn btn-sm btn-primary"
             @click="assignFromSheet"
           >
@@ -2959,7 +3082,7 @@ watch(
             View profile
           </button>
           <button
-            v-if="latestGeo(sheetMember.id)"
+            v-if="latestGeo(sheetMember.id) && !regMode"
             class="btn btn-sm ghost-btn"
             @click="showMemberOnMap"
           >
@@ -3156,6 +3279,70 @@ watch(
 }
 
 /* --- Progress --- */
+
+.sites-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.sites-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.site-line,
+.send-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  text-align: left;
+  white-space: normal;
+  width: 100%;
+}
+
+.send-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.site-line-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.site-line-name {
+  font-weight: 700;
+}
+
+.site-line-sub {
+  font-size: 0.82rem;
+}
+
+.site-line-count {
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.sites-all {
+  align-self: flex-end;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent);
+  text-decoration: none;
+}
 
 .progress-card {
   display: flex;
