@@ -85,17 +85,17 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Site',
         target: 'canvass-site-tab',
-        body: 'Registration campaigns only. For working a table or a doorway, not a street.\nNo doors, no notes, no next house.',
+        body: 'For working a table or a doorway, not a street.\nNo doors, no notes, no next house.',
       },
       {
         heading: 'Which site',
         target: 'site-pick',
-        body: 'Today\'s shifts first, yours at the top. Then every other site.\nThe count is everybody\'s registrations here today.',
+        body: 'Already on a site: your shift now, else the site used last. Change it here.\nEverything logged on this tab is filed against it.\nNew site: managers.',
       },
       {
         heading: 'Look up a name',
         target: 'site-search',
-        body: 'Type a name. Tap the person if they are on the roll: Already registered, Updated or Declined.\nNot on the roll: Registered, Not eligible or Declined.\nNothing from the form is stored.',
+        body: 'Type a name. Tap the person.\nPetition: Signed or Not Interested. A signature here counts like one at a door.\nRegistration: Already registered, Updated or Declined. Not on the roll: Registered, Not eligible or Declined.',
       },
       {
         heading: 'Today here',

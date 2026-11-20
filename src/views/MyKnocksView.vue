@@ -26,6 +26,8 @@ interface VisitRow {
   household_id: string | null
   person: { name: string } | null
   addresses: { street: string; unit: string | null; city: string } | null
+  /** Set when this was logged at a site (the Site tab), not at a door. */
+  site?: { name: string } | null
 }
 
 const FETCH_LIMIT = 500
@@ -50,7 +52,7 @@ onPageEnter(async () => {
   if (!me) return
   const { data } = await supabase
     .from('knock_logs')
-    .select('id, outcome, occurred_at, household_id, person_id, person:persons(name), addresses(street, unit, city)')
+    .select('id, outcome, occurred_at, household_id, person_id, person:persons(name), addresses(street, unit, city), site:sites(name)')
     .eq('canvasser_id', me)
     .order('occurred_at', { ascending: false })
     .limit(FETCH_LIMIT)
@@ -125,6 +127,7 @@ const groups = computed<DayGroup[]>(() => {
 })
 
 function doorLine(v: VisitRow): string {
+  if (v.site) return v.site.name
   if (!v.addresses) return 'Unknown address'
   return `${v.addresses.street}${v.addresses.unit ? ' ' + v.addresses.unit : ''}`
 }
@@ -245,7 +248,8 @@ function onDeleted(id: string) {
               <span class="visit-main">
                 <span class="visit-what">
                   <strong>{{ doorLine(v) }}</strong>
-                  <template v-if="v.addresses?.city"> · {{ v.addresses.city }}</template>
+                  <template v-if="v.site"> · Site</template>
+                  <template v-else-if="v.addresses?.city"> · {{ v.addresses.city }}</template>
                 </span>
                 <span class="muted visit-meta">
                   {{ knockLabel(v, OUTCOME_LABELS) }}<template v-if="v.person?.name"> · {{ v.person.name }}</template>

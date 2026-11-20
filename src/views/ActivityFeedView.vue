@@ -25,7 +25,7 @@ import type { ActivityFeedSettings, KnockOutcome } from '@/types'
 const SELECT =
   'id, client_id, canvasser_id, household_id, person_id, occurred_at, outcome, squad_id, squad_name, ' +
   'canvasser:profiles(id, username, display_name, avatar, color), ' +
-  'person:persons(name), address:addresses(street, city)'
+  'person:persons(name), address:addresses(street, city), site:sites(name)'
 
 interface FeedRow {
   id: string
@@ -46,6 +46,8 @@ interface FeedRow {
   } | null
   person: { name: string } | null
   address: { street: string; city: string } | null
+  /** Logged at a site, not a door: the feed names the site instead. */
+  site?: { name: string } | null
 }
 
 interface EventItem {
@@ -289,7 +291,7 @@ function processRow(row: FeedRow): FeedItem[] {
     color,
     outcome: row.outcome,
     personName: row.person?.name ?? null,
-    street: row.address ? prettyStreet(row.address.street) : null,
+    street: row.site ? row.site.name : row.address ? prettyStreet(row.address.street) : null,
   })
 
   // Knock-count milestones run off EVERY row, door or not — that's the point

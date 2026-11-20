@@ -14,15 +14,32 @@
 // roll is kept on the row as a pointer (`person_id`); somebody who is not on
 // the roll leaves nothing behind but the count, because nothing about the
 // form is ever stored.
+//
+// BOTH KINDS OF CAMPAIGN HAVE THIS TAB (2026-11-20, user call: "we could put a
+// sites mode on the petition side… it almost shows up more like a door, but
+// it's its own category in the code"). A petition is worked from a table too.
+// There the lookup ends in Signed or Not Interested, and the row is a
+// knock_logs row carrying `site_id`: a signature like any other (it counts
+// wherever signatures count, and the signer's own door stops being asked), but
+// one that says it happened at a site and not on a porch. Only somebody on the
+// roll can sign, so a petition has no "Not on the roll" branch.
+//
+// THE SITE IS NEVER A QUESTION YOU HAVE TO ANSWER FIRST (same call: "it
+// automatically associates whatever you're doing with a site"). The tab opens
+// already on a site: the shift you are on right now, else a shift of yours
+// today, else the site you used last, else the first one. The picker is for
+// changing it, and the change is remembered.
 import { computed, nextTick, ref, watch } from 'vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import { supabase } from '@/lib/supabase'
 import { localToday, startOfLocalDayISO } from '@/lib/day'
 import { hapticTap } from '@/lib/native'
 import { useAuthStore } from '@/stores/auth'
+import { OUTCOME_HEX, OUTCOME_LABELS } from '@/lib/outcomes'
 import {
   REG_HEX,
   REG_LABELS,
+  campaignMode,
   fetchShifts,
   shiftTimeLabel,
   type RegResult,
@@ -32,6 +49,24 @@ import {
 const props = defineProps<{ active: boolean }>()
 
 const auth = useAuthStore()
+
+/** Registration campaigns log a registration result; petitions log a knock
+ * outcome against the site. Everything else about the tab is shared. */
+const reg = computed(() => campaignMode.value === 'registration')
+type SiteResult = RegResult | 'signed' | 'didnt_sign'
+const labelOf = (r: SiteResult) =>
+  r === 'signed' || r === 'didnt_sign' ? OUTCOME_LABELS[r] : REG_LABELS[r]
+const hexOf = (r: SiteResult) => (r === 'signed' || r === 'didnt_sign' ? OUTCOME_HEX[r] : REG_HEX[r])
+const canAddSite = computed(() => auth.profile?.role === 'campaign_manager' || auth.profile?.role === 'admin')
+
+const pickKey = () => `forcefield.site_pick.${auth.profile?.campaign_id ?? ''}`
+function rememberedPick(): string {
+  try {
+    return localStorage.getItem(pickKey()) ?? ''
+  } catch {
+    return ''
+  }
+}
 
 // ------------------------------------------------------------- which site
 
@@ -72,14 +107,24 @@ async function loadPlaces() {
       label: shiftTimeLabel(s) ? `${s.site.name}, ${shiftTimeLabel(s)}` : s.site.name,
       mine: s.members.some((m) => m.id === me),
     })
-    const today_ = shifts.map(fromShift).sort((a, b) => Number(b.mine) - Number(a.mine))
+    // Yours first, and of yours the one happening right now.
+    const now = new Date().toTimeString().slice(0, 8)
+    const rank = (s: SiteShift) =>
+      (s.members.some((m) => m.id === me) ? 2 : 0) +
+      ((s.start_time ?? '00:00:00') <= now && now <= (s.end_time ?? '23:59:59') ? 1 : 0)
+    const today_ = [...shifts].sort((a, b) => rank(b) - rank(a)).map(fromShift)
     const scheduled = new Set(shifts.map((s) => s.site_id))
     const rest: Place[] = sites
       .filter((s) => !scheduled.has(s.id))
       .map((s) => ({ key: `site:${s.id}`, siteId: s.id, shiftId: null, label: s.name, mine: false }))
     places.value = [...today_, ...rest]
-    // Keep the pick if it is still there; otherwise the shift you are on.
-    if (!places.value.some((p) => p.key === placeKey.value)) placeKey.value = places.value[0]?.key ?? ''
+    // Keep the pick if it is still there. Otherwise your own shift today,
+    // else the site used last on this phone, else the first one.
+    if (!places.value.some((p) => p.key === placeKey.value)) {
+      const first = places.value[0]
+      const last = places.value.find((p) => p.key === rememberedPick())
+      placeKey.value = (first?.mine ? first : (last ?? first))?.key ?? ''
+    }
   } finally {
     loadingPlaces.value = false
   }
@@ -89,7 +134,7 @@ async function loadPlaces() {
 
 interface Entry {
   id: string
-  result: RegResult
+  result: SiteResult
   mine: boolean
   name: string | null
   at: string
@@ -105,8 +150,12 @@ async function loadEntries() {
   }
   const mine = ++entrySeq
   const { data } = await supabase
-    .from('registration_logs')
-    .select('id, result, canvasser_id, occurred_at, person:persons(name)')
+    .from(reg.value ? 'registration_logs' : 'knock_logs')
+    .select(
+      reg.value
+        ? 'id, result, canvasser_id, occurred_at, person:persons(name)'
+        : 'id, result:outcome, canvasser_id, occurred_at, person:persons(name)',
+    )
     .eq('site_id', p.siteId)
     .gte('occurred_at', startOfLocalDayISO())
     .order('occurred_at', { ascending: false })
@@ -114,7 +163,7 @@ async function loadEntries() {
   if (mine !== entrySeq) return
   entries.value = ((data ?? []) as unknown as {
     id: string
-    result: RegResult
+    result: SiteResult
     canvasser_id: string
     occurred_at: string
     person: { name: string } | null
@@ -128,7 +177,9 @@ async function loadEntries() {
 }
 
 const registeredToday = computed(
-  () => entries.value.filter((e) => e.result === 'registered' || e.result === 'updated').length,
+  () =>
+    entries.value.filter((e) => e.result === 'registered' || e.result === 'updated' || e.result === 'signed')
+      .length,
 )
 /** The one you can take back: your own most recent. */
 const lastMine = computed(() => entries.value.find((e) => e.mine) ?? null)
@@ -141,6 +192,8 @@ interface Hit {
   id: string
   name: string
   city: string | null
+  /** Their registered household: where a petition signature is filed. */
+  householdId: string | null
 }
 
 const query = ref('')
@@ -164,51 +217,68 @@ watch(query, (raw) => {
   timer = setTimeout(async () => {
     const { data } = await supabase
       .from('persons')
-      .select('id, name, addresses(city)')
+      .select('id, name, household_id, addresses(city)')
       .ilike('name', `%${q}%`)
       .order('name')
       .limit(12)
     // A newer keystroke has taken over.
     if (query.value.trim() !== q) return
-    hits.value = ((data ?? []) as unknown as { id: string; name: string; addresses: { city: string } | null }[]).map(
-      (p) => ({ id: p.id, name: p.name, city: p.addresses?.city ?? null }),
-    )
+    hits.value = ((data ?? []) as unknown as {
+      id: string
+      name: string
+      household_id: string | null
+      addresses: { city: string } | null
+    }[]).map((p) => ({ id: p.id, name: p.name, city: p.addresses?.city ?? null, householdId: p.household_id }))
     searching.value = false
   }, 250)
 })
 
 /** What can be logged depends on what the lookup found. */
-const choices = computed<RegResult[]>(() =>
-  picked.value === 'new'
+const choices = computed<SiteResult[]>(() => {
+  if (!picked.value) return []
+  if (!reg.value) return picked.value === 'new' ? [] : ['signed', 'didnt_sign']
+  return picked.value === 'new'
     ? ['registered', 'not_eligible', 'declined']
-    : picked.value
-      ? ['already_registered', 'updated', 'declined']
-      : [],
-)
+    : ['already_registered', 'updated', 'declined']
+})
 
 // ---------------------------------------------------------------- logging
 
 const error = ref('')
 const saving = ref(false)
 
-async function log(result: RegResult) {
+async function log(result: SiteResult) {
   const p = place.value
   const who = picked.value
   if (!p || !who || !auth.profile || saving.value) return
   hapticTap('medium')
   saving.value = true
   error.value = ''
-  const { data, error: e } = await supabase
-    .from('registration_logs')
-    .insert({
-      canvasser_id: auth.profile.id,
-      site_id: p.siteId,
-      shift_id: p.shiftId,
-      person_id: who === 'new' ? null : who.id,
-      result,
-    })
-    .select('id, occurred_at')
-    .single()
+  const { data, error: e } =
+    result === 'signed' || result === 'didnt_sign'
+      ? await supabase
+          .from('knock_logs')
+          .insert({
+            client_id: crypto.randomUUID(),
+            canvasser_id: auth.profile.id,
+            site_id: p.siteId,
+            person_id: who === 'new' ? null : who.id,
+            household_id: who === 'new' ? null : who.householdId,
+            outcome: result,
+          })
+          .select('id, occurred_at')
+          .single()
+      : await supabase
+          .from('registration_logs')
+          .insert({
+            canvasser_id: auth.profile.id,
+            site_id: p.siteId,
+            shift_id: p.shiftId,
+            person_id: who === 'new' ? null : who.id,
+            result,
+          })
+          .select('id, occurred_at')
+          .single()
   saving.value = false
   if (e || !data) {
     error.value = 'That one didn’t save. Tap it again.'
@@ -237,11 +307,44 @@ async function undo() {
   error.value = ''
   const before = entries.value
   entries.value = before.filter((e) => e.id !== last.id)
-  const { error: e } = await supabase.from('registration_logs').delete().eq('id', last.id)
+  const petition = last.result === 'signed' || last.result === 'didnt_sign'
+  const { error: e } = await supabase
+    .from(petition ? 'knock_logs' : 'registration_logs')
+    .delete()
+    .eq('id', last.id)
   if (e) {
     entries.value = before
     error.value = 'Couldn’t undo. Try again.'
   }
+}
+
+// ------------------------------------------------------------ a new site
+//
+// Managers only (RLS agrees). A petition has no Sites page to make one on,
+// and at a table the place you are standing is sometimes not on the list yet.
+
+const adding = ref(false)
+const newSite = ref('')
+async function addSite() {
+  const name = newSite.value.trim()
+  const cid = auth.profile?.campaign_id
+  if (!name || !cid || saving.value) return
+  saving.value = true
+  error.value = ''
+  const { data, error: e } = await supabase
+    .from('sites')
+    .insert({ campaign_id: cid, name, created_by: auth.profile?.id })
+    .select('id')
+    .single()
+  saving.value = false
+  if (e || !data) {
+    error.value = 'Couldn’t add that site.'
+    return
+  }
+  adding.value = false
+  newSite.value = ''
+  await loadPlaces()
+  placeKey.value = `site:${data.id as string}`
 }
 
 // ------------------------------------------------------------------ wiring
@@ -255,7 +358,16 @@ watch(
   },
   { immediate: true },
 )
-watch(placeKey, () => void loadEntries())
+watch(placeKey, (key) => {
+  if (key) {
+    try {
+      localStorage.setItem(pickKey(), key)
+    } catch {
+      /* private window: the pick just is not remembered */
+    }
+  }
+  void loadEntries()
+})
 watch(
   () => props.active,
   (on) => {
@@ -267,13 +379,33 @@ watch(
 <template>
   <div class="site-tab">
     <p v-if="loadingPlaces && !places.length" class="muted">Loading…</p>
-    <p v-else-if="!places.length" class="card muted">No sites yet.</p>
+    <div v-else-if="!places.length" class="card where field">
+      <p class="muted">No sites yet.</p>
+      <template v-if="canAddSite">
+        <input v-model="newSite" type="text" placeholder="Site name" aria-label="Site name" @keyup.enter="addSite" />
+        <button class="btn btn-primary" type="button" :disabled="!newSite.trim() || saving" @click="addSite">
+          Add site
+        </button>
+      </template>
+      <p v-if="error" class="error-line">{{ error }}</p>
+    </div>
 
     <template v-else>
       <div class="card where" data-help="site-pick">
-        <AppSelect v-model="placeKey" :options="places.map((p) => ({ value: p.key, label: p.label }))" />
+        <div class="where-row">
+          <AppSelect v-model="placeKey" :options="places.map((p) => ({ value: p.key, label: p.label }))" />
+          <button v-if="canAddSite" class="btn btn-sm" type="button" @click="adding = !adding">
+            {{ adding ? 'Cancel' : 'New site' }}
+          </button>
+        </div>
+        <div v-if="adding" class="where-row field">
+          <input v-model="newSite" type="text" placeholder="Site name" aria-label="Site name" @keyup.enter="addSite" />
+          <button class="btn btn-primary btn-sm" type="button" :disabled="!newSite.trim() || saving" @click="addSite">
+            Add
+          </button>
+        </div>
         <span class="count">
-          <span class="count-n">{{ registeredToday }}</span> registered here today
+          <span class="count-n">{{ registeredToday }}</span> {{ reg ? 'registered' : 'signed' }} here today
         </span>
       </div>
 
@@ -298,7 +430,8 @@ watch(
               </button>
             </li>
           </ul>
-          <button class="btn not-on-roll" type="button" @click="picked = 'new'">Not on the roll</button>
+          <button v-if="reg" class="btn not-on-roll" type="button" @click="picked = 'new'">Not on the roll</button>
+          <p v-else-if="!searching && !hits.length" class="muted small">Not on the roll.</p>
         </template>
 
         <div v-if="picked" class="picked">
@@ -316,10 +449,10 @@ watch(
               class="btn result-btn"
               type="button"
               :disabled="saving"
-              :style="{ '--result-color': REG_HEX[r] }"
+              :style="{ '--result-color': hexOf(r) }"
               @click="log(r)"
             >
-              {{ REG_LABELS[r] }}
+              {{ labelOf(r) }}
             </button>
           </div>
         </div>
@@ -335,9 +468,9 @@ watch(
         <p v-if="!entries.length" class="muted small">Nothing logged yet.</p>
         <ul v-else class="entries">
           <li v-for="e in entries" :key="e.id" class="entry">
-            <span class="dot" :style="{ background: REG_HEX[e.result] }" />
+            <span class="dot" :style="{ background: hexOf(e.result) }" />
             <span class="entry-main">
-              {{ REG_LABELS[e.result] }}<template v-if="e.name">: {{ e.name }}</template>
+              {{ labelOf(e.result) }}<template v-if="e.name">: {{ e.name }}</template>
             </span>
             <span class="muted small">{{ clock(e.at) }}</span>
           </li>
@@ -361,6 +494,17 @@ watch(
   flex-direction: column;
   gap: 0.35rem;
 }
+.where-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.where-row > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .count {
   font-size: 0.9rem;
   color: var(--text-muted);
