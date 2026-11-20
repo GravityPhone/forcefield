@@ -68,6 +68,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'Map: every door, painted by what happened there.\nTalk: the door. Roster, past visits, outcome buttons.\nTap a pin on the Map to open that door in Talk.',
       },
       {
+        heading: 'Campaign mode',
+        target: 'mode-switch',
+        body: 'Petition mode: signatures.\nRegistration mode: voter registration buttons and the Sites screens.\nThe button switches to your campaign of the other kind. Same doors either way.',
+      },
+      {
         heading: 'Outcomes',
         target: 'talk-outcomes',
         body: 'Signed: pick a person first.\nAll others: the person picked, or the household if none.\nReturn: offers a window to come back in, when the campaign has appointments on. Optional: close it and the knock still logged.',
@@ -327,6 +332,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         target: 'sites-scope',
         body: 'Voter registration shifts: one site, one day, one crew.\nUpcoming: today onward. Past: earlier shifts and their counts.\nSites: every place the campaign works, with its all-time count.',
+      },
+      {
+        heading: 'Campaign mode',
+        target: 'mode-switch',
+        body: 'Petition mode: signatures.\nRegistration mode: voter registration buttons and the Sites screens.\nThe button switches to your campaign of the other kind. Same doors either way.',
       },
       {
         target: 'sites-today',

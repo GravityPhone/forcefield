@@ -230,6 +230,60 @@ async function demoSwitchCampaign(id: string) {
   if (result.error) roleSwitchError.value = result.error
   else roleSwitchOpen.value = false
 }
+// The mode strip under the header (2026-11-19, user call: "make it clear how
+// to switch modes... a button that puts you over to a different campaign...
+// and it says what mode we are in"). One line naming the mode, one button to
+// the other one. A mode belongs to a CAMPAIGN, so the button is a campaign
+// switch: it goes to the campaign of the other type you were last in, else
+// the biggest one you have joined. Doors are org-wide, so the list is the
+// same on both sides and only the interface changes. The strip is absent
+// when you have no campaign of the other type, since a button to nowhere
+// is worse than none.
+const LAST_BY_MODE_KEY = 'forcefield.last_campaign_by_mode'
+function lastByMode(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(LAST_BY_MODE_KEY) ?? '{}') as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+const otherMode = computed(() => (campaignMode.value === 'registration' ? 'petition' : 'registration'))
+const otherModeCampaign = computed(() => {
+  const pool = sheetCampaigns.value.filter((c) => c.mode === otherMode.value)
+  if (!pool.length) return null
+  const last = lastByMode()[otherMode.value]
+  return pool.find((c) => c.id === last) ?? [...pool].sort((x, y) => y.members - x.members)[0]
+})
+const modeFlipping = ref(false)
+const modeFlipError = ref('')
+async function flipMode() {
+  const target = otherModeCampaign.value
+  if (!target || modeFlipping.value) return
+  modeFlipping.value = true
+  modeFlipError.value = ''
+  try {
+    const leaving = auth.profile?.campaign_id
+    if (leaving) {
+      const store = lastByMode()
+      store[campaignMode.value] = leaving
+      try {
+        localStorage.setItem(LAST_BY_MODE_KEY, JSON.stringify(store))
+      } catch {
+        /* private window: the fallback pick still works */
+      }
+    }
+    const result = await switchCampaign(target.id)
+    if (result.error) modeFlipError.value = result.error
+    else {
+      await loadCampaignMode(true)
+      hapticTap('light')
+    }
+  } finally {
+    modeFlipping.value = false
+  }
+}
+watch(() => auth.profile?.id, (id) => { if (id) void loadCampaigns() }, { immediate: true })
+
 const roleSwitching = ref(false)
 const roleSwitchError = ref('')
 const canDemoSwitch = computed(() => !!auth.profile && auth.profile.role !== 'admin')
@@ -486,6 +540,23 @@ onUnmounted(() => {
           <button class="btn btn-ghost btn-sm logout-top" @click="handleLogout">Log out</button>
         </div>
       </div>
+      <!-- Which kind of campaign the app is in, and the one button to the
+           other. Inside the header so the chrome measurement includes it. -->
+      <div
+        v-if="auth.profile && otherModeCampaign"
+        class="mode-strip"
+        :class="`mode-${campaignMode}`"
+        data-help="mode-switch"
+      >
+        <span class="mode-now">
+          <span class="mode-dot" aria-hidden="true"></span>
+          {{ campaignMode === 'registration' ? 'Registration mode' : 'Petition mode' }}
+        </span>
+        <span v-if="modeFlipError" class="mode-error">{{ modeFlipError }}</span>
+        <button class="mode-flip" :disabled="modeFlipping" @click="flipMode">
+          {{ modeFlipping ? 'Switching…' : otherMode === 'registration' ? 'Switch to registration' : 'Switch to petition' }}
+        </button>
+      </div>
     </header>
 
     <!-- Desktop/tablet top tabs. The Assistant stays admin-only; the
@@ -716,6 +787,65 @@ onUnmounted(() => {
   line-height: 1.2;
 }
 
+.mode-strip {
+  --mode-hue: var(--accent);
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 0.3rem 1.25rem 0.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  background: color-mix(in srgb, var(--mode-hue) 12%, var(--surface));
+  border-top: 1px solid color-mix(in srgb, var(--mode-hue) 35%, var(--border));
+}
+
+.mode-strip.mode-registration {
+  --mode-hue: #1f9d6b;
+}
+
+.mode-now {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 800;
+  font-size: calc(0.82rem * var(--ui-scale));
+  white-space: nowrap;
+}
+
+.mode-dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--mode-hue);
+}
+
+.mode-error {
+  color: var(--danger);
+  font-size: 0.72rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mode-flip {
+  flex-shrink: 0;
+  border: 1px solid var(--mode-hue);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 700;
+  font-size: calc(0.78rem * var(--ui-scale));
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  min-height: 30px;
+  cursor: pointer;
+}
+
+.mode-flip:disabled {
+  opacity: 0.6;
+}
+
 .user-area {
   display: flex;
   align-items: center;
@@ -783,6 +913,11 @@ onUnmounted(() => {
 @media (max-width: 539px), (min-width: 820px) {
   .shell-header-inner {
     padding: 0.7rem 0.85rem;
+  }
+
+  .mode-strip {
+    padding-left: 0.85rem;
+    padding-right: 0.85rem;
   }
 
   .role-label-full {

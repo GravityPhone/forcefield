@@ -22,13 +22,13 @@ Everything in the "Voter Registration Demo" campaign is sample data: the sites a
 
 ### 1. Start in the petition campaign
 
-Open **Canvass**. Talk shows Signed, Not Interested, Return and the rest. This is the app as a petition tool.
+Open **Canvass**. The strip under the header says **Petition mode**. Talk shows Signed, Not Interested, Return and the rest. This is the app as a petition tool.
 
 ### 2. Switch to registration
 
-Tap the role badge at the top right (it says MANAGER). Under **Campaign**, tap **Voter Registration Demo**.
+Tap **Switch to registration** on that strip.
 
-The whole app is now in registration mode. The same switch is on More > Campaign as a row of chips.
+The strip turns green and says **Registration mode**, and the buttons on Talk change in front of them. It is the same list of doors; only the interface changed. The button moved you to the Voter Registration Demo campaign, because the mode belongs to the campaign. **Switch to petition** goes back.
 
 ### 3. The site plan
 
@@ -72,7 +72,7 @@ Open **Canvass**, search a street and open a house. The buttons are now Register
 
 ### 9. Progress, and back to petition
 
-**More > Campaign.** The progress card counts registrations against the goal. Tap the **Demo Campaign** chip to return to the petition app.
+**More > Campaign.** The progress card counts registrations against the goal. Tap **Switch to petition** at the top to return to the petition app.
 
 ## If they ask
 
