@@ -216,7 +216,21 @@ async function wipe() {
     console.log(`Removed ${NAME} (${id}).`)
   }
   if (!found.length) console.log('Nothing to remove.')
+  await markUnregistered(0)
   await removeStaff()
+}
+
+const UNREGISTERED_SHARE = 0.2
+
+async function markUnregistered(share = UNREGISTERED_SHARE) {
+  await sql(`
+    update public.persons set registered_voter = true where not registered_voter;
+    update public.persons p set registered_voter = false
+    from public.addresses a
+    where a.id = p.household_id and a.city = 'Marysville'
+      and (('x' || substr(md5(p.id::text), 1, 6))::bit(24)::int % 1000) < ${Math.round(share * 1000)}
+      and not exists (select 1 from public.knock_logs k where k.person_id = p.id and k.outcome = 'signed');
+  `)
 }
 
 async function build() {
@@ -248,7 +262,15 @@ async function build() {
   const pool = await ensureStaff(cid)
   // Names for today's "found on the roll" rows, so the Site tab's list for
   // today reads like a real afternoon. Pointers at voter-file rows only.
-  const roll = (await sql(`select id from public.persons order by random() limit 400`)).map((r) => r.id)
+  //
+  // NOT EVERYBODY IS REGISTERED. The file is a list of registered voters, so
+  // a registration drive would have nobody in it to register. For the demo a
+  // fixed share of Marysville (UNREGISTERED_SHARE, the same people every
+  // rebuild) is marked persons.registered_voter = false. Nobody who has
+  // signed the petition is in it. --wipe puts everyone back.
+  await markUnregistered()
+  const roll = (await sql(`select id from public.persons where registered_voter order by random() limit 400`)).map((r) => r.id)
+  const open = (await sql(`select p.id from public.persons p where not p.registered_voter order by random() limit 400`)).map((r) => r.id)
 
   const sites = SITES.map((s) => ({ ...s, id: randomUUID() }))
   await sql(`
@@ -297,7 +319,10 @@ async function build() {
           }
           const at = startMin + Math.floor(rand() * worked)
           const onRoll = offset === 0 && (result === 'already_registered' || result === 'updated')
-          logs.push({ user: person.id, site: site.id, shift: shift.id, result, person: onRoll ? roll[Math.floor(rand() * roll.length)] : null, at: `${day} ${clock(at)}:${String(Math.floor(rand() * 60)).padStart(2, '0')}` })
+          // A new registration is usually somebody in the file who was not
+          // registered; now and then it is a name the file never had.
+          const fromOpen = offset === 0 && result === 'registered' && rand() < 0.75 && open.length
+          logs.push({ user: person.id, site: site.id, shift: shift.id, result, person: onRoll ? roll[Math.floor(rand() * roll.length)] : fromOpen ? open.pop() : null, at: `${day} ${clock(at)}:${String(Math.floor(rand() * 60)).padStart(2, '0')}` })
         }
       }
     })

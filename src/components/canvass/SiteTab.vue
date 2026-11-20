@@ -24,6 +24,16 @@
 // one that says it happened at a site and not on a porch. Only somebody on the
 // roll can sign, so a petition has no "Not on the roll" branch.
 //
+// NOT EVERYBODY IN THE FILE IS REGISTERED (2026-11-20, user call: "make a
+// certain percentage of the whole populace not registered"). `persons.
+// registered_voter` says which, and in a registration campaign it decides the
+// buttons: a registered person is Already registered / Updated / Declined; a
+// person who is in the file but NOT registered is the one you are here for,
+// Registered / Not eligible / Declined, and the row keeps the pointer to them.
+// Somebody registered through this app (a 'registered' row naming them) reads
+// as registered from then on; that is derived on lookup, never written back
+// to the file. "Not on the roll" stays for a name the file has never heard of.
+//
 // THE SITE IS NEVER A QUESTION YOU HAVE TO ANSWER FIRST (same call: "it
 // automatically associates whatever you're doing with a site"). The tab opens
 // already on a site: the shift you are on right now, else a shift of yours
@@ -194,6 +204,8 @@ interface Hit {
   city: string | null
   /** Their registered household: where a petition signature is filed. */
   householdId: string | null
+  /** Registered to vote: the file says so, or this app registered them. */
+  registered: boolean
 }
 
 const query = ref('')
@@ -217,18 +229,39 @@ watch(query, (raw) => {
   timer = setTimeout(async () => {
     const { data } = await supabase
       .from('persons')
-      .select('id, name, household_id, addresses(city)')
+      .select('id, name, household_id, registered_voter, addresses(city)')
       .ilike('name', `%${q}%`)
       .order('name')
       .limit(12)
     // A newer keystroke has taken over.
     if (query.value.trim() !== q) return
-    hits.value = ((data ?? []) as unknown as {
+    const found: Hit[] = ((data ?? []) as unknown as {
       id: string
       name: string
       household_id: string | null
+      registered_voter: boolean
       addresses: { city: string } | null
-    }[]).map((p) => ({ id: p.id, name: p.name, city: p.addresses?.city ?? null, householdId: p.household_id }))
+    }[]).map((p) => ({
+      id: p.id,
+      name: p.name,
+      city: p.addresses?.city ?? null,
+      householdId: p.household_id,
+      registered: p.registered_voter,
+    }))
+    // Anyone the file calls unregistered may have been registered since,
+    // through this app. One small read for the handful on screen.
+    const open = found.filter((h) => !h.registered).map((h) => h.id)
+    if (reg.value && open.length) {
+      const { data: done } = await supabase
+        .from('registration_logs')
+        .select('person_id')
+        .eq('result', 'registered')
+        .in('person_id', open)
+      const since = new Set(((done ?? []) as { person_id: string }[]).map((r) => r.person_id))
+      for (const h of found) if (since.has(h.id)) h.registered = true
+    }
+    if (query.value.trim() !== q) return
+    hits.value = found
     searching.value = false
   }, 250)
 })
@@ -237,7 +270,7 @@ watch(query, (raw) => {
 const choices = computed<SiteResult[]>(() => {
   if (!picked.value) return []
   if (!reg.value) return picked.value === 'new' ? [] : ['signed', 'didnt_sign']
-  return picked.value === 'new'
+  return picked.value === 'new' || !picked.value.registered
     ? ['registered', 'not_eligible', 'declined']
     : ['already_registered', 'updated', 'declined']
 })
@@ -426,7 +459,10 @@ watch(
             <li v-for="h in hits" :key="h.id">
               <button class="hit" type="button" @click="picked = h">
                 <span class="hit-name">{{ h.name }}</span>
-                <span v-if="h.city" class="muted small">{{ h.city }}</span>
+                <span class="hit-side">
+                  <span v-if="reg && !h.registered" class="pill off">Not registered</span>
+                  <span v-if="h.city" class="muted small">{{ h.city }}</span>
+                </span>
               </button>
             </li>
           </ul>
@@ -437,8 +473,8 @@ watch(
         <div v-if="picked" class="picked">
           <div class="picked-head">
             <span class="picked-name">{{ picked === 'new' ? query.trim() : picked.name }}</span>
-            <span class="pill" :class="{ off: picked === 'new' }">
-              {{ picked === 'new' ? 'Not on the roll' : 'On the roll' }}
+            <span class="pill" :class="{ off: picked === 'new' || (reg && !picked.registered) }">
+              {{ picked === 'new' ? 'Not on the roll' : !reg ? 'On the roll' : picked.registered ? 'Registered' : 'Not registered' }}
             </span>
             <button class="btn btn-sm" type="button" @click="picked = null">Back</button>
           </div>
@@ -548,6 +584,13 @@ watch(
   white-space: normal;
   cursor: pointer;
 }
+.hit-side {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
 .hit-name {
   font-weight: 700;
 }

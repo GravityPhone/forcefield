@@ -213,4 +213,27 @@ router.beforeEach(async (to, from) => {
   }
 })
 
+// A TAB LEFT OPEN ACROSS A DEPLOY CANNOT REACH A PAGE IT HAS NOT VISITED YET
+// (2026-11-20, user report: "I just tried clicking assistant and it did not
+// take me to the assistant", on a desktop tab opened before that day's push,
+// while a freshly opened phone worked). Every page is its own content-hashed
+// chunk; a deploy replaces them, so the old tab asks for a filename that no
+// longer exists, Netlify's SPA fallback answers with index.html, the import
+// throws, and the navigation ends in silence: the link just does nothing.
+// The fix is to load the new build AT the page that was asked for. One retry
+// per path per minute, so a page that is genuinely broken cannot loop.
+router.onError((err, to) => {
+  const msg = String((err as Error)?.message ?? err)
+  if (!/dynamically imported module|Importing a module script failed|error loading dynamically|Unable to preload/i.test(msg)) return
+  const key = `forcefield.chunk_reload.${to.path}`
+  try {
+    const last = Number(sessionStorage.getItem(key) ?? 0)
+    if (Date.now() - last < 60_000) return
+    sessionStorage.setItem(key, String(Date.now()))
+  } catch {
+    /* no storage: still worth the one reload */
+  }
+  window.location.assign(to.fullPath)
+})
+
 export default router

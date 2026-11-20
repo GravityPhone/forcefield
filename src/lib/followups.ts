@@ -36,5 +36,21 @@ export function extractFollowups(raw: string): ParsedReply {
     // never show that machinery to the admin.
     .replace(/```followups[\s\S]*$/, '')
     .trim()
+  // The same trailer under the wrong label (```json, or none): a closing
+  // block that is a JSON array of strings is the suggestions, not prose.
+  if (!suggestions.length) {
+    const tail = /```\s*[A-Za-z]*\s*(\[[\s\S]*?\])\s*```\s*$/.exec(text)
+    if (tail) {
+      try {
+        const parsed: unknown = JSON.parse(tail[1])
+        if (Array.isArray(parsed) && parsed.every((x) => typeof x === 'string')) {
+          for (const item of parsed as string[]) if (item.trim()) suggestions.push(item.trim().slice(0, MAX_LENGTH))
+          return { text: text.slice(0, tail.index).trim(), suggestions: suggestions.slice(0, MAX_SUGGESTIONS) }
+        }
+      } catch {
+        /* not the trailer */
+      }
+    }
+  }
   return { text, suggestions: suggestions.slice(0, MAX_SUGGESTIONS) }
 }

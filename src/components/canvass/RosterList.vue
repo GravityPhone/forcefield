@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useTalkStore } from '@/stores/talk'
 import { OUTCOME_HEX, OUTCOME_INK, OUTCOME_SHORT } from '@/lib/outcomes'
-import { knockLabel } from '@/lib/registration'
+import { campaignMode, knockLabel } from '@/lib/registration'
 import type { KnockLog } from '@/types'
 
 const talk = useTalkStore()
@@ -66,6 +66,7 @@ function bubbleStyle(personId: string): Record<string, string> | undefined {
       <span class="person-name">{{ p.name }}</span>
       <span class="person-meta">
         <span v-if="p.registered_voter" class="badge">Registered</span>
+        <span v-else-if="campaignMode === 'registration'" class="badge badge-open">Not registered</span>
         <span v-if="contactSummary(p.id)" class="muted contact">{{ contactSummary(p.id) }}</span>
       </span>
     </button>
@@ -74,6 +75,13 @@ function bubbleStyle(personId: string): Record<string, string> | undefined {
 </template>
 
 <style scoped>
+/* The person a registration drive is at this door for. */
+.badge-open {
+  background: color-mix(in srgb, #e0a02e 22%, var(--surface));
+  border: 1px solid #e0a02e;
+  color: var(--text);
+}
+
 .roster {
   display: flex;
   flex-direction: column;

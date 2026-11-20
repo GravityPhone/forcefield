@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import AppShell from '@/components/AppShell.vue'
 import BottomSheet from '@/components/ui/BottomSheet.vue'
 import InfographicCard from '@/components/chat/InfographicCard.vue'
@@ -12,6 +12,7 @@ import { renderMarkdownLite } from '@/lib/markdownLite'
 import { apiBase } from '@/lib/native'
 import { supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { campaignMode } from '@/lib/registration'
 import {
   appendMessage,
   createChat,
@@ -85,7 +86,12 @@ onMounted(async () => {
     try {
       chats.value = await listChats(ownerId)
       const newest = chats.value[0]
-      if (newest) await openChat(newest.id)
+      // The newest chat is reopened only if it was had in THIS kind of
+      // campaign. Chats are not stored per campaign, so without this a
+      // manager in a registration drive opens the assistant onto last
+      // night's conversation about signatures. Remembered per device; an
+      // older chat is still one tap away under history.
+      if (newest && chatModeOf(newest.id) === campaignMode.value) await openChat(newest.id)
     } catch {
       saveError.value = 'Couldn’t load saved chats.'
     }
@@ -101,7 +107,7 @@ function greeting(): ChatMessage {
     id: 0,
     role: 'assistant',
     text:
-      "Hi! I'm the Forcefield assistant. I can query the live canvassing data, use Google Maps, " +
+      `Hi! I'm the Forcefield assistant. I can query the live ${campaignMode.value === 'registration' ? 'registration' : 'canvassing'} data, use Google Maps, ` +
       'search the web, and draw charts. Tap a question below to see what I can do, or ask ' +
       'anything in your own words. (Tap ✎ on one of your messages to edit it and re-run.)',
   }
@@ -111,19 +117,51 @@ const messages = ref<ChatMessage[]>([greeting()])
 
 /** Conversation openers, shown until the first question is sent. After that,
  * the assistant supplies its own three follow-ups with every reply. */
-const STARTERS = [
+const CHAT_MODES_KEY = 'forcefield.ai_chat_modes'
+function chatModes(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem(CHAT_MODES_KEY) ?? '{}') as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+/** A chat with no note was had before modes existed: a petition chat. */
+const chatModeOf = (id: string) => chatModes()[id] ?? 'petition'
+function rememberChatMode(id: string) {
+  try {
+    localStorage.setItem(CHAT_MODES_KEY, JSON.stringify({ ...chatModes(), [id]: campaignMode.value }))
+  } catch {
+    /* private window */
+  }
+}
+
+// This page is kept alive, so flipping the campaign's mode elsewhere and
+// coming back would leave the other mode's conversation on screen.
+watch(campaignMode, () => {
+  if (ready.value && !loading.value) newChat()
+})
+
+const PETITION_STARTERS = [
   'How are we doing against the signature goal?',
   'Where should we send crews next?',
   'Compare this week’s outcomes as a chart',
   'Which areas are our strongest and weakest?',
 ]
+// A registration drive asks about sites, shifts and the plan, not signatures.
+const REGISTRATION_STARTERS = [
+  'How are we doing against the registration goal?',
+  'Which sites are worth a crew?',
+  'What does next week’s site plan look like?',
+  'Which streets have the most unregistered people?',
+]
+const STARTERS = computed(() => (campaignMode.value === 'registration' ? REGISTRATION_STARTERS : PETITION_STARTERS))
 
 /** Suggestion buttons live under the newest reply only — older ones are stale. */
 const activeSuggestions = computed<string[]>(() => {
   if (loading.value) return []
   const last = messages.value[messages.value.length - 1]
   if (!last || last.role !== 'assistant' || last.error) return []
-  if (last.id === 0) return STARTERS
+  if (last.id === 0) return STARTERS.value
   return last.suggestions ?? []
 })
 
@@ -269,6 +307,7 @@ async function persistUser(text: string): Promise<number | null> {
     if (!chatId.value) {
       chatTitle.value = titleFrom(text)
       chatId.value = await createChat(ownerId, chatTitle.value)
+      rememberChatMode(chatId.value)
     } else if (seq === 0) {
       // Rewound all the way to the start: the title came from the message
       // that just got dropped, so it takes its meaning from this one instead.

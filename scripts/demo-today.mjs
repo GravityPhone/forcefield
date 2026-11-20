@@ -60,7 +60,7 @@ const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1])
 async function loadDoors() {
   const rows = await sql(`
     select a.id, a.street, a.lat, a.lng, a.turf_id, k.outcome, coalesce(k.signed_count,0) signed_count,
-      (select array_agg(p.id) from persons p where p.household_id = a.id) persons,
+      (select array_agg(p.id) from persons p where p.household_id = a.id and p.registered_voter) persons,
       (select array_agg(distinct l.person_id) from knock_logs l where l.household_id = a.id and l.outcome = 'signed' and l.person_id is not null) signed
     from addresses a left join household_latest_knock k on k.household_id = a.id
     where a.city = ${q(DEMO_CITY)}`)

@@ -69,7 +69,17 @@ function parseInfographic(raw: string): InfographicSpec | null {
   }
 }
 
-const BLOCK_RE = /```(infographic|turfplan)\s*\n?([\s\S]*?)```/g
+// Any fenced block, whatever it is labelled.
+const BLOCK_RE = /```[ \t]*([A-Za-z]*)[ \t]*\n?([\s\S]*?)```/g
+
+/** NO RAW JSON ON SCREEN, EVER (2026-11-20, user report: "it showed us some
+ * JSON. We don't want that in the demo"). A card arrives as JSON in a fenced
+ * block, and three things used to leak it: a spec that failed to parse was
+ * printed as text, a block labelled ```json (or not labelled) was never
+ * matched at all, and a reply cut off mid-block left the open fence and
+ * everything after it. Now a block becomes a card or it becomes nothing. A
+ * fenced block that is not JSON (the admin asked to see a query) still shows. */
+const looksLikeJson = (body: string) => /^[[{]/.test(body.trim())
 
 /** Split an assistant reply into renderable segments. */
 export function splitSegments(text: string): MessageSegment[] {
@@ -78,20 +88,22 @@ export function splitSegments(text: string): MessageSegment[] {
   for (const match of text.matchAll(BLOCK_RE)) {
     const before = text.slice(last, match.index)
     if (before.trim()) segments.push({ kind: 'text', text: before })
+    const label = match[1].toLowerCase()
     const body = match[2].trim()
-    if (match[1] === 'turfplan') {
-      const plan = parseTurfPlan(body)
+    const card = label === 'infographic' || label === 'turfplan' || looksLikeJson(body)
+    if (card) {
+      const plan = label === 'infographic' ? null : parseTurfPlan(body)
+      const spec = plan || label === 'turfplan' ? null : parseInfographic(body)
       if (plan) segments.push({ kind: 'turfplan', spec: plan })
-      else if (body) segments.push({ kind: 'text', text: body })
-    } else {
-      const spec = parseInfographic(body)
-      if (spec) segments.push({ kind: 'infographic', spec })
-      else if (body) segments.push({ kind: 'text', text: body })
+      else if (spec) segments.push({ kind: 'infographic', spec })
+    } else if (body) {
+      segments.push({ kind: 'text', text: body })
     }
     last = match.index + match[0].length
   }
-  const rest = text.slice(last)
+  // An unclosed fence: the reply was cut off inside a block.
+  const rest = text.slice(last).replace(/```[\s\S]*$/, '')
   if (rest.trim()) segments.push({ kind: 'text', text: rest })
-  if (!segments.length) segments.push({ kind: 'text', text })
+  if (!segments.length) segments.push({ kind: 'text', text: '' })
   return segments
 }

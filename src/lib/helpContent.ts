@@ -95,7 +95,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       {
         heading: 'Look up a name',
         target: 'site-search',
-        body: 'Type a name. Tap the person.\nPetition: Signed or Not Interested. A signature here counts like one at a door.\nRegistration: Already registered, Updated or Declined. Not on the roll: Registered, Not eligible or Declined.',
+        body: 'Type a name. Tap the person.\nPetition: Signed or Not Interested. A signature here counts like one at a door.\nRegistration: a registered person is Already registered, Updated or Declined. Not registered, or not on the roll: Registered, Not eligible or Declined.',
       },
       {
         heading: 'Today here',

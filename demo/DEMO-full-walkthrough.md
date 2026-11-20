@@ -73,10 +73,22 @@ node scripts/demo-registration.mjs
 
 **6. If you are projecting from a laptop,** make the browser window tall. The app is a phone column, and a short window cuts the bottom tab bar close.
 
-**7. Have these ready to type:**
-- A house: `1856 Deer Crossing` (two residents, last visit was Not Home)
-- A name on the roll: `Sandra I Miller` (type the middle initial; the search matches the name as written on the roll, so "Sandra Miller" finds nothing)
-- A name not on the roll: anything invented, such as `Zelda Quartz`
+**7. Reload every tab you will use.** A tab left open from before an update can fail to open a page it has not visited yet (the link does nothing). Close it and open the site again.
+
+**8. Have these ready to type.** Each was checked against the database and returns exactly one person when typed as written.
+
+| For | Type | What it is |
+|---|---|---|
+| Petition door | `1856 Deer Crossing` | Two residents, last visit Not Home |
+| Petition site signature | `Ambica Gawarla` | Registered voter in Marysville |
+| Registration: already registered | `Nidhi Parashar` | Registered |
+| Registration: needs an update | `Shahin Armin` | Registered |
+| Registration: not registered | `Kurt Luebkeman` | In the file, marked not registered |
+| Registration: not registered, spare | `Damon Sharp` | Same |
+| Registration: not in the file at all | `Marcus Delacroix` | No match |
+| Registration door | `1819 Deer Crossing` | One resident registered, one not |
+
+**About "not registered".** The voter file is a list of registered voters, so on its own it has nobody to register. For this demo about one person in six in Marysville (4,024 of 22,980) is marked not registered. It is simulated: these are real names from the public file with a made-up status. Nobody who signed the petition is in that group. If anyone asks, say so. A real drive would load a list of unregistered residents, or use the app with only the "not in the file" path.
 
 ---
 
@@ -130,7 +142,7 @@ Tap **Site** at the top.
 
 > "Not every signature comes from a door. This is for a table at a market or outside a library."
 
-The tab is already on a site: Farmers market. Type `Sandra I Miller` and tap her. Tap **Signed**.
+The tab is already on a site: Farmers market. Type `Ambica Gawarla` and tap her. Tap **Signed**.
 
 > "You look the person up on the voter roll, because only a registered voter's signature counts. It is filed against the site, it counts toward the goal like any other signature, and her own house turns green so nobody knocks it to ask again."
 
@@ -240,21 +252,31 @@ Point: the plan and the results are the same screen.
 
 Go back, tap **Canvass**, then the **Site** tab.
 
-It is already on a site (the shift happening now). The count says how many registered here today.
+It is already on a site (the shift happening now), so everything you log is filed against that site without picking anything. The count says how many registered here today.
 
-> "This is what the person at the table uses. Somebody walks up, you look up their name."
+> "This is what the person at the table uses. Somebody walks up and you look up their name. There are three things that can happen."
 
-Type `Sandra I Miller` and tap her. The choices are **Already registered**, **Updated**, **Declined**. Tap **Already registered**.
+**One: they are already registered.** Type `Nidhi Parashar`. She comes up with no tag. Tap her. The pill says **Registered** and the choices are **Already registered**, **Updated**, **Declined**. Tap **Already registered**.
 
-> "She is on the roll. So she is already registered, or she has moved and needs an update, or she is not interested."
+> "She is on the roll. Nothing to do, and we note that we checked."
 
-Now type `Zelda Quartz`. No match. Tap **Not on the roll**. The choices are **Registered**, **Not eligible**, **Declined**. Tap **Registered**.
+Type `Shahin Armin`, tap, then **Updated**.
 
-> "Not on the roll means a new registration, which is the number you are here for. The app stores a count and nothing else. No birth date, no licence number, no reason for not being eligible. The paper form or the state website is the legal record."
+> "Also registered, but he has moved. That is an update, and it counts toward the goal."
 
-Both entries are in **Today here**. Tap **Undo my last** twice to take them back.
+**Two: they are in the file but not registered.** Type `Kurt Luebkeman`. His row has an amber **Not registered** tag. Tap him. The choices are now **Registered**, **Not eligible**, **Declined**. Tap **Registered**.
 
-Point: two taps per person, and nothing sensitive is kept.
+> "The app already knows he is not registered, so it offers to register him. That is a new registration, the number you are here for."
+
+Type `Kurt Luebkeman` again. The tag is gone: he reads as registered from now on.
+
+**Three: they are not in the file at all.** Type `Marcus Delacroix`. No matches. Tap **Not on the roll**, then **Registered**.
+
+> "Somebody new to the county, or newly eligible. Same result, and the app keeps only the count. No birth date, no licence number, no reason if someone is not eligible. The paper form or the state website is the legal record."
+
+All four are in **Today here**. Tap **Undo my last** four times to take them back.
+
+Point: the lookup decides the buttons, so a volunteer cannot log the wrong kind of result.
 
 ### 4. Which sites are worth a crew
 
@@ -293,9 +315,13 @@ Point: they keep their spreadsheet and get the app on top of it.
 
 ### 7. Doors, for drives that also knock
 
-Tap **Canvass**, **Talk** tab, search `1856 Deer Crossing`.
+Tap **Canvass**, **Talk** tab, search `1819 Deer Crossing`.
 
 > "If you also go door to door, it is the same house screen with registration buttons."
+
+Two people live here. David has a **Registered** badge. Meghan has an amber **Not registered** badge.
+
+> "Before you knock you can see who at this address still needs registering. That is who you ask for."
 
 The buttons are Registered, Updated, Already registered, Not eligible, Declined, Return, Not Home, Skip. The visit history here is this campaign's only; the petition's visits to the same house do not show.
 
@@ -309,7 +335,17 @@ Tap **Analytics**.
 
 > "It counts registrations and nothing else. Already registered, not eligible and declined are not in these numbers."
 
-### 9. Progress and back
+### 9. Ask the assistant (optional)
+
+Only if you tested it today. Open **More > Assistant**. In registration mode it starts a fresh conversation and offers registration questions.
+
+Tap **Which sites are worth a crew?**
+
+> "It reads the same live data and answers in plain words. It compares sites by registrations per staffed hour, because a four-person afternoon and a one-person hour are not the same effort."
+
+It will not quote a "conversion rate" for a site, on purpose: nobody counts the people who walk past a table, so that number would be invented.
+
+### 10. Progress and back
 
 Open **More > Campaign**. The card shows registrations against the 1,500 goal.
 
@@ -339,7 +375,8 @@ So nothing surprises you on stage:
 - Map dot colors include every campaign's visits. In registration mode the map still shows the petition's colors.
 - In registration mode, Leaders and Feed still show a "conversations" figure next to registrations.
 - A petition signature taken at a site is counted by Analytics as a conversation at that person's home door.
-- The Assistant (More > Assistant) only answers if an Anthropic API key is saved in Settings. Skip it unless you have checked.
+- The Assistant (More > Assistant) only answers if an Anthropic API key is saved in Settings, and its registration answers are new today and untested on the live site. Ask it one question before the meeting; skip the step if the answer is off.
+- "Not registered" is a simulated status on real names. See the note under Before the meeting.
 - The first time the Turf page or Map opens on a device it loads the whole county and can take several seconds. Open both once before the meeting so they are instant.
 - If your location is far from Ohio the maps open on Marysville, which is what you want.
 

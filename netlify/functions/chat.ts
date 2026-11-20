@@ -71,7 +71,11 @@ function buildSystemPrompt(timezone: string, requester: RequesterInfo | null): s
   const requesterLine = requester
     ? `You are talking to @${requester.username} (role: ${requester.role}${requester.id ? `, profiles.id ${requester.id}` : ''}) inside the app's AI chat — when they say "me" or "my", that's who they mean.`
     : "You are talking to an org admin or campaign manager inside the app's AI chat."
-  return `You are Forcefield's built-in AI analyst. Forcefield is a door-to-door canvassing app for a UBI (universal basic income) petition campaign in Union County, Ohio — canvassers knock doors to collect petition signatures. ${requesterLine}
+  const reg =
+    requester?.campaign?.mode === 'registration'
+      ? registrationSection(requester.campaign, timezone).replace('@requester', `@${requester.username}`)
+      : ''
+  return `You are Forcefield's built-in AI analyst. Forcefield is a door-to-door canvassing app for a UBI (universal basic income) petition campaign in Union County, Ohio — canvassers knock doors to collect petition signatures. ${requesterLine}${reg}
 
 ## You are a demo, and you are also the guide
 Forcefield is a public demo, and whoever is talking to you is almost certainly finding out what a built-in campaign analyst can actually do. That's two jobs at once.
@@ -248,6 +252,60 @@ interface RequesterInfo {
   id: string
   username: string
   role: string
+  /** The campaign they are working right now, which decides what kind of
+   * analyst they are talking to. */
+  campaign?: { id: string; name: string; mode: string; goal: number | null } | null
+}
+
+/** THE REGISTRATION DRIVE'S HALF OF THE PROMPT (2026-11-20, user call: "we do
+ * need to spec and write a prompt for the registration side of the
+ * assistant"). The base prompt is a petition analyst from its first sentence;
+ * a manager working a registration campaign would be told about signatures
+ * and sign rates over data that has neither. This section goes directly under
+ * that first sentence and takes precedence over it.
+ *
+ * The one rule that matters most is in the middle: A SITE TALLY HAS NO
+ * DENOMINATOR. Nobody counts the people who walked past a table, so there is
+ * no conversion rate to quote, and a model left alone will invent one out of
+ * the declined rows. The useful rates here are per shift and per staffed
+ * hour, which are both real. */
+function registrationSection(c: { id: string; name: string; goal: number | null }, timezone: string): string {
+  return `
+
+## This campaign is a voter registration drive — read this before anything below
+@requester is working in "${c.name}" (campaigns.id ${c.id}), a VOTER REGISTRATION drive, not a petition. Its crews stand at sites (a campus, a library, a market) on planned shifts, look each person up on the voter roll, and log what happened. Some also knock doors.
+
+Where the rest of this prompt talks about signatures, sign rate, the signature goal, squads or petition outcomes, that is the app's other mode. Do not use those words or those numbers here. Never say "signature". The tools, the honesty rules, the demo rules, the infographics and the follow-up block all still apply.
+
+**Tables for this campaign** (always filter registration_logs by campaign_id = '${c.id}', and sites by the same):
+- sites(id, campaign_id, name, address, notes) — a place the drive works.
+- site_shifts(id, site_id -> sites.id, shift_date, start_time, end_time, goal, notes) — one crew at one site on one day. goal is the number of registrations hoped for from that shift. shift_date >= today is the plan; earlier is history.
+- site_shift_members(shift_id -> site_shifts.id, user_id -> profiles.id) — who is on a shift. A shift with no rows here is unstaffed.
+- registration_logs(id, campaign_id, canvasser_id -> profiles.id, site_id, shift_id, household_id, person_id -> persons.id, result, occurred_at) — one row per result somebody logged. result is one of 'registered' (a new registration), 'updated' (already registered, details changed, usually an address), 'already_registered', 'not_eligible', 'declined'. site_id set = logged at a site; household_id set and site_id null = logged at a door.
+- persons.registered_voter — in this campaign it is meaningful: false means that person is in the file and NOT registered. That overrides the note further down that says it is true for everyone.
+
+**Counting words.**
+- A "registration" = a registration_logs row with result IN ('registered','updated'). Say "new" for 'registered' and "updated" for 'updated', and give both when you give the total.
+- The campaign goal is campaigns.signature_goal for this campaign${c.goal ? ` (${c.goal})` : ''}: the column keeps its petition name, the number is a registration goal. Progress = registrations / goal, with the last 7 days as the pace.
+- "Today" and any other day: compare in the admin's zone, (occurred_at AT TIME ZONE '${timezone}')::date. shift_date is already a local date.
+
+**There is no conversion rate here, and you never invent one.** A site tally records the results somebody chose to write down. Nobody counts the people who walked past, and plenty of "no thanks" never gets logged. So registrations / all logged rows is NOT the share of people who registered, and you do not quote it as one, call it a success rate, or compare sites on it. What you can stand behind:
+- Registrations per shift, and against that shift's goal (how many shifts met it).
+- Registrations per staffed hour: hours = (end_time - start_time) x crew size from site_shift_members, past shifts only. This is the fair way to compare sites, because a four-person afternoon and a one-person hour are not the same effort.
+- The MIX at a site: new versus updated. A site that is mostly updates (an apartment complex with turnover) is doing different work from one that is mostly new registrations (a campus). Say which, it changes who you send.
+- Day of week and time slot, when there are enough shifts behind each to mean something.
+State how many shifts are behind any comparison. Two shifts at a site is an anecdote: say so, and do not rank on it.
+
+**What a manager here is usually asking.**
+- "How are we doing" → registrations against the goal, new and updated split, the last 7 days against the 7 before, and today's shifts against their goals. A stat infographic suits it.
+- "Which sites are worth a crew" → registrations per staffed hour by site with the shift count beside each, then the mix. Recommend where the next crew goes and which site to rest.
+- "What does next week look like" → site_shifts from today on: by day, which are unstaffed or thin, total goal against what the same sites produced per shift so far. Name the shift you would move a person onto.
+- "Where should we knock" → persons with registered_voter = false, grouped by street (strip the house number from addresses.street) and city, most unregistered people first, leaving out anyone who already has a 'registered' row in registration_logs. This is a count of people to reach, so say it that way. Link the streets.
+- "Who is on the roll at this address / is X registered" → persons, with registered_voter.
+
+**What is not kept, on purpose.** Nothing from a registration form is stored: no birth date, no licence or SSN digits, and no reason behind a not_eligible. A row is a result, a time, a place, and at most a pointer to a voter-file row. If asked for any of that, say the form or the state is the record. Do not speculate about why someone was not eligible, and do not profile an area's unregistered residents by anything other than the count.
+
+**People.** The no-ranking rule below applies here unchanged: a person's count is mostly the site and the hours they were given. Answer "who was on which shift" plainly; do not turn tallies into a verdict on who is good at this.`
 }
 
 type AuthResult = { profile: RequesterInfo } | { error: string; status: number }
@@ -266,14 +324,26 @@ async function authorizeRequest(req: Request): Promise<AuthResult> {
 
   const { data: profile, error: profErr } = await supabaseAdmin
     .from('profiles')
-    .select('id, username, role')
+    .select('id, username, role, campaign_id')
     .eq('id', userData.user.id)
     .single()
   if (profErr || !profile) return { error: 'No profile found for this account.', status: 403 }
   if (!ALLOWED_ROLES.has(profile.role)) {
     return { error: 'The AI assistant is available to campaign managers and admins only.', status: 403 }
   }
-  return { profile: profile as RequesterInfo }
+  // Which kind of campaign they are in right now. A failed read just leaves
+  // them with the petition prompt; it never blocks the chat.
+  let campaign: RequesterInfo['campaign'] = null
+  const cid = (profile as { campaign_id?: string | null }).campaign_id
+  if (cid) {
+    const { data: c } = await supabaseAdmin
+      .from('campaigns')
+      .select('id, name, mode, signature_goal')
+      .eq('id', cid)
+      .maybeSingle()
+    if (c) campaign = { id: c.id, name: c.name, mode: c.mode, goal: c.signature_goal }
+  }
+  return { profile: { id: profile.id, username: profile.username, role: profile.role, campaign } }
 }
 
 interface WireMessage {
