@@ -13,17 +13,14 @@ import AppShell from '@/components/AppShell.vue'
 import ShiftSheet from '@/components/sites/ShiftSheet.vue'
 import ImportSheet from '@/components/sites/ImportSheet.vue'
 import SiteSheet from '@/components/sites/SiteSheet.vue'
-import { avatarUrl } from '@/lib/avatars'
 import { localToday } from '@/lib/day'
 import { onPageEnter } from '@/lib/pageState'
 import {
   campaignMode,
-  conversations,
   fetchShifts,
   fetchSites,
   loadCampaignMode,
   personName,
-  shiftDayLabel,
   shiftTimeLabel,
   type SiteRow,
   type SiteShift,
@@ -34,10 +31,13 @@ defineOptions({ name: 'SitesView' })
 
 const auth = useAuthStore()
 
-// Two questions, one screen: WHEN (the schedule, upcoming or past) and WHERE
-// (the places themselves, with what each has produced). 'sites' is the where.
-type Scope = 'upcoming' | 'past' | 'sites'
-const scope = ref<Scope>('upcoming')
+// Two questions, one screen: who is where TODAY, and the places themselves.
+// TODAY ONLY (2026-11-20, user call: "I don't think I want the today,
+// tomorrow, yada, yada… let's just have today in there"). A plan imported from
+// a sheet can still hold later days; each shows up here on its own day. What
+// earlier shifts produced is on the Analytics page.
+type Scope = 'today' | 'sites'
+const scope = ref<Scope>('today')
 const shifts = ref<SiteShift[]>([])
 const sites = ref<SiteRow[]>([])
 const loading = ref(true)
@@ -64,9 +64,12 @@ async function load() {
       if (mine !== seq) return
       sites.value = rows
     } else {
-      const rows = await fetchShifts(scope.value, today.value)
+      const rows = await fetchShifts('upcoming', today.value)
       if (mine !== seq) return
+      // Yours first.
       shifts.value = rows
+        .filter((s) => s.shift_date === today.value)
+        .sort((a, b) => Number(isMine(b)) - Number(isMine(a)))
     }
     loadError.value = false
   } catch {
@@ -92,37 +95,16 @@ function isMine(s: SiteShift): boolean {
   return s.members.some((m) => m.id === auth.profile?.id)
 }
 
-/** Shifts by day, in the order they arrived; within a day, yours first. */
-const days = computed(() => {
-  const groups: { date: string; label: string; shifts: SiteShift[] }[] = []
-  for (const s of shifts.value) {
-    let g = groups[groups.length - 1]
-    if (!g || g.date !== s.shift_date) {
-      g = { date: s.shift_date, label: shiftDayLabel(s.shift_date, today.value), shifts: [] }
-      groups.push(g)
-    }
-    g.shifts.push(s)
-  }
-  for (const g of groups) {
-    g.shifts.sort((a, b) => Number(isMine(b)) - Number(isMine(a)))
-  }
-  return groups
-})
-
 /** Today across every site, the one number worth a glance before the list. */
 const todayTotals = computed(() => {
+  if (!shifts.value.length) return null
   let registered = 0
   let updated = 0
-  let talked = 0
-  let any = false
   for (const s of shifts.value) {
-    if (s.shift_date !== today.value) continue
-    any = true
     registered += s.counts.registered
     updated += s.counts.updated
-    talked += conversations(s.counts)
   }
-  return any ? { registered, updated, talked } : null
+  return { registered, updated }
 })
 
 function crewLine(s: SiteShift): string {
@@ -168,7 +150,7 @@ function openSite(s: SiteRow) {
  * staying on the list of places would hide the thing just made. */
 function onShiftSaved() {
   if (scope.value === 'sites') {
-    scope.value = 'upcoming'
+    scope.value = 'today'
     loading.value = true
   }
   void load()
@@ -188,8 +170,7 @@ function onShiftSaved() {
       <template v-else>
         <div class="top-row">
           <div class="chip-row" data-help="sites-scope">
-            <button class="chip" :class="{ on: scope === 'upcoming' }" @click="setScope('upcoming')">Upcoming</button>
-            <button class="chip" :class="{ on: scope === 'past' }" @click="setScope('past')">Past</button>
+            <button class="chip" :class="{ on: scope === 'today' }" @click="setScope('today')">Today</button>
             <button class="chip" :class="{ on: scope === 'sites' }" @click="setScope('sites')">Sites</button>
           </div>
           <div v-if="canPlan" class="plan-btns" data-help="sites-plan">
@@ -199,7 +180,7 @@ function onShiftSaved() {
           </div>
         </div>
 
-        <div v-if="scope === 'upcoming' && todayTotals" class="card totals" data-help="sites-today">
+        <div v-if="scope === 'today' && todayTotals" class="card totals" data-help="sites-today">
           <div class="total">
             <span class="total-n">{{ todayTotals.registered }}</span>
             <span class="total-l">Registered today</span>
@@ -207,10 +188,6 @@ function onShiftSaved() {
           <div class="total">
             <span class="total-n">{{ todayTotals.updated }}</span>
             <span class="total-l">Updated</span>
-          </div>
-          <div class="total">
-            <span class="total-n">{{ todayTotals.talked }}</span>
-            <span class="total-l">Conversations</span>
           </div>
         </div>
 
@@ -230,7 +207,7 @@ function onShiftSaved() {
                   <span class="shift-name">{{ s.name }}</span>
                   <span v-if="s.address" class="shift-sub muted">{{ s.address }}</span>
                   <span class="shift-sub">
-                    {{ s.shifts }} {{ s.shifts === 1 ? 'shift' : 'shifts' }} · {{ conversations(s.counts) }} {{ conversations(s.counts) === 1 ? 'conversation' : 'conversations' }}
+                    {{ s.shifts }} {{ s.shifts === 1 ? 'shift' : 'shifts' }}
                   </span>
                 </span>
                 <span class="shift-side">
@@ -242,43 +219,26 @@ function onShiftSaved() {
           </ul>
         </template>
 
-        <p v-else-if="!days.length" class="muted">
-          {{ scope === 'upcoming' ? 'No shifts planned.' : 'No past shifts.' }}
-        </p>
+        <p v-else-if="!shifts.length" class="muted">No shifts today.</p>
 
-        <section v-for="g in scope === 'sites' ? [] : days" :key="g.date" class="day">
-          <h2 class="day-head">{{ g.label }}</h2>
-          <ul class="shift-list" data-help="sites-list">
-            <li v-for="s in g.shifts" :key="s.id">
-              <router-link class="card shift" :class="{ mine: isMine(s) }" :to="`/sites/${s.id}`">
-                <div class="shift-main">
-                  <span class="shift-name">{{ s.site.name }}</span>
-                  <span v-if="s.site.address" class="shift-sub muted">{{ s.site.address }}</span>
-                  <span class="shift-sub">
-                    <template v-if="shiftTimeLabel(s)">{{ shiftTimeLabel(s) }} · </template>{{ crewLine(s) }}
-                  </span>
-                </div>
-                <div class="shift-side">
-                  <span v-if="isMine(s)" class="mine-tag">You</span>
-                  <span class="shift-count">
-                    {{ s.counts.registered + s.counts.updated }}<template v-if="s.goal != null"> / {{ s.goal }}</template>
-                  </span>
-                  <span class="faces">
-                    <img
-                      v-for="m in s.members.filter((p) => p.avatar).slice(0, 4)"
-                      :key="m.id"
-                      class="face"
-                      :src="avatarUrl(m.avatar)"
-                      alt=""
-                      loading="lazy"
-                      decoding="async"
-                    />
-                  </span>
-                </div>
-              </router-link>
-            </li>
-          </ul>
-        </section>
+        <ul v-else class="shift-list" data-help="sites-list">
+          <li v-for="s in shifts" :key="s.id">
+            <router-link class="card shift" :class="{ mine: isMine(s) }" :to="`/sites/${s.id}`">
+              <div class="shift-main">
+                <span class="shift-name">{{ s.site.name }}</span>
+                <span class="shift-sub">
+                  <template v-if="shiftTimeLabel(s)">{{ shiftTimeLabel(s) }} · </template>{{ crewLine(s) }}
+                </span>
+              </div>
+              <div class="shift-side">
+                <span v-if="isMine(s)" class="mine-tag">You</span>
+                <span class="shift-count">
+                  {{ s.counts.registered + s.counts.updated }}<template v-if="s.goal != null"> / {{ s.goal }}</template>
+                </span>
+              </div>
+            </router-link>
+          </li>
+        </ul>
       </template>
     </div>
 
@@ -335,7 +295,7 @@ function onShiftSaved() {
 
 .totals {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
   padding: 0.7rem 0.8rem;
 }
@@ -362,18 +322,6 @@ function onShiftSaved() {
 .error-line {
   color: var(--danger);
   font-weight: 600;
-}
-
-.day {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-
-.day-head {
-  margin: 0.3rem 0 0;
-  font-size: 0.95rem;
-  font-weight: 800;
 }
 
 .shift-list {
@@ -459,13 +407,4 @@ button.site-row {
   font-variant-numeric: tabular-nums;
 }
 
-.faces {
-  display: flex;
-}
-
-.face {
-  width: 22px;
-  height: 22px;
-  margin-left: -5px;
-}
 </style>

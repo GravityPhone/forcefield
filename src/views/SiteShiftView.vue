@@ -13,14 +13,11 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
 import ShiftSheet from '@/components/sites/ShiftSheet.vue'
-import { avatarUrl } from '@/lib/avatars'
 import { localToday } from '@/lib/day'
-import { memberColor } from '@/lib/memberColors'
 import { hapticTap } from '@/lib/native'
 import { onPageEnter } from '@/lib/pageState'
 import {
   REG_RESULTS,
-  conversations,
   fetchShift,
   personName,
   shiftDayLabel,
@@ -95,7 +92,6 @@ watch(shiftId, (id, old) => {
 
 const today = localToday()
 const registered = computed(() => (shift.value ? shift.value.counts.registered + shift.value.counts.updated : 0))
-const talked = computed(() => (shift.value ? conversations(shift.value.counts) : 0))
 const goalPct = computed(() => {
   const g = shift.value?.goal
   if (!g) return 0
@@ -166,7 +162,6 @@ function onDeleted() {
 
         <div v-if="shift.members.length" class="crew">
           <router-link v-for="m in shift.members" :key="m.id" class="crew-chip" :to="`/member/${m.id}`">
-            <img v-if="m.avatar" class="crew-face" :src="avatarUrl(m.avatar)" alt="" :style="{ borderColor: memberColor(m) }" />
             {{ personName(m) }}
           </router-link>
         </div>
@@ -175,7 +170,7 @@ function onDeleted() {
           <div class="progress-nums">
             <span class="big">{{ registered }}</span>
             <span class="progress-lbl">
-              registered<template v-if="shift.goal != null"> of {{ shift.goal }}</template> · {{ talked }} {{ talked === 1 ? 'conversation' : 'conversations' }}
+              registered<template v-if="shift.goal != null"> of {{ shift.goal }}</template>
             </span>
           </div>
           <div v-if="shift.goal" class="bar" role="progressbar" :aria-valuenow="goalPct" aria-valuemin="0" aria-valuemax="100">
@@ -261,13 +256,6 @@ function onDeleted() {
   font-size: 0.82rem;
   font-weight: 600;
   text-decoration: none;
-}
-
-.crew-face {
-  width: 22px;
-  height: 22px;
-  border: 2px solid transparent;
-  border-radius: 50%;
 }
 
 .progress {

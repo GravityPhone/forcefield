@@ -15,6 +15,7 @@
 // the roll leaves nothing behind but the count, because nothing about the
 // form is ever stored.
 import { computed, nextTick, ref, watch } from 'vue'
+import AppSelect from '@/components/ui/AppSelect.vue'
 import { supabase } from '@/lib/supabase'
 import { localToday, startOfLocalDayISO } from '@/lib/day'
 import { hapticTap } from '@/lib/native'
@@ -270,16 +271,13 @@ watch(
 
     <template v-else>
       <div class="card where" data-help="site-pick">
-        <label class="where-label" for="site-place">Site</label>
-        <select id="site-place" v-model="placeKey" class="where-select">
-          <option v-for="p in places" :key="p.key" :value="p.key">{{ p.label }}</option>
-        </select>
+        <AppSelect v-model="placeKey" :options="places.map((p) => ({ value: p.key, label: p.label }))" />
         <span class="count">
           <span class="count-n">{{ registeredToday }}</span> registered here today
         </span>
       </div>
 
-      <div class="card lookup" data-help="site-search">
+      <div class="card lookup field" data-help="site-search">
         <input
           ref="searchEl"
           v-model="query"
@@ -362,15 +360,6 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-}
-.where-label {
-  font-size: 0.75rem;
-  font-weight: 700;
-  color: var(--text-muted);
-}
-.where-select {
-  width: 100%;
-  min-height: 44px;
 }
 .count {
   font-size: 0.9rem;

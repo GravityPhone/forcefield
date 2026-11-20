@@ -34,9 +34,8 @@ The strip turns green and says **Registration mode**, and the buttons on Talk ch
 
 **More > Sites.**
 
-- The three numbers at the top are today across every site.
-- Below is the schedule by day: site, hours, crew, and registrations against the goal.
-- **Past** shows earlier shifts and what each one produced.
+- The two numbers at the top are today across every site.
+- Below are today's shifts: site, hours, crew, and registrations against the goal.
 
 ### 4. Work a site
 
@@ -49,18 +48,19 @@ Open **Canvass** and tap the **Site** tab. It only exists in registration mode. 
 
 ### 5. Which sites are worth a crew
 
-Back to Sites, tap the **Sites** chip. One row per place, with its all-time registrations and conversations. The community college leads; the library trails.
+On Sites, tap the **Sites** chip. One row per place, with its all-time registrations and conversations. The community college leads; the library trails.
 
 ### 6. Add a site and schedule it
 
 - **+ Add site**, give it a name, Save.
-- Tap the new site, then **+ Add a shift here**. Pick a date, hours, a goal and crew, and Save. It appears on the schedule.
+- Tap the new site, then **+ Add a shift here**. Tap a start time, how many hours, and a goal, add crew, and Save. A new shift is for today and appears on the Today list.
 
 ### 7. Link your Google Sheet
 
 - On Sites, tap **Import**. Paste the sheet's link and tap **Read**.
 - Point out the column matching: the sheet says Location, Hours, Target and Staff, and the app matched them to Site name, Start time, Goal and Crew. Any guess can be changed.
 - Tap **Link and import 4**. "County fairgrounds, gate B" was not a site before; the import created it.
+- The sample sheet's shifts are for next week, so they will not appear under Today. Each shows up on its own day.
 - Now change something in the Google Sheet: raise a Target, or add a row. Back in the app, tap **Import**, then **Refresh** next to the sheet's name. The plan updates to match.
 
 A refresh only touches shifts that came from that sheet, never past shifts, and never deletes a shift that already has registrations on it.

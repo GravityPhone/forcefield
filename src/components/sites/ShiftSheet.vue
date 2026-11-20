@@ -13,7 +13,7 @@ import { supabase } from '@/lib/supabase'
 import { localToday } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
 import { useSquadsStore } from '@/stores/squads'
-import type { SiteShift } from '@/lib/registration'
+import { clockLabel, type SiteShift } from '@/lib/registration'
 import type { ChatProfile } from '@/types'
 
 const props = defineProps<{
@@ -55,6 +55,60 @@ const crew = ref<ChatProfile[]>([])
 const saving = ref(false)
 const error = ref('')
 const deleteArmed = ref(false)
+
+// TIMES AND THE GOAL ARE BUTTONS (2026-11-20, user call: "make it a little
+// bit easier to just do with a couple button presses"). A native time picker
+// is a wheel per field; a shift is almost always "starts on the hour, runs a
+// few hours". So: one tap for the start, one for how long, one for the goal.
+// Tapping the lit one clears it. A shift that arrived from a sheet with an
+// odd time (10:30) keeps it; no chip lights and the line underneath says it.
+const START_HOURS = [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]
+const LENGTHS = [2, 3, 4, 5, 6]
+const GOALS = [5, 10, 15, 20, 25, 30]
+
+const hhmm = (h: number, m = 0) => `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+const minutesOf = (t: string) => +t.slice(0, 2) * 60 + +t.slice(3, 5)
+
+/** Whole hours between start and end, or null when it is not a round number. */
+const lengthHours = computed(() => {
+  if (!start.value || !end.value) return null
+  const d = (minutesOf(end.value) - minutesOf(start.value)) / 60
+  return Number.isInteger(d) && d > 0 ? d : null
+})
+
+function pickStart(h: number) {
+  const next = hhmm(h)
+  if (start.value === next) {
+    start.value = ''
+    end.value = ''
+    return
+  }
+  // Moving the start keeps the length; a first pick assumes four hours.
+  const len = lengthHours.value ?? 4
+  start.value = next
+  end.value = hhmm(Math.min(23, h + len))
+}
+
+function pickLength(n: number) {
+  if (!start.value) return
+  if (lengthHours.value === n) {
+    end.value = ''
+    return
+  }
+  const total = Math.min(23 * 60 + 59, minutesOf(start.value) + n * 60)
+  end.value = hhmm(Math.floor(total / 60), total % 60)
+}
+
+function pickGoal(n: number) {
+  goal.value = goal.value === String(n) ? '' : String(n)
+}
+
+const timeLine = computed(() => {
+  if (start.value && end.value) return `${clockLabel(start.value)} to ${clockLabel(end.value)}`
+  if (start.value) return `From ${clockLabel(start.value)}`
+  return 'No time set'
+})
+const hourLabel = (h: number) => clockLabel(hhmm(h))
 
 interface KnownSite {
   id: string
@@ -220,27 +274,64 @@ async function remove() {
         <datalist id="known-sites">
           <option v-for="s in knownSites" :key="s.id" :value="s.name" />
         </datalist>
+        <div v-if="!shift && knownSites.length" class="pick-row site-picks">
+          <button
+            v-for="s in knownSites"
+            :key="s.id"
+            type="button"
+            class="pick"
+            :class="{ on: matched?.id === s.id }"
+            @click="name = s.name"
+          >
+            {{ s.name }}
+          </button>
+        </div>
       </div>
       <div class="field">
-        <label for="shift-address">Address</label>
-        <input id="shift-address" v-model="address" type="text" autocomplete="off" />
+        <label>Starts</label>
+        <div class="pick-row">
+          <button
+            v-for="h in START_HOURS"
+            :key="h"
+            type="button"
+            class="pick"
+            :class="{ on: start === hhmm(h) }"
+            @click="pickStart(h)"
+          >
+            {{ hourLabel(h) }}
+          </button>
+        </div>
       </div>
       <div class="field">
-        <label for="shift-date">Date</label>
-        <input id="shift-date" v-model="date" class="plain-input" type="date" />
+        <label>Hours</label>
+        <div class="pick-row">
+          <button
+            v-for="n in LENGTHS"
+            :key="n"
+            type="button"
+            class="pick"
+            :class="{ on: lengthHours === n }"
+            :disabled="!start"
+            @click="pickLength(n)"
+          >
+            {{ n }}
+          </button>
+        </div>
+        <span class="time-line muted">{{ timeLine }}</span>
       </div>
-      <div class="pair">
-        <div class="field">
-          <label for="shift-start">Start</label>
-          <input id="shift-start" v-model="start" class="plain-input" type="time" />
-        </div>
-        <div class="field">
-          <label for="shift-end">End</label>
-          <input id="shift-end" v-model="end" class="plain-input" type="time" />
-        </div>
-        <div class="field">
-          <label for="shift-goal">Goal</label>
-          <input id="shift-goal" v-model="goal" type="number" min="0" inputmode="numeric" />
+      <div class="field">
+        <label>Goal</label>
+        <div class="pick-row">
+          <button
+            v-for="n in GOALS"
+            :key="n"
+            type="button"
+            class="pick"
+            :class="{ on: goal === String(n) }"
+            @click="pickGoal(n)"
+          >
+            {{ n }}
+          </button>
         </div>
       </div>
       <div class="field">
@@ -323,23 +414,51 @@ async function remove() {
   min-width: 0;
 }
 
-.pair {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.6rem;
+.pick-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
 }
 
-/* date and time inputs sit outside style.css's typed-field rule, so they get
- * the 16px floor here: under it iOS Safari zooms the page on focus. */
-.plain-input {
-  width: 100%;
-  min-height: 44px;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+.pick {
+  min-width: 46px;
+  min-height: 40px;
+  padding: 0.3rem 0.6rem;
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
   background: var(--surface);
   color: var(--text);
-  font-size: max(16px, calc(1rem * var(--ui-scale)));
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.site-picks {
+  margin-top: 0.45rem;
+}
+
+.site-picks .pick {
+  white-space: normal;
+  text-align: left;
+  border-radius: var(--radius);
+}
+
+.pick.on {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.pick:disabled {
+  opacity: 0.45;
+}
+
+.time-line {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
 }
 
 .form-error {

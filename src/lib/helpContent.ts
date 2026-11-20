@@ -361,7 +361,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'sites-scope',
-        body: 'Voter registration shifts: one site, one day, one crew.\nUpcoming: today onward. Past: earlier shifts and their counts.\nSites: every place the campaign works, with its all-time count.',
+        body: 'Today: the shifts planned for today. One site, one crew.\nSites: every place the campaign works, with its all-time count.',
       },
       {
         heading: 'Campaign mode',
@@ -370,7 +370,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       },
       {
         target: 'sites-today',
-        body: 'Today across every site.\nRegistered: new registrations. Updated: address or name changes.\nConversations: everybody talked to, whatever came of it.',
+        body: 'Today across every site.\nRegistered: new registrations. Updated: address or name changes.',
       },
       {
         target: 'sites-list',
