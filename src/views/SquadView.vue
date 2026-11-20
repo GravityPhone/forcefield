@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { knockLabel } from '@/lib/registration'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { RealtimeChannel } from '@supabase/supabase-js'
@@ -2998,7 +2999,7 @@ watch(
               <span class="feed-main">
                 <span class="feed-street">{{ prettyStreet(row.street) || 'Door' }}</span>
                 <span class="muted feed-meta">
-                  {{ OUTCOME_SHORT[row.outcome] }}<template v-if="row.person"> · {{ row.person }}</template>
+                  {{ knockLabel(row, OUTCOME_SHORT) }}<template v-if="row.person"> · {{ row.person }}</template>
                 </span>
               </span>
               <span class="muted feed-time">{{ feedStamp(row.occurredAt) }}</span>

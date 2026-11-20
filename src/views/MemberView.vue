@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { knockLabel } from '@/lib/registration'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import AppShell from '@/components/AppShell.vue'
@@ -189,7 +190,7 @@ function doorLine(v: VisitRow): string {
                   <template v-if="v.addresses?.city"> · {{ v.addresses.city }}</template>
                 </span>
                 <span class="muted visit-meta">
-                  {{ OUTCOME_LABELS[v.outcome] }}<template v-if="v.person?.name"> · {{ v.person.name }}</template>
+                  {{ knockLabel(v, OUTCOME_LABELS) }}<template v-if="v.person?.name"> · {{ v.person.name }}</template>
                   · {{ visitWhen(v.occurred_at) }}
                 </span>
               </span>

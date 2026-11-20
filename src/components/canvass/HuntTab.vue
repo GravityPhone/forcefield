@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { knockLabel, yesWord } from '@/lib/registration'
 import { computed, nextTick, onActivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { RealtimeChannel } from '@supabase/supabase-js'
@@ -1255,8 +1256,8 @@ function ratioFor(
   const summary = summaryFor(householdId ?? address?.id ?? null)
   const size = householdSize(address)
   const signed = summary?.signed_count ?? 0
-  if (size && size > 0) return `${signed}/${size} signed`
-  if (summary && summary.total_knocks > 0) return `${signed}/${summary.total_knocks} signed`
+  if (size && size > 0) return `${signed}/${size} ${yesWord()}`
+  if (summary && summary.total_knocks > 0) return `${signed}/${summary.total_knocks} ${yesWord()}`
   return null
 }
 
@@ -1325,10 +1326,10 @@ function statusLabelFor(addressId: string | null | undefined): string {
   if (!addressId) return 'Not knocked'
   const row = statusByHousehold.value.get(addressId)
   if (doorPartlySigned(row?.outcome, row?.signed_count, row?.person_count)) {
-    return 'Some signed, names left'
+    return `Some ${yesWord()}, names left`
   }
   const outcome = doorOutcomeFor(addressId)
-  return outcome ? OUTCOME_LABELS[outcome] : 'Not knocked'
+  return outcome ? knockLabel({ outcome }, OUTCOME_LABELS) : 'Not knocked'
 }
 
 const locatedStripe = computed(() => paintFor(locatedAddress.value?.id))

@@ -228,6 +228,8 @@ export interface KnockLog {
   /** Registration campaigns: what the conversation came to. Null or absent
    * on every petition knock. */
   reg_result?: 'registered' | 'updated' | 'already_registered' | 'not_eligible' | 'declined' | null
+  /** A skip that means "could not reach the door". Changes the label only. */
+  inaccessible?: boolean
   created_at: string
   /** Stamped by the DB at insert (20260714120000): which squad the canvasser
    * was crewing with that day, and the top-level turf the door sat in. Names
@@ -251,6 +253,8 @@ export interface NewKnock {
   /** Registration campaigns only: what the conversation came to. A petition
    * knock OMITS the key entirely, so its upsert never touches the column. */
   reg_result?: 'registered' | 'updated' | 'already_registered' | 'not_eligible' | 'declined' | null
+  /** A skip that means "could not reach the door". Changes the label only. */
+  inaccessible?: boolean
 }
 
 export interface HouseholdLatestKnock {

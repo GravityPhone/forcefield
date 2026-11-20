@@ -59,6 +59,8 @@ interface TalkState {
    * outcome alone can't say which. Only ever read alongside pendingOutcome,
    * which every door change clears, so a stale value here is inert. */
   pendingReg: RegResult | null
+  /** The active knock is a skip logged as Inaccessible. */
+  pendingInaccessible: boolean
   activeClientId: string | null
   /** Set when the person signing is registered at a DIFFERENT door than the
    * one loaded — a spouse, an adult kid, a new tenant, or somebody who just
@@ -136,6 +138,7 @@ export const useTalkStore = defineStore('talk', {
     notes: '',
     pendingOutcome: null,
     pendingReg: null,
+    pendingInaccessible: false,
     activeClientId: null,
     signerHome: null,
     awayVisitClientId: null,
@@ -378,14 +381,17 @@ export const useTalkStore = defineStore('talk', {
      * activeClientId); tapping with nothing active creates a new log. The
      * button row itself never hides — this only changes which outcome is
      * highlighted. */
-    async logOutcome(outcome: KnockOutcome, reg?: RegResult | null) {
+    async logOutcome(outcome: KnockOutcome, reg?: RegResult | null, inaccessible = false) {
       const auth = useAuthStore()
       if (!auth.profile) return
       // `reg` is undefined on a petition (the key is then left off the knock
       // entirely) and a result or an explicit null in registration mode, where
       // null matters: swapping Registered for Not Home has to clear it.
       const regMode = reg !== undefined
-      const sameReg = !regMode || this.pendingReg === reg
+      // Inaccessible is a skip under another name, so Skip and Inaccessible
+      // share an outcome: tapping one while the other is lit is a SWAP, not
+      // an undo, and the flag is what tells them apart.
+      const sameReg = (!regMode || this.pendingReg === reg) && this.pendingInaccessible === inaccessible
 
       if (this.pendingOutcome === outcome && sameReg && this.activeClientId) {
         const clientId = this.activeClientId
@@ -422,9 +428,13 @@ export const useTalkStore = defineStore('talk', {
         outcome,
         notes: this.notes.trim() || null,
         ...(regMode ? { reg_result: reg } : {}),
+        // Always sent: a swap from Inaccessible to Skip rewrites the same row
+        // and has to clear it.
+        inaccessible,
       }
       this.pendingOutcome = outcome
       this.pendingReg = reg ?? null
+      this.pendingInaccessible = inaccessible
       this.activeClientId = clientId
 
       // AND THE VISIT STILL RECORDS WHERE YOU STOOD. Without this row the door
@@ -462,7 +472,8 @@ export const useTalkStore = defineStore('talk', {
       if (
         this.activeClientId !== clientId ||
         this.pendingOutcome !== outcome ||
-        this.pendingReg !== (reg ?? null)
+        this.pendingReg !== (reg ?? null) ||
+        this.pendingInaccessible !== inaccessible
       )
         return
       // Optimistic: reflect the (possibly corrected) knock in this

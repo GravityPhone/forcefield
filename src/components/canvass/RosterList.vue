@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useTalkStore } from '@/stores/talk'
 import { OUTCOME_HEX, OUTCOME_INK, OUTCOME_SHORT } from '@/lib/outcomes'
+import { knockLabel } from '@/lib/registration'
 import type { KnockLog } from '@/types'
 
 const talk = useTalkStore()
@@ -33,7 +34,7 @@ function contactSummary(personId: string): string | null {
     month: 'short',
     day: 'numeric',
   })
-  return `${OUTCOME_SHORT[log.outcome]} · ${date}`
+  return `${knockLabel(log, OUTCOME_SHORT)} · ${date}`
 }
 
 /** The person's latest outcome floods their whole bubble — outcome hex for

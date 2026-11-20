@@ -67,6 +67,9 @@ export const REG_HEX = Object.fromEntries(REG_RESULTS.map((r) => [r.value, r.hex
   string
 >
 
+/** A skip that means the door could not be reached. Offered in both modes. */
+export const INACCESSIBLE_LABEL = 'Inaccessible'
+
 /** Talk's button grid in registration mode: the five results, then the three
  * visit outcomes that have nothing to do with registering anybody. */
 export const REG_DOOR_BUTTONS: {
@@ -75,21 +78,40 @@ export const REG_DOOR_BUTTONS: {
   hex: string
   outcome: KnockOutcome
   reg: RegResult | null
+  inaccessible?: boolean
 }[] = [
   ...REG_RESULTS.map((r) => ({ key: r.value, label: r.label, hex: r.hex, outcome: r.outcome, reg: r.value })),
   { key: 'maybe', label: 'Return', hex: '#e0a02e', outcome: 'maybe', reg: null },
   { key: 'not_home', label: 'Not Home', hex: '#8a90a5', outcome: 'not_home', reg: null },
   { key: 'skip', label: 'Skip', hex: '#d64545', outcome: 'skip', reg: null },
+  { key: 'hostile', label: 'Hostile', hex: '#d64545', outcome: 'hostile', reg: null },
+  { key: 'inaccessible', label: INACCESSIBLE_LABEL, hex: '#d64545', outcome: 'skip', reg: null, inaccessible: true },
 ]
 
 /** What to call a knock: its registration result when it carries one, else
  * the ordinary outcome label. In a registration campaign a door closed as
  * "Already registered" is stored as a skip, and must not read as "Skip". */
 export function knockLabel(
-  k: { outcome: KnockOutcome; reg_result?: RegResult | null },
+  k: { outcome: KnockOutcome; reg_result?: RegResult | null; inaccessible?: boolean | null },
   labels: Record<KnockOutcome, string>,
 ): string {
-  return k.reg_result ? REG_LABELS[k.reg_result] : labels[k.outcome]
+  if (k.reg_result) return REG_LABELS[k.reg_result]
+  if (k.inaccessible) return INACCESSIBLE_LABEL
+  // Doors are shared by every campaign, so a registration campaign opens
+  // doors whose history was written by a petition. That history is still
+  // true (somebody went, somebody said yes or no); what must not happen is a
+  // registration screen saying "Signed" (2026-11-19, user call). The yes and
+  // the no are the only two words that belong to the petition.
+  if (campaignMode.value === 'registration') {
+    if (k.outcome === 'signed') return REG_LABELS.registered
+    if (k.outcome === 'didnt_sign') return REG_LABELS.declined
+  }
+  return labels[k.outcome]
+}
+
+/** "signed" or "registered": the word for a door's yes count ("2/4 signed"). */
+export function yesWord(): string {
+  return campaignMode.value === 'registration' ? 'registered' : 'signed'
 }
 
 export function emptyCounts(): Record<RegResult, number> {

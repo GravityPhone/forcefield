@@ -4,7 +4,7 @@ import RosterList from './RosterList.vue'
 import OutcomeButtons from './OutcomeButtons.vue'
 import { computed } from 'vue'
 import { hapticTap } from '@/lib/native'
-import { knockLabel } from '@/lib/registration'
+import { knockLabel, yesWord } from '@/lib/registration'
 import { OUTCOME_DOOR_LEVEL, OUTCOME_HEX, OUTCOME_INK, OUTCOME_LABELS, OUTCOME_SHORT, PIN_DEFAULT_HEX, outcomeRowTint } from '@/lib/outcomes'
 import OutcomeSquare from './OutcomeSquare.vue'
 import DoorOddsPanel from '@/components/odds/DoorOddsPanel.vue'
@@ -56,14 +56,14 @@ const banner = computed<{ outcome: KnockOutcome; label: string } | null>(() => {
     talk.history.filter((h) => h.outcome === 'signed' && h.person_id).map((h) => h.person_id),
   )
   const total = talk.roster.length
-  if (total > 0 && signedIds.size >= total) return { outcome: 'signed', label: 'Everyone signed' }
+  if (total > 0 && signedIds.size >= total) return { outcome: 'signed', label: `Everyone ${yesWord()}` }
   const latest = talk.history[0]
   const householdLatest =
     latest && (OUTCOME_DOOR_LEVEL[latest.outcome] || !latest.person_id) ? latest.outcome : null
   if (householdLatest === 'skip' || householdLatest === 'hostile') {
     return { outcome: householdLatest, label: knockLabel(latest, OUTCOME_SHORT) }
   }
-  if (signedIds.size > 0) return { outcome: 'maybe', label: `${signedIds.size}/${total} signed` }
+  if (signedIds.size > 0) return { outcome: 'maybe', label: `${signedIds.size}/${total} ${yesWord()}` }
   if (householdLatest) return { outcome: householdLatest, label: knockLabel(latest, OUTCOME_SHORT) }
   return null
 })

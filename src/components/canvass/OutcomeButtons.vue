@@ -7,7 +7,7 @@ import { OUTCOMES } from '@/lib/outcomes'
 import { popIn } from '@/lib/motion'
 import { hapticNotify, hapticTap } from '@/lib/native'
 import { appointmentSettings, ensureAppointmentSettings } from '@/lib/appointments'
-import { REG_DOOR_BUTTONS, campaignMode, type RegResult } from '@/lib/registration'
+import { INACCESSIBLE_LABEL, REG_DOOR_BUTTONS, campaignMode, type RegResult } from '@/lib/registration'
 import { useTalkStore } from '@/stores/talk'
 import type { KnockOutcome } from '@/types'
 
@@ -33,17 +33,36 @@ const apptOpen = ref(false)
 // is, by definition, not in the voter file this roster came from.
 const regMode = computed(() => campaignMode.value === 'registration')
 
-function regActive(b: { outcome: KnockOutcome; reg: RegResult | null }): boolean {
-  return talk.pendingOutcome === b.outcome && talk.pendingReg === b.reg
+type RegButton = { outcome: KnockOutcome; reg: RegResult | null; inaccessible?: boolean }
+
+function regActive(b: RegButton): boolean {
+  return (
+    talk.pendingOutcome === b.outcome &&
+    talk.pendingReg === b.reg &&
+    talk.pendingInaccessible === !!b.inaccessible
+  )
 }
 
-function logReg(b: { outcome: KnockOutcome; reg: RegResult | null }) {
+function logReg(b: RegButton) {
   hapticTap('medium')
   const undoing = regActive(b) && !!talk.activeClientId
-  void talk.logOutcome(b.outcome, b.reg)
+  void talk.logOutcome(b.outcome, b.reg, !!b.inaccessible)
   if (!undoing && b.outcome === 'maybe' && appointmentSettings.value.enabled && talk.selectedAddress) {
     apptOpen.value = true
   }
+}
+
+// Inaccessible (2026-11-19, user call: "inaccessible and hostile as options
+// for both modes"): the door could not be reached. It is logged as a Skip
+// carrying a flag, so it sits outside OUTCOMES and gets its own button, and
+// Skip must not light up while it is the one that was pressed.
+function outcomeActive(value: KnockOutcome): boolean {
+  return talk.pendingOutcome === value && !talk.pendingInaccessible
+}
+const inaccessibleActive = computed(() => talk.pendingOutcome === 'skip' && talk.pendingInaccessible)
+function logInaccessible() {
+  hapticTap('medium')
+  void talk.logOutcome('skip', undefined, true)
 }
 
 function logOutcome(value: KnockOutcome) {
@@ -53,7 +72,7 @@ function logOutcome(value: KnockOutcome) {
   // must not open a booking sheet. Read here rather than after, because
   // logOutcome's write can be up to four seconds on bad signal and the sheet
   // has to appear under the thumb immediately.
-  const undoing = talk.pendingOutcome === value && !!talk.activeClientId
+  const undoing = outcomeActive(value) && !!talk.activeClientId
   void talk.logOutcome(value)
   if (!undoing && value === 'maybe' && appointmentSettings.value.enabled && talk.selectedAddress) {
     apptOpen.value = true
@@ -147,13 +166,23 @@ function disabledReason(requiresPerson: boolean): string {
         v-for="o in OUTCOMES"
         :key="o.value"
         class="btn outcome-btn"
-        :class="{ active: talk.pendingOutcome === o.value }"
+        :class="{ active: outcomeActive(o.value) }"
         :style="{ '--outcome-color': o.hex }"
         :disabled="disabledFor(o.requiresPerson)"
         :title="disabledFor(o.requiresPerson) ? disabledReason(o.requiresPerson) : undefined"
         @click="logOutcome(o.value)"
       >
         {{ o.label }}
+      </button>
+      <button
+        class="btn outcome-btn outcome-wide"
+        :class="{ active: inaccessibleActive }"
+        :style="{ '--outcome-color': '#d64545' }"
+        :disabled="!hasHousehold"
+        :title="!hasHousehold ? 'Open a door first' : undefined"
+        @click="logInaccessible"
+      >
+        {{ INACCESSIBLE_LABEL }}
       </button>
     </div>
     <!-- Not an outcome — a mark on the person, pressed if the conversation
@@ -249,6 +278,12 @@ function disabledReason(requiresPerson: boolean): string {
   color: var(--outcome-color);
   /* .btn is nowrap for one-word buttons; this one is a phrase and wraps. */
   white-space: normal;
+}
+
+/* The seventh button on a two-column grid takes the whole last row. */
+.outcome-wide {
+  grid-column: 1 / -1;
+  min-height: 52px;
 }
 
 .outcome-btn:active {
