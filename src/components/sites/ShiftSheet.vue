@@ -18,6 +18,8 @@ import type { ChatProfile } from '@/types'
 const props = defineProps<{
   /** The shift being changed, or null to plan a new one. */
   shift: SiteShift | null
+  /** Planning a new shift at a known place: its name, prefilled. */
+  presetSite?: string
 }>()
 const emit = defineEmits<{ saved: []; deleted: [] }>()
 const open = defineModel<boolean>('open', { required: true })
@@ -65,7 +67,7 @@ watch(open, (isOpen) => {
   deleteArmed.value = false
   void loadSites()
   const s = props.shift
-  name.value = s?.site.name ?? ''
+  name.value = s?.site.name ?? props.presetSite ?? ''
   address.value = s?.site.address ?? ''
   date.value = s?.shift_date ?? localToday()
   start.value = s?.start_time?.slice(0, 5) ?? ''

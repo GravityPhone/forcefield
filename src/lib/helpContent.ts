@@ -326,7 +326,7 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'sites-scope',
-        body: 'Voter registration shifts: one site, one day, one crew.\nUpcoming: today onward. Past: earlier shifts and their counts.',
+        body: 'Voter registration shifts: one site, one day, one crew.\nUpcoming: today onward. Past: earlier shifts and their counts.\nSites: every place the campaign works, with its all-time count.',
       },
       {
         target: 'sites-today',
@@ -338,7 +338,11 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
       },
       {
         target: 'sites-plan',
-        body: 'Managers only.\nAdd shift: site, date, hours, goal, crew.\nImport: paste rows from a spreadsheet or choose a .csv, then match its columns.',
+        body: 'Managers only.\nAdd shift: site, date, hours, goal, crew.\nAdd site (on the Sites chip): a place, before anyone is scheduled there.\nImport: paste rows from a spreadsheet or choose a .csv, then match its columns.',
+      },
+      {
+        target: 'sites-directory',
+        body: 'One row per place. The number is registered plus updated, all time.\nManagers: tap a site to rename it, add a shift there, or delete it.',
       },
       {
         heading: 'What is not stored',

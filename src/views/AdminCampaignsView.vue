@@ -108,6 +108,22 @@ function goalDraftFor(c: Campaign): string {
   return goalDrafts.value[c.id] ?? (c.signature_goal == null ? '' : String(c.signature_goal))
 }
 
+// Petition or voter registration: decides Talk's buttons and whether the
+// Sites screens exist for everyone working that campaign.
+const MODE_OPTIONS = [
+  { value: 'petition', label: 'Petition' },
+  { value: 'registration', label: 'Voter registration' },
+]
+async function saveMode(c: Campaign, mode: string) {
+  if (mode === c.mode) return
+  const { error: err } = await supabase.from('campaigns').update({ mode }).eq('id', c.id)
+  if (err) {
+    error.value = 'Could not save the campaign type. Try again.'
+    return
+  }
+  c.mode = mode as Campaign['mode']
+}
+
 async function saveGoal(c: Campaign) {
   const raw = goalDraftFor(c).trim()
   const goal = raw === '' ? null : Math.floor(Number(raw))
@@ -216,7 +232,16 @@ const campaignOptions = computed(() => [
                   : 'No teams assigned yet.' }}
               </p>
               <div class="goal-row">
-                <label :for="`goal-${c.id}`" class="goal-label">Signature goal</label>
+                <span class="goal-label">Type</span>
+                <AppSelect
+                  small
+                  :model-value="c.mode"
+                  :options="MODE_OPTIONS"
+                  @update:model-value="saveMode(c, $event)"
+                />
+              </div>
+              <div class="goal-row">
+                <label :for="`goal-${c.id}`" class="goal-label">{{ c.mode === 'registration' ? 'Registration goal' : 'Signature goal' }}</label>
                 <input
                   :id="`goal-${c.id}`"
                   class="goal-input"

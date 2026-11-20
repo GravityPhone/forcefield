@@ -15,7 +15,8 @@ import { whileOnPage } from '@/lib/pageState'
 import { onAppResume } from '@/lib/appResume'
 import { syncTurfCache } from '@/lib/offlineCache'
 import { appointmentSettings, ensureAppointmentSettings } from '@/lib/appointments'
-import { campaignMode, loadCampaignMode } from '@/lib/registration'
+import { MODE_LABELS, campaignMode, loadCampaignMode } from '@/lib/registration'
+import { loadCampaigns, myCampaigns, switchCampaign } from '@/lib/campaigns'
 import { helpFor, type HelpTopic } from '@/lib/helpContent'
 
 // Easter-egg mini game (25 rapid taps on your own name, /profile) — async so the
@@ -209,6 +210,26 @@ const DEMO_ROLES: { role: AppRole; blurb: string }[] = [
 ]
 
 const roleSwitchOpen = ref(false)
+
+// The same sheet switches CAMPAIGN (2026-11-19). A campaign is a petition or
+// a voter registration drive, and which one is active decides Talk's buttons
+// and whether the Sites screens exist, so in a demo this is the one control
+// that turns the app from one into the other. It lists only campaigns already
+// joined; joining a new one stays on the Campaign page.
+const sheetCampaigns = computed(() => myCampaigns())
+const campaignSwitching = ref('')
+watch(roleSwitchOpen, (isOpen) => {
+  if (isOpen) void loadCampaigns()
+})
+async function demoSwitchCampaign(id: string) {
+  if (campaignSwitching.value || id === auth.profile?.campaign_id) return
+  campaignSwitching.value = id
+  roleSwitchError.value = ''
+  const result = await switchCampaign(id)
+  campaignSwitching.value = ''
+  if (result.error) roleSwitchError.value = result.error
+  else roleSwitchOpen.value = false
+}
 const roleSwitching = ref(false)
 const roleSwitchError = ref('')
 const canDemoSwitch = computed(() => !!auth.profile && auth.profile.role !== 'admin')
@@ -599,6 +620,25 @@ onUnmounted(() => {
           <span class="role-option-blurb">{{ r.blurb }}</span>
         </button>
       </div>
+      <template v-if="sheetCampaigns.length > 1">
+        <h3 class="role-sheet-head">Campaign</h3>
+        <div class="role-options">
+          <button
+            v-for="c in sheetCampaigns"
+            :key="c.id"
+            class="role-option"
+            :class="{ current: auth.profile?.campaign_id === c.id }"
+            :disabled="!!campaignSwitching"
+            @click="demoSwitchCampaign(c.id)"
+          >
+            <span class="role-option-name">
+              {{ c.name }}
+              <span v-if="auth.profile?.campaign_id === c.id" class="role-current-tag">Current</span>
+            </span>
+            <span class="role-option-blurb">{{ MODE_LABELS[c.mode] }}</span>
+          </button>
+        </div>
+      </template>
       <p v-if="roleSwitchError" class="role-demo-error">{{ roleSwitchError }}</p>
       <p v-if="roleSwitching" class="role-demo-note">Switching…</p>
     </BottomSheet>
@@ -763,6 +803,12 @@ onUnmounted(() => {
   color: var(--text-muted);
   font-size: 0.92rem;
   line-height: 1.5;
+}
+
+.role-sheet-head {
+  margin: 1rem 0 0.4rem;
+  font-size: 0.95rem;
+  font-weight: 800;
 }
 
 .role-options {

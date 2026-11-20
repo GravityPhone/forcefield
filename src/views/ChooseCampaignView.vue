@@ -111,6 +111,7 @@ async function logOut() {
             <span class="camp-meta">
               <span>{{ c.members.toLocaleString() }} {{ c.members === 1 ? 'member' : 'members' }}</span>
               <span v-if="c.signature_goal">Goal {{ c.signature_goal.toLocaleString() }}</span>
+              <span v-if="c.mode === 'registration'">Voter registration</span>
             </span>
           </button>
         </li>

@@ -4,6 +4,7 @@ import AppSelect from '@/components/ui/AppSelect.vue'
 import CampaignPace from '@/components/CampaignPace.vue'
 import { supabase } from '@/lib/supabase'
 import { fetchDeadline } from '@/lib/pace'
+import { fetchRegistrationTotals, type RegistrationTotals } from '@/lib/registration'
 import type { Campaign } from '@/types'
 
 /** Whole-campaign totals. Everyone sees their own campaign; org admins get
@@ -30,6 +31,20 @@ const loading = ref(true)
  *  beat; the goal bar doesn't wait on it. */
 const deadline = ref<string | null>(null)
 
+/** Set when the campaign shown is a voter registration drive. Its progress is
+ * registrations, not signatures: get_campaign_stats only knows knocks, and
+ * "0 of 1,200 signatures" on a drive with 300 registrations reads as broken.
+ * Null for a petition, and null until the read lands. */
+const reg = ref<RegistrationTotals | null>(null)
+
+/** The number the goal bar fills with, and the word for it. */
+const made = computed(() => (reg.value ? reg.value.registered : (stats.value?.signatures ?? 0)))
+const madeNoun = computed(() => (reg.value ? 'registrations' : 'signatures'))
+const regRate = computed(() => {
+  if (!reg.value || !reg.value.talked) return null
+  return Math.round((reg.value.registered / reg.value.talked) * 100)
+})
+
 const signRate = computed(() => {
   if (!stats.value || !stats.value.doors) return null
   return Math.round((stats.value.signatures / stats.value.doors) * 100)
@@ -39,7 +54,7 @@ const signRate = computed(() => {
 const goalPct = computed(() => {
   const s = stats.value
   if (!s?.signature_goal) return null
-  return Math.min(100, (s.signatures / s.signature_goal) * 100)
+  return Math.min(100, (made.value / s.signature_goal) * 100)
 })
 
 const campaignOptions = computed(() =>
@@ -56,8 +71,18 @@ async function loadStats(cid: string | null) {
   deadline.value = null
   const { data } = await supabase.rpc('get_campaign_stats', { cid })
   if (seq !== loadSeq) return
-  loading.value = false
   const row = (data as CampaignStats[] | null)?.[0]
+  // Which kind of campaign, before anything paints: a petition card flashing
+  // up first and then turning into a registration card is worse than a beat
+  // more of Loading.
+  let totals: RegistrationTotals | null = null
+  if (row) {
+    const { data: c } = await supabase.from('campaigns').select('mode').eq('id', row.campaign_id).maybeSingle()
+    if (c?.mode === 'registration') totals = await fetchRegistrationTotals(row.campaign_id).catch(() => null)
+    if (seq !== loadSeq) return
+  }
+  reg.value = totals
+  loading.value = false
   // Which campaign the RPC actually resolved to — not `cid`, which is null
   // for everyone but an admin switching.
   if (row) {
@@ -122,15 +147,15 @@ onMounted(async () => {
       <div v-if="goalPct !== null && stats.signature_goal" class="goal">
         <div class="goal-labels">
           <span class="goal-line">
-            <strong>{{ stats.signatures.toLocaleString() }}</strong>
-            of {{ stats.signature_goal.toLocaleString() }} signatures
+            <strong>{{ made.toLocaleString() }}</strong>
+            of {{ stats.signature_goal.toLocaleString() }} {{ madeNoun }}
           </span>
           <span class="goal-pct">{{ Math.floor(goalPct) }}%</span>
         </div>
         <div
           class="goal-track"
           role="progressbar"
-          :aria-valuenow="stats.signatures"
+          :aria-valuenow="made"
           :aria-valuemin="0"
           :aria-valuemax="stats.signature_goal"
           aria-label="Signature goal progress"
@@ -141,12 +166,34 @@ onMounted(async () => {
              totals here — the line directly above is the totals. -->
         <CampaignPace
           class="goal-pace"
-          :signatures="stats.signatures"
+          :signatures="made"
           :goal="stats.signature_goal"
           :deadline="deadline"
         />
       </div>
-      <div class="tiles">
+      <div v-if="reg" class="tiles">
+        <div class="tile">
+          <span class="num">{{ reg.registered.toLocaleString() }}</span>
+          <span class="lbl">Registrations</span>
+          <span class="sub muted">+{{ reg.registered7d.toLocaleString() }} this week</span>
+        </div>
+        <div class="tile">
+          <span class="num">{{ reg.talked.toLocaleString() }}</span>
+          <span class="lbl">Conversations</span>
+          <span class="sub muted">sites and doors</span>
+        </div>
+        <div class="tile">
+          <span class="num">{{ regRate === null ? 'none yet' : `${regRate}%` }}</span>
+          <span class="lbl">Register rate</span>
+          <span class="sub muted">of conversations</span>
+        </div>
+        <div class="tile">
+          <span class="num">{{ reg.canvassers.toLocaleString() }}</span>
+          <span class="lbl">Canvassers</span>
+          <span class="sub muted">have logged one</span>
+        </div>
+      </div>
+      <div v-else class="tiles">
         <div class="tile">
           <span class="num">{{ stats.signatures.toLocaleString() }}</span>
           <span class="lbl">Signatures</span>

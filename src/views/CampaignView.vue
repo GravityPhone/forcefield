@@ -105,6 +105,7 @@ async function join(id: string) {
             @click="makeActive(c.id)"
           >
             {{ busy === c.id ? '…' : c.name }}
+            <span v-if="c.mode === 'registration'" class="chip-kind">Registration</span>
           </button>
           <button
             v-if="canJoinMore"
@@ -237,6 +238,13 @@ async function join(id: string) {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--accent-contrast);
+}
+
+.chip-kind {
+  margin-left: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  opacity: 0.75;
 }
 
 .chip-add {

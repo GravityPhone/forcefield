@@ -242,6 +242,98 @@ export async function fetchShift(id: string): Promise<SiteShift | null> {
   return shift
 }
 
+/** A place the campaign works, with what has come of it so far. */
+export interface SiteRow {
+  id: string
+  name: string
+  address: string | null
+  notes: string | null
+  /** Shifts ever planned here, past and future. */
+  shifts: number
+  counts: Record<RegResult, number>
+}
+
+/** Every site in the active campaign, by name, with all-time counts. This is
+ * the number a site plan exists to produce: which places are worth a crew. */
+export async function fetchSites(): Promise<SiteRow[]> {
+  const cid = useAuthStore().profile?.campaign_id
+  if (!cid) return []
+  const { data, error } = await supabase
+    .from('sites')
+    .select('id, name, address, notes, site_shifts(count)')
+    .eq('campaign_id', cid)
+    .order('name')
+  if (error) throw new Error(error.message)
+  const rows = ((data ?? []) as unknown as (Omit<SiteRow, 'shifts' | 'counts'> & {
+    site_shifts: { count: number }[]
+  })[]).map((s) => ({
+    id: s.id,
+    name: s.name,
+    address: s.address,
+    notes: s.notes,
+    shifts: s.site_shifts[0]?.count ?? 0,
+    counts: emptyCounts(),
+  }))
+  const byId = new Map(rows.map((s) => [s.id, s]))
+  const logs = await fetchAllRows<{ site_id: string; result: RegResult }>((from, to) =>
+    supabase
+      .from('registration_logs')
+      .select('site_id, result')
+      .eq('campaign_id', cid)
+      .not('site_id', 'is', null)
+      .order('id')
+      .range(from, to),
+  )
+  for (const l of logs) {
+    const s = byId.get(l.site_id)
+    if (s && l.result in s.counts) s.counts[l.result]++
+  }
+  return rows
+}
+
+export interface RegistrationTotals {
+  /** New registrations plus updates: the forms the campaign produced. */
+  registered: number
+  registered7d: number
+  /** Everybody talked to, at sites and at doors. */
+  talked: number
+  /** People who have logged at least one. */
+  canvassers: number
+}
+
+/** Whole-campaign registration numbers for the progress card. Counted by the
+ * database (head requests), so the size of the log never reaches the phone. */
+export async function fetchRegistrationTotals(campaignId: string): Promise<RegistrationTotals> {
+  const base = () =>
+    supabase.from('registration_logs').select('id', { count: 'exact', head: true }).eq('campaign_id', campaignId)
+  const weekAgo = new Date(Date.now() - 7 * 86_400_000).toISOString()
+  const made = ['registered', 'updated']
+  const [all, week, talked, people] = await Promise.all([
+    base().in('result', made),
+    base().in('result', made).gte('occurred_at', weekAgo),
+    base(),
+    fetchAllRows<{ canvasser_id: string }>((from, to) =>
+      supabase
+        .from('registration_logs')
+        .select('canvasser_id')
+        .eq('campaign_id', campaignId)
+        .order('id')
+        .range(from, to),
+    ).catch(() => [] as { canvasser_id: string }[]),
+  ])
+  return {
+    registered: all.count ?? 0,
+    registered7d: week.count ?? 0,
+    talked: talked.count ?? 0,
+    canvassers: new Set(people.map((p) => p.canvasser_id)).size,
+  }
+}
+
+export const MODE_LABELS: Record<CampaignMode, string> = {
+  petition: 'Petition',
+  registration: 'Voter registration',
+}
+
 // ------------------------------------------------------------------ display
 
 /** "9 AM" / "9:30 AM" from a Postgres time. */

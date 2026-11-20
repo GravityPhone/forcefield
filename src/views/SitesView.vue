@@ -12,6 +12,7 @@ import { computed, ref, watch } from 'vue'
 import AppShell from '@/components/AppShell.vue'
 import ShiftSheet from '@/components/sites/ShiftSheet.vue'
 import ImportSheet from '@/components/sites/ImportSheet.vue'
+import SiteSheet from '@/components/sites/SiteSheet.vue'
 import { avatarUrl } from '@/lib/avatars'
 import { localToday } from '@/lib/day'
 import { onPageEnter } from '@/lib/pageState'
@@ -19,10 +20,12 @@ import {
   campaignMode,
   conversations,
   fetchShifts,
+  fetchSites,
   loadCampaignMode,
   personName,
   shiftDayLabel,
   shiftTimeLabel,
+  type SiteRow,
   type SiteShift,
 } from '@/lib/registration'
 import { useAuthStore } from '@/stores/auth'
@@ -31,8 +34,12 @@ defineOptions({ name: 'SitesView' })
 
 const auth = useAuthStore()
 
-const scope = ref<'upcoming' | 'past'>('upcoming')
+// Two questions, one screen: WHEN (the schedule, upcoming or past) and WHERE
+// (the places themselves, with what each has produced). 'sites' is the where.
+type Scope = 'upcoming' | 'past' | 'sites'
+const scope = ref<Scope>('upcoming')
 const shifts = ref<SiteShift[]>([])
+const sites = ref<SiteRow[]>([])
 const loading = ref(true)
 const loadError = ref(false)
 const today = ref(localToday())
@@ -52,9 +59,15 @@ async function load() {
     return
   }
   try {
-    const rows = await fetchShifts(scope.value, today.value)
-    if (mine !== seq) return
-    shifts.value = rows
+    if (scope.value === 'sites') {
+      const rows = await fetchSites()
+      if (mine !== seq) return
+      sites.value = rows
+    } else {
+      const rows = await fetchShifts(scope.value, today.value)
+      if (mine !== seq) return
+      shifts.value = rows
+    }
     loadError.value = false
   } catch {
     if (mine === seq) loadError.value = true
@@ -68,7 +81,7 @@ onPageEnter(load)
 // or you switch campaigns), and the plan belongs to whichever it is now.
 watch(campaignMode, () => void load())
 
-function setScope(next: 'upcoming' | 'past') {
+function setScope(next: Scope) {
   if (scope.value === next) return
   scope.value = next
   loading.value = true
@@ -119,9 +132,38 @@ function crewLine(s: SiteShift): string {
 
 const sheetOpen = ref(false)
 const importOpen = ref(false)
+const presetSite = ref<string | undefined>(undefined)
 
-function addShift() {
+function addShift(siteName?: string) {
+  presetSite.value = siteName
   sheetOpen.value = true
+}
+
+// The site sheet: null = adding, a row = editing. Tracked by id so the
+// refetch after a save re-resolves to the fresh row.
+const siteSheetOpen = ref(false)
+const siteEditId = ref<string | null>(null)
+const siteEditing = computed(() => sites.value.find((s) => s.id === siteEditId.value) ?? null)
+
+function addSite() {
+  siteEditId.value = null
+  siteSheetOpen.value = true
+}
+
+function openSite(s: SiteRow) {
+  if (!canPlan.value) return
+  siteEditId.value = s.id
+  siteSheetOpen.value = true
+}
+
+/** A shift planned from a site's sheet lands on the schedule, so go there:
+ * staying on the list of places would hide the thing just made. */
+function onShiftSaved() {
+  if (scope.value === 'sites') {
+    scope.value = 'upcoming'
+    loading.value = true
+  }
+  void load()
 }
 </script>
 
@@ -140,10 +182,12 @@ function addShift() {
           <div class="chip-row" data-help="sites-scope">
             <button class="chip" :class="{ on: scope === 'upcoming' }" @click="setScope('upcoming')">Upcoming</button>
             <button class="chip" :class="{ on: scope === 'past' }" @click="setScope('past')">Past</button>
+            <button class="chip" :class="{ on: scope === 'sites' }" @click="setScope('sites')">Sites</button>
           </div>
           <div v-if="canPlan" class="plan-btns" data-help="sites-plan">
             <button class="btn btn-sm" @click="importOpen = true">Import</button>
-            <button class="btn btn-sm btn-primary" @click="addShift">+ Add shift</button>
+            <button v-if="scope === 'sites'" class="btn btn-sm btn-primary" @click="addSite">+ Add site</button>
+            <button v-else class="btn btn-sm btn-primary" @click="addShift()">+ Add shift</button>
           </div>
         </div>
 
@@ -163,11 +207,38 @@ function addShift() {
         </div>
 
         <p v-if="loadError" class="error-line">Couldn’t load the plan. Try again.</p>
+
+        <template v-else-if="scope === 'sites'">
+          <p v-if="!sites.length" class="muted">No sites yet.</p>
+          <ul v-else class="shift-list" data-help="sites-directory">
+            <li v-for="s in sites" :key="s.id">
+              <component
+                :is="canPlan ? 'button' : 'div'"
+                class="card shift site-row"
+                :type="canPlan ? 'button' : undefined"
+                @click="openSite(s)"
+              >
+                <span class="shift-main">
+                  <span class="shift-name">{{ s.name }}</span>
+                  <span v-if="s.address" class="shift-sub muted">{{ s.address }}</span>
+                  <span class="shift-sub">
+                    {{ s.shifts }} {{ s.shifts === 1 ? 'shift' : 'shifts' }} · {{ conversations(s.counts) }} conversations
+                  </span>
+                </span>
+                <span class="shift-side">
+                  <span class="shift-count">{{ s.counts.registered + s.counts.updated }}</span>
+                  <span class="side-lbl muted">registered</span>
+                </span>
+              </component>
+            </li>
+          </ul>
+        </template>
+
         <p v-else-if="!days.length" class="muted">
           {{ scope === 'upcoming' ? 'No shifts planned.' : 'No past shifts.' }}
         </p>
 
-        <section v-for="g in days" :key="g.date" class="day">
+        <section v-for="g in scope === 'sites' ? [] : days" :key="g.date" class="day">
           <h2 class="day-head">{{ g.label }}</h2>
           <ul class="shift-list" data-help="sites-list">
             <li v-for="s in g.shifts" :key="s.id">
@@ -203,7 +274,14 @@ function addShift() {
       </template>
     </div>
 
-    <ShiftSheet v-model:open="sheetOpen" :shift="null" @saved="load" />
+    <ShiftSheet v-model:open="sheetOpen" :shift="null" :preset-site="presetSite" @saved="onShiftSaved" />
+    <SiteSheet
+      v-model:open="siteSheetOpen"
+      :site="siteEditing"
+      @saved="load"
+      @deleted="load"
+      @add-shift="addShift"
+    />
     <ImportSheet v-model:open="importOpen" @imported="load" />
   </AppShell>
 </template>
@@ -226,6 +304,7 @@ function addShift() {
 .chip-row,
 .plan-btns {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.4rem;
 }
 
@@ -312,6 +391,24 @@ function addShift() {
  * does in words for anyone who can't see the stripe. */
 .shift.mine {
   border-left: 5px solid var(--accent);
+}
+
+/* A site row is a <button> for managers: undo the UA centering and nowrap,
+ * same lesson as the Squad tiles. */
+.site-row {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  white-space: normal;
+}
+
+button.site-row {
+  cursor: pointer;
+}
+
+.side-lbl {
+  font-size: 0.72rem;
+  font-weight: 600;
 }
 
 .shift-main {
