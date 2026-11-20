@@ -139,6 +139,14 @@ function addShift(siteName?: string) {
   sheetOpen.value = true
 }
 
+/** "+ Add a shift here" comes from INSIDE the site sheet, which is closing as
+ * this runs. Two sheets trading places in the same tick leaves the closing
+ * one's focus restore and scroll lock release landing on the opening one, so
+ * the shift form waits out the site sheet's 0.2s exit first. */
+function addShiftAfterSheet(siteName: string) {
+  setTimeout(() => addShift(siteName), 260)
+}
+
 // The site sheet: null = adding, a row = editing. Tracked by id so the
 // refetch after a save re-resolves to the fresh row.
 const siteSheetOpen = ref(false)
@@ -222,7 +230,7 @@ function onShiftSaved() {
                   <span class="shift-name">{{ s.name }}</span>
                   <span v-if="s.address" class="shift-sub muted">{{ s.address }}</span>
                   <span class="shift-sub">
-                    {{ s.shifts }} {{ s.shifts === 1 ? 'shift' : 'shifts' }} · {{ conversations(s.counts) }} conversations
+                    {{ s.shifts }} {{ s.shifts === 1 ? 'shift' : 'shifts' }} · {{ conversations(s.counts) }} {{ conversations(s.counts) === 1 ? 'conversation' : 'conversations' }}
                   </span>
                 </span>
                 <span class="shift-side">
@@ -280,7 +288,7 @@ function onShiftSaved() {
       :site="siteEditing"
       @saved="load"
       @deleted="load"
-      @add-shift="addShift"
+      @add-shift="addShiftAfterSheet"
     />
     <ImportSheet v-model:open="importOpen" @imported="load" />
   </AppShell>

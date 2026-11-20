@@ -175,7 +175,7 @@ function onDeleted() {
           <div class="progress-nums">
             <span class="big">{{ registered }}</span>
             <span class="progress-lbl">
-              registered<template v-if="shift.goal != null"> of {{ shift.goal }}</template> · {{ talked }} conversations
+              registered<template v-if="shift.goal != null"> of {{ shift.goal }}</template> · {{ talked }} {{ talked === 1 ? 'conversation' : 'conversations' }}
             </span>
           </div>
           <div v-if="shift.goal" class="bar" role="progressbar" :aria-valuenow="goalPct" aria-valuemin="0" aria-valuemax="100">

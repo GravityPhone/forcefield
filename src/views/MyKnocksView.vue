@@ -210,7 +210,7 @@ function onDeleted(id: string) {
           @click="outcomeFilter = o.value"
         >
           <span class="chip-dot" :style="{ background: o.hex }" aria-hidden="true"></span>
-          {{ o.short }}
+          {{ knockLabel({ outcome: o.value }, OUTCOME_LABELS) }}
           <span class="chip-count">{{ outcomeCounts[o.value] }}</span>
         </button>
       </div>

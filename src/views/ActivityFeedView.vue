@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import AppShell from '@/components/AppShell.vue'
 import CampaignPace from '@/components/CampaignPace.vue'
@@ -12,6 +12,7 @@ import { loadCampaignPace, type LoadedPace } from '@/lib/pace'
 import { onPageEnter, whileOnPage } from '@/lib/pageState'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { useAuthStore } from '@/stores/auth'
+import { REG_HEX, REG_LABELS, campaignMode, type RegResult } from '@/lib/registration'
 import { DEFAULT_FEED_SETTINGS } from '@/types'
 import type { ActivityFeedSettings, KnockOutcome } from '@/types'
 
@@ -99,6 +100,61 @@ const pace = ref<LoadedPace | null>(null)
 // today so milestone lines match the new steps. ---
 
 const auth = useAuthStore()
+
+// ---- Registration campaigns: the day's registrations, not the day's knocks.
+// A registration crew mostly works a table, and a tap there is not a knock,
+// so the knock feed below read "0 doors, 0 signatures" on a day with a
+// hundred conversations (2026-11-19). In registration mode this page lists
+// registration_logs instead: site taps and door registrations both land
+// there. Plain rows, newest first, no milestones; it re-reads on arrival and
+// every 30 seconds while on screen rather than holding a realtime channel.
+const regMode = computed(() => campaignMode.value === 'registration')
+interface RegRow {
+  id: string
+  result: RegResult
+  occurred_at: string
+  canvasser: { id: string; username: string; display_name: string | null; avatar: string | null } | null
+  site: { name: string } | null
+  household_id: string | null
+}
+const regRows = ref<RegRow[]>([])
+const regLoaded = ref(false)
+async function loadReg() {
+  const cid = auth.profile?.campaign_id
+  if (!regMode.value || !cid) return
+  const rows = await fetchAllRows<RegRow>((from, to) =>
+    supabase
+      .from('registration_logs')
+      .select('id, result, occurred_at, household_id, canvasser:profiles(id, username, display_name, avatar), site:sites(name)')
+      .eq('campaign_id', cid)
+      .gte('occurred_at', startOfLocalDayISO())
+      .order('occurred_at', { ascending: false })
+      .order('id')
+      .range(from, to) as never,
+  ).catch(() => null)
+  if (rows) regRows.value = rows
+  regLoaded.value = true
+}
+const regTalked = computed(() => regRows.value.length)
+const regGot = computed(() => regRows.value.filter((r) => r.result === 'registered' || r.result === 'updated').length)
+function regWhere(r: RegRow): string {
+  return r.site?.name ?? (r.household_id ? 'at a door' : '')
+}
+function regClock(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
+watch(regMode, () => void loadReg())
+let regTimer: ReturnType<typeof setInterval> | null = null
+whileOnPage(
+  () => {
+    void loadReg()
+    regTimer = setInterval(() => void loadReg(), 30_000)
+  },
+  () => {
+    if (regTimer) clearInterval(regTimer)
+    regTimer = null
+  },
+)
 const canManage =
   auth.profile?.role === 'admin' || auth.profile?.role === 'campaign_manager'
 const optionsOpen = ref(false)
@@ -463,6 +519,34 @@ function whoIdOf(item: FeedItem): string | null {
   <AppShell title="Team feed">
     <div class="stack">
       <!-- Today-so-far strip: the two numbers everyone actually asks about. -->
+      <template v-if="regMode">
+        <div class="card totals">
+          <span class="live-dot" aria-hidden="true"></span>
+          <span class="totals-text">
+            Today so far: <strong>{{ regGot }}</strong> registered ·
+            <strong>{{ regTalked }}</strong> conversation{{ regTalked === 1 ? '' : 's' }}
+          </span>
+        </div>
+        <p v-if="!regLoaded" class="muted state">Loading today's activity…</p>
+        <p v-else-if="!regRows.length" class="muted state">Nothing yet today.</p>
+        <ul v-else class="feed" data-help="feed-list">
+          <li v-for="r in regRows.slice(0, 200)" :key="r.id" class="row reg-row">
+            <span class="reg-dot" :style="{ background: REG_HEX[r.result] }" aria-hidden="true"></span>
+            <span class="row-main">
+              <span class="row-what">
+                <router-link
+                  v-if="r.canvasser"
+                  class="who-link"
+                  :to="{ name: 'member', params: { id: r.canvasser.id } }"
+                >{{ r.canvasser.display_name || r.canvasser.username }}</router-link>
+                : {{ REG_LABELS[r.result] }}
+              </span>
+              <span class="row-meta muted">{{ regWhere(r) }} · {{ regClock(r.occurred_at) }}</span>
+            </span>
+          </li>
+        </ul>
+      </template>
+      <template v-else>
       <div class="card totals">
         <span class="live-dot" aria-hidden="true"></span>
         <span class="totals-text">
@@ -611,6 +695,7 @@ function whoIdOf(item: FeedItem): string | null {
           </span>
         </li>
       </ul>
+      </template>
     </div>
   </AppShell>
 </template>
@@ -627,6 +712,17 @@ function whoIdOf(item: FeedItem): string | null {
   gap: 0.75rem;
   min-width: 0;
   max-width: 100%;
+}
+
+.reg-row {
+  align-items: center;
+}
+
+.reg-dot {
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 3px;
+  flex-shrink: 0;
 }
 
 .state {
