@@ -16,7 +16,7 @@ import { onAppResume } from '@/lib/appResume'
 import { syncTurfCache } from '@/lib/offlineCache'
 import { appointmentSettings, ensureAppointmentSettings } from '@/lib/appointments'
 import { MODE_LABELS, campaignMode, loadCampaignMode } from '@/lib/registration'
-import { loadCampaigns, myCampaigns, switchCampaign } from '@/lib/campaigns'
+import { campaignOptions, joinCampaign, loadCampaigns, myCampaignIds, myCampaigns, switchCampaign } from '@/lib/campaigns'
 import { helpFor, type HelpTopic } from '@/lib/helpContent'
 
 // Easter-egg mini game (25 rapid taps on your own name, /profile) — async so the
@@ -249,10 +249,16 @@ function lastByMode(): Record<string, string> {
 }
 const otherMode = computed(() => (campaignMode.value === 'registration' ? 'petition' : 'registration'))
 const otherModeCampaign = computed(() => {
-  const pool = sheetCampaigns.value.filter((c) => c.mode === otherMode.value)
+  // Every OPEN campaign of the other type, joined or not: the button joins
+  // on the way in (join_campaign is idempotent and sets the active pointer),
+  // so nobody has to be put on a roster before the button works. Ones already
+  // joined still win the pick.
+  const pool = campaignOptions.value.filter((c) => c.mode === otherMode.value)
   if (!pool.length) return null
   const last = lastByMode()[otherMode.value]
-  return pool.find((c) => c.id === last) ?? [...pool].sort((x, y) => y.members - x.members)[0]
+  const joined = pool.filter((c) => myCampaignIds.value.has(c.id))
+  const from = joined.length ? joined : pool
+  return pool.find((c) => c.id === last) ?? [...from].sort((x, y) => y.members - x.members)[0]
 })
 const modeFlipping = ref(false)
 const modeFlipError = ref('')
@@ -272,7 +278,7 @@ async function flipMode() {
         /* private window: the fallback pick still works */
       }
     }
-    const result = await switchCampaign(target.id)
+    const result = await joinCampaign(target.id)
     if (result.error) modeFlipError.value = result.error
     else {
       await loadCampaignMode(true)
@@ -543,7 +549,7 @@ onUnmounted(() => {
       <!-- Which kind of campaign the app is in, and the one button to the
            other. Inside the header so the chrome measurement includes it. -->
       <div
-        v-if="auth.profile && otherModeCampaign"
+        v-if="canDemoSwitch && otherModeCampaign"
         class="mode-strip"
         :class="`mode-${campaignMode}`"
         data-help="mode-switch"

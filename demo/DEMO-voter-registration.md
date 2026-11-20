@@ -12,7 +12,7 @@ Everything in the "Voter Registration Demo" campaign is sample data: the sites a
    node scripts/demo-registration.mjs
    ```
 
-   Run it the morning of the demo. It replaces the demo campaign, so anyone who was switched into it lands back on their other campaign and has to switch in again (step 2 below).
+   Run it the morning of the demo. It refreshes the sample data inside the campaign and leaves the campaign itself alone, so nobody is moved out of it.
 
 2. Put the sample plan in Google Sheets: new sheet, File > Import > Upload, choose `demo/site-plan-sample.csv` (the rebuild rewrites it with next week's dates). Then Share > General access > **Anyone with the link**, Viewer. Keep the sheet open in a tab and copy its link.
 

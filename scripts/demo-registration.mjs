@@ -13,7 +13,7 @@
 // description says sample data, and the sites are generic places rather than
 // real businesses (nobody gave permission to stand anywhere).
 //
-// Rebuilding is idempotent: it wipes its own campaign first. Run it again the
+// Rebuilding is idempotent: it keeps its campaign row and replaces the contents. Run it again the
 // morning of a demo so "today" has shifts and the past week has numbers; the
 // dates are computed from the clock, not stored.
 //
@@ -118,15 +118,31 @@ async function wipe() {
 }
 
 async function build() {
-  await wipe()
   const { today, minute: nowMin } = ohioNow()
   const rand = rng(20261119)
 
-  const [{ id: cid }] = await sql(`
-    insert into public.campaigns (name, description, mode, signature_goal, is_active)
-    values (${q(NAME)}, 'Sample data for the demo. None of these sites or numbers are real.', 'registration', ${GOAL}, true)
-    returning id
-  `)
+  // A rebuild KEEPS the campaign row and only replaces what is inside it.
+  // The id staying put is the point: everybody already switched into the
+  // campaign stays there, and nothing the app remembers about it goes stale.
+  // Deleting and recreating it used to drop people back onto their other
+  // campaign on the morning of a demo.
+  const existing = await sql(`select id from public.campaigns where name = ${q(NAME)} order by created_at limit 1`)
+  let cid = existing[0]?.id
+  if (cid) {
+    await sql(`
+      delete from public.registration_logs where campaign_id = ${q(cid)};
+      delete from public.site_plan_sources where campaign_id = ${q(cid)};
+      delete from public.sites where campaign_id = ${q(cid)};
+      update public.campaigns set mode = 'registration', is_active = true, signature_goal = ${GOAL} where id = ${q(cid)};
+    `)
+    console.log(`Refreshing ${NAME} (${cid}).`)
+  } else {
+    ;[{ id: cid }] = await sql(`
+      insert into public.campaigns (name, description, mode, signature_goal, is_active)
+      values (${q(NAME)}, 'Sample data for the demo. None of these sites or numbers are real.', 'registration', ${GOAL}, true)
+      returning id
+    `)
+  }
   await sql(`
     insert into public.campaign_members (campaign_id, user_id)
     select distinct ${q(cid)}::uuid, m.user_id from public.campaign_members m
