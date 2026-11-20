@@ -13,7 +13,7 @@ import { supabase } from '@/lib/supabase'
 import { localToday } from '@/lib/day'
 import { useAuthStore } from '@/stores/auth'
 import { useSquadsStore } from '@/stores/squads'
-import { clockLabel, type SiteShift } from '@/lib/registration'
+import { clockLabel, shiftDayLabel, type SiteShift } from '@/lib/registration'
 import type { ChatProfile } from '@/types'
 
 const props = defineProps<{
@@ -21,6 +21,9 @@ const props = defineProps<{
   shift: SiteShift | null
   /** Planning a new shift at a known place: its name, prefilled. */
   presetSite?: string
+  /** The day a NEW shift is for (YYYY-MM-DD): the one picked on the plan.
+   * The form asks no date question; a shift being changed keeps its own. */
+  day?: string
 }>()
 const emit = defineEmits<{ saved: []; deleted: [] }>()
 const open = defineModel<boolean>('open', { required: true })
@@ -142,7 +145,7 @@ watch(open, (isOpen) => {
   const s = props.shift
   name.value = s?.site.name ?? props.presetSite ?? ''
   address.value = s?.site.address ?? ''
-  date.value = s?.shift_date ?? localToday()
+  date.value = s?.shift_date ?? props.day ?? localToday()
   start.value = s?.start_time?.slice(0, 5) ?? ''
   end.value = s?.end_time?.slice(0, 5) ?? ''
   goal.value = s?.goal == null ? '' : String(s.goal)
@@ -259,7 +262,7 @@ async function remove() {
 </script>
 
 <template>
-  <BottomSheet v-model:open="open" :title="shift ? 'Edit shift' : 'Add shift'">
+  <BottomSheet v-model:open="open" :title="`${shift ? 'Edit shift' : 'Add shift'}, ${shiftDayLabel(date, localToday())}`">
     <div class="shift-form">
       <div class="field">
         <label for="shift-site">Site</label>

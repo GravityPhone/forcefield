@@ -361,12 +361,17 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
     sections: [
       {
         target: 'sites-scope',
-        body: 'Today: the shifts planned for today. One site, one crew.\nSites: every place the campaign works, with its all-time count.',
+        body: 'Shifts: the plan for one day. One site, one crew.\nSites: every place the campaign works, with its all-time count.',
       },
       {
         heading: 'Campaign mode',
         target: 'mode-switch',
         body: 'Petition mode: signatures.\nRegistration mode: voter registration buttons and the Sites screens.\nThe button switches to your campaign of the other kind. Same doors either way.',
+      },
+      {
+        heading: 'Days',
+        target: 'sites-days',
+        body: 'Opens on today. Tap a day to see its shifts. Swipe the row for later days.\nA dashed day has nothing planned.\nAdd shift plans for the day showing.',
       },
       {
         target: 'sites-today',
