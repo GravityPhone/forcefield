@@ -2,7 +2,7 @@
 
 A walkthrough for showing registration mode. About five minutes.
 
-Everything in the "Voter Registration Demo" campaign is sample data: the sites are generic places, the crews are simulated staff, and the numbers are generated.
+Everything in the "Voter Registration Demo" campaign is sample data: the sites are generic places, the numbers are generated, and the crew is its own set of made-up staff (the Registration Crew team), separate from the petition's.
 
 ## Before the meeting
 
@@ -38,13 +38,14 @@ The strip turns green and says **Registration mode**, and the buttons on Talk ch
 - Below is the schedule by day: site, hours, crew, and registrations against the goal.
 - **Past** shows earlier shifts and what each one produced.
 
-### 4. Work a shift
+### 4. Work a site
 
-Tap one of today's shifts. There is no map on this screen.
+Open **Canvass** and tap the **Site** tab. It only exists in registration mode. There are no doors, notes or next house here.
 
-- Tap **Registered** two or three times, then **Declined**, then **Already registered**. Each tap is one person talked to.
-- Tap **Undo my last tap**.
-- The count and the goal bar move as you tap.
+- The picker at the top lists today's shifts, then every other site.
+- Type a name in **Look up a name**. Tap someone on the roll: the choices are Already registered, Updated and Declined.
+- Type a name that is not there and tap **Not on the roll**: the choices are Registered, Not eligible and Declined.
+- Each one lands in **Today here**. **Undo my last** takes back your most recent.
 
 ### 5. Which sites are worth a crew
 
@@ -74,9 +75,11 @@ Open **Canvass**, search a street and open a house. The buttons are now Register
 
 Open **Analytics**. In registration mode it counts registrations, not signatures.
 
-- **Overview**: registrations per day, the registration rate, and what every conversation turned into.
-- **Sites**: registrations, registration rate and registrations per shift for each place.
-- **People**: the same by person.
+- **Overview**: registrations, split into new and updated, and registrations per day.
+- **Sites**: registrations and registrations per shift for each place.
+- **People**: registrations by person and per day out.
+
+It counts registrations only. People who were already registered, not eligible or declined are not counted here.
 
 ### 10. Progress, and back to petition
 
@@ -92,7 +95,8 @@ Open **Analytics**. In registration mode it counts registrations, not signatures
 
 ## Not built yet
 
-- A second registration at the same door has no count (sites count every tap).
+- A second registration at the same door has no count.
+- Map pin colors still reflect every campaign's visits. Talk's visit list is per campaign.
 - Site taps need signal; they are not queued offline.
 - No export of the registration numbers. Analytics shows them by day, by site and by person.
 

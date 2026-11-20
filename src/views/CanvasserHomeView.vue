@@ -3,13 +3,23 @@ export default { name: 'CanvasserHomeView' }
 </script>
 
 <script setup lang="ts">
-import { onActivated } from 'vue'
+import { computed, onActivated, watch } from 'vue'
 import AppShell from '@/components/AppShell.vue'
 import TalkTab from '@/components/canvass/TalkTab.vue'
 import HuntTab from '@/components/canvass/HuntTab.vue'
+import SiteTab from '@/components/canvass/SiteTab.vue'
+import { campaignMode } from '@/lib/registration'
 import { useTalkStore } from '@/stores/talk'
 
 const talk = useTalkStore()
+
+// A registration campaign gets a third tab: Site, for working a table or a
+// doorway rather than a street. A petition never shows it, and flipping back
+// to petition while standing on it lands on Talk.
+const regMode = computed(() => campaignMode.value === 'registration')
+watch(regMode, (reg) => {
+  if (!reg && talk.activeTab === 'site') talk.activeTab = 'talk'
+})
 
 // This view is kept alive (App.vue), so coming back from the Squad page
 // doesn't remount anything — including the one-time "which turf is mine"
@@ -41,6 +51,17 @@ onActivated(() => {
       >
         Map
       </button>
+      <button
+        v-if="regMode"
+        class="tab"
+        role="tab"
+        data-help="canvass-site-tab"
+        :aria-selected="talk.activeTab === 'site'"
+        :class="{ active: talk.activeTab === 'site' }"
+        @click="talk.activeTab = 'site'"
+      >
+        Site
+      </button>
     </div>
 
     <!-- v-show (not v-if) so Hunt's map backgrounds instead of unmounting
@@ -50,6 +71,9 @@ onActivated(() => {
     </div>
     <div v-show="talk.activeTab === 'hunt'">
       <HuntTab />
+    </div>
+    <div v-if="regMode" v-show="talk.activeTab === 'site'">
+      <SiteTab :active="talk.activeTab === 'site'" />
     </div>
   </AppShell>
 </template>

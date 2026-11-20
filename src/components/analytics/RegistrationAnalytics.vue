@@ -12,10 +12,13 @@
 // Three tabs: Overview, Sites (which places are worth a crew, the question a
 // site plan exists to answer) and People.
 //
-// Words, the same ones the Sites screens use:
-//   Conversation: one person talked to, whatever came of it.
-//   Registration: Registered or Updated, the forms the campaign produced.
-//   Registration rate: registrations ÷ conversations.
+// REGISTRATIONS ONLY (same day, second user call: "we're not tracking
+// conversations… people just go to sites and just kind of randomly try to ask
+// people. And then they look up their name"). The log also holds Already
+// registered, Not eligible and Declined, but those are whatever happened to
+// get written down, not a count of everybody approached, so a rate taken over
+// them would be a number about note-taking. This page reads only the two
+// results that are forms: Registered (new) and Updated.
 import { computed, ref, shallowRef, watch } from 'vue'
 import ChartCard from '@/components/charts/ChartCard.vue'
 import BarChart from '@/components/charts/BarChart.vue'
@@ -26,8 +29,7 @@ import StackedBarChart from '@/components/charts/StackedBarChart.vue'
 import { fetchAllRows, supabase } from '@/lib/supabase'
 import { onPageEnter } from '@/lib/pageState'
 import { useChartPalette, fmtCount, fmtPct } from '@/lib/chartTheme'
-import { wilson } from '@/lib/stats'
-import { REG_HEX, REG_LABELS, type RegResult } from '@/lib/registration'
+import { REG_HEX, type RegResult } from '@/lib/registration'
 import { useAuthStore } from '@/stores/auth'
 
 export type RegTab = 'overview' | 'sites' | 'people'
@@ -54,8 +56,8 @@ interface Log {
   site: string | null
   shift: string | null
   door: boolean
-  result: RegResult
-  made: boolean
+  /** A new registration; false is an update to an existing one. */
+  fresh: boolean
 }
 
 const loading = ref(true)
@@ -90,6 +92,7 @@ async function load() {
           .from('registration_logs')
           .select('canvasser_id, site_id, shift_id, household_id, result, occurred_at')
           .eq('campaign_id', cid)
+          .in('result', ['registered', 'updated'])
           .order('id')
           .range(from, to),
       ),
@@ -122,8 +125,7 @@ async function load() {
         site: r.site_id,
         shift: r.shift_id,
         door: !r.site_id && !!r.household_id,
-        result: r.result,
-        made: r.result === 'registered' || r.result === 'updated',
+        fresh: r.result === 'registered',
       }
     })
     loadError.value = ''
@@ -196,37 +198,21 @@ function dayLabel(s: string): string {
 
 // --------------------------------------------------------------- overview
 
-const madeCount = (list: Log[]) => list.reduce((n, l) => n + (l.made ? 1 : 0), 0)
-
 const tiles = computed(() => {
   const f = shown.value
-  const made = madeCount(f)
+  const fresh = f.filter((l) => l.fresh).length
   const days = new Set(f.map((l) => l.day)).size
-  const atSites = f.filter((l) => l.site)
-  const atDoors = f.filter((l) => l.door)
   return [
-    { label: 'Registrations', value: fmtCount(made), hint: 'registered or updated' },
+    { label: 'Registrations', value: fmtCount(f.length), hint: 'new and updated' },
+    { label: 'New', value: fmtCount(fresh), hint: 'registered for the first time' },
+    { label: 'Updated', value: fmtCount(f.length - fresh), hint: 'name or address changed' },
     {
       label: 'Registrations a day',
-      value: days ? (made / days).toFixed(1) : '0',
+      value: days ? (f.length / days).toFixed(1) : '0',
       hint: days ? `over ${days} ${days === 1 ? 'day' : 'days'} worked` : undefined,
     },
-    { label: 'Conversations', value: fmtCount(f.length), hint: 'people talked to' },
-    {
-      label: 'Registration rate',
-      value: f.length ? fmtPct(made / f.length, 1) : 'none yet',
-      hint: 'of conversations, they registered',
-    },
-    {
-      label: 'At sites',
-      value: fmtCount(madeCount(atSites)),
-      hint: `from ${fmtCount(atSites.length)} conversations`,
-    },
-    {
-      label: 'At doors',
-      value: fmtCount(madeCount(atDoors)),
-      hint: `from ${fmtCount(atDoors.length)} conversations`,
-    },
+    { label: 'At sites', value: fmtCount(f.filter((l) => l.site).length) },
+    { label: 'At doors', value: fmtCount(f.filter((l) => l.door).length) },
   ]
 })
 
@@ -235,7 +221,7 @@ const tiles = computed(() => {
  * average is a fact about that day, not about which chip is selected). */
 const madeByDay = computed(() => {
   const m = new Map<string, number>()
-  for (const l of logs.value) if (l.made) m.set(l.day, (m.get(l.day) ?? 0) + 1)
+  for (const l of logs.value) m.set(l.day, (m.get(l.day) ?? 0) + 1)
   return m
 })
 const firstDay = computed(() => {
@@ -264,30 +250,19 @@ const trendRows = computed(() =>
   axis.value.map((d, i) => [d, perDay.value[i], avg7.value[i] == null ? '' : avg7.value[i]!.toFixed(1)]),
 )
 
-/** Results in stack order: what the campaign produced at the bottom. */
-const RESULT_ORDER: RegResult[] = ['registered', 'updated', 'declined', 'already_registered', 'not_eligible']
-
-const resultStack = computed(() => {
+/** New against updated, each day. */
+const kindStack = computed(() => {
   const idx = new Map(axis.value.map((d, i) => [d, i]))
-  const per = new Map(RESULT_ORDER.map((r) => [r, new Array<number>(axis.value.length).fill(0)]))
+  const fresh = new Array<number>(axis.value.length).fill(0)
+  const updated = new Array<number>(axis.value.length).fill(0)
   for (const l of shown.value) {
     const i = idx.get(l.day)
-    if (i != null) per.get(l.result)![i]++
+    if (i != null) (l.fresh ? fresh : updated)[i]++
   }
-  return RESULT_ORDER.map((r) => ({ name: REG_LABELS[r], color: REG_HEX[r], values: per.get(r)! }))
-})
-
-const resultTotals = computed<BarItem[]>(() => {
-  const f = shown.value
-  return RESULT_ORDER.map((r) => {
-    const n = f.filter((l) => l.result === r).length
-    return {
-      label: REG_LABELS[r],
-      value: n,
-      color: REG_HEX[r],
-      detail: f.length ? `${fmtPct(n / f.length, 1)} of conversations` : undefined,
-    }
-  })
+  return [
+    { name: 'New', color: REG_HEX.registered, values: fresh },
+    { name: 'Updated', color: REG_HEX.updated, values: updated },
+  ]
 })
 
 // ------------------------------------------------------------------ groups
@@ -295,8 +270,8 @@ const resultTotals = computed<BarItem[]>(() => {
 interface Group {
   key: string
   label: string
-  talked: number
-  made: number
+  total: number
+  fresh: number
   shifts: Set<string>
   days: Set<string>
 }
@@ -308,44 +283,23 @@ function groupBy(list: Log[], keyOf: (l: Log) => string | null, nameOf: (k: stri
     if (!k) continue
     let g = m.get(k)
     if (!g) {
-      g = { key: k, label: nameOf(k), talked: 0, made: 0, shifts: new Set(), days: new Set() }
+      g = { key: k, label: nameOf(k), total: 0, fresh: 0, shifts: new Set(), days: new Set() }
       m.set(k, g)
     }
-    g.talked++
-    if (l.made) g.made++
+    g.total++
+    if (l.fresh) g.fresh++
     if (l.shift) g.shifts.add(l.shift)
     g.days.add(l.day)
   }
-  return [...m.values()].sort((a, b) => b.made - a.made || b.talked - a.talked)
+  return [...m.values()].sort((a, b) => b.total - a.total)
 }
-
-const overallRate = computed(() => (shown.value.length ? madeCount(shown.value) / shown.value.length : 0))
 
 const countItems = (groups: Group[]): BarItem[] =>
   groups.map((g) => ({
     label: g.label,
-    value: g.made,
-    detail: `from ${fmtCount(g.talked)} ${g.talked === 1 ? 'conversation' : 'conversations'}`,
-    note: `Registration rate ${fmtPct(g.talked ? g.made / g.talked : 0, 1)}`,
+    value: g.total,
+    detail: `${fmtCount(g.fresh)} new, ${fmtCount(g.total - g.fresh)} updated`,
   }))
-
-/** A rate on three conversations is noise, so it needs a few behind it. */
-const MIN_TALKED = 10
-const rateItems = (groups: Group[]): BarItem[] =>
-  groups
-    .filter((g) => g.talked >= MIN_TALKED)
-    .map((g) => {
-      const w = wilson(g.made, g.talked)
-      return {
-        label: g.label,
-        value: w.p,
-        lo: w.lo,
-        hi: w.hi,
-        detail: `${fmtCount(g.made)} of ${fmtCount(g.talked)} conversations`,
-        note: `Likely between ${fmtPct(w.lo)} and ${fmtPct(w.hi)}`,
-      }
-    })
-    .sort((a, b) => b.value - a.value)
 
 // ------------------------------------------------------------------- sites
 
@@ -357,26 +311,25 @@ const siteGroups = computed(() =>
   ),
 )
 const bySite = computed(() => countItems(siteGroups.value))
-const rateBySite = computed(() => rateItems(siteGroups.value))
 const perShift = computed<BarItem[]>(() =>
   siteGroups.value
     .filter((g) => g.shifts.size)
     .map((g) => ({
       label: g.label,
-      value: g.made / g.shifts.size,
-      detail: `${fmtCount(g.made)} over ${g.shifts.size} ${g.shifts.size === 1 ? 'shift' : 'shifts'}`,
+      value: g.total / g.shifts.size,
+      detail: `${fmtCount(g.total)} over ${g.shifts.size} ${g.shifts.size === 1 ? 'shift' : 'shifts'}`,
     }))
     .sort((a, b) => b.value - a.value),
 )
-const SITE_COLUMNS = ['Site', 'Shifts', 'Conversations', 'Registrations', 'Rate', 'Per shift']
+const SITE_COLUMNS = ['Site', 'Shifts', 'New', 'Updated', 'Total', 'Per shift']
 const siteRows = computed(() =>
   siteGroups.value.map((g) => [
     g.label,
     g.shifts.size,
-    g.talked,
-    g.made,
-    g.talked ? fmtPct(g.made / g.talked, 1) : '',
-    g.shifts.size ? (g.made / g.shifts.size).toFixed(1) : '',
+    g.fresh,
+    g.total - g.fresh,
+    g.total,
+    g.shifts.size ? (g.total / g.shifts.size).toFixed(1) : '',
   ]),
 )
 
@@ -390,16 +343,18 @@ const peopleGroups = computed(() =>
   ),
 )
 const byPerson = computed(() => countItems(peopleGroups.value))
-const rateByPerson = computed(() => rateItems(peopleGroups.value))
-const PEOPLE_COLUMNS = ['Person', 'Days out', 'Conversations', 'Registrations', 'Rate']
+const perDayOut = computed<BarItem[]>(() =>
+  peopleGroups.value
+    .map((g) => ({
+      label: g.label,
+      value: g.total / g.days.size,
+      detail: `${fmtCount(g.total)} over ${g.days.size} ${g.days.size === 1 ? 'day' : 'days'} out`,
+    }))
+    .sort((a, b) => b.value - a.value),
+)
+const PEOPLE_COLUMNS = ['Person', 'Days out', 'New', 'Updated', 'Total']
 const peopleRows = computed(() =>
-  peopleGroups.value.map((g) => [
-    g.label,
-    g.days.size,
-    g.talked,
-    g.made,
-    g.talked ? fmtPct(g.made / g.talked, 1) : '',
-  ]),
+  peopleGroups.value.map((g) => [g.label, g.days.size, g.fresh, g.total - g.fresh, g.total]),
 )
 </script>
 
@@ -441,7 +396,7 @@ const peopleRows = computed(() =>
           </button>
         </div>
         <span class="scope-right muted">
-          {{ fmtCount(shown.length) }} {{ shown.length === 1 ? 'conversation' : 'conversations' }}
+          {{ fmtCount(shown.length) }} {{ shown.length === 1 ? 'registration' : 'registrations' }}
         </span>
       </div>
 
@@ -464,29 +419,19 @@ const peopleRows = computed(() =>
           <TimeSeriesChart :labels="axis.map(dayLabel)" :series="trend" />
         </ChartCard>
 
-        <div class="two-col">
-          <ChartCard
-            title="What happened"
-            subtitle="conversations each day, by result"
-            :columns="['Day', ...resultStack.map((s) => s.name)]"
-            :rows="axis.map((d, i) => [d, ...resultStack.map((s) => s.values[i])])"
-          >
-            <StackedBarChart :labels="axis.map(dayLabel)" :series="resultStack" :height="230" />
-          </ChartCard>
-
-          <ChartCard
-            title="Results in total"
-            :columns="['Result', 'Conversations', 'Share']"
-            :rows="resultTotals.map((i) => [i.label, i.value, i.detail ?? ''])"
-          >
-            <BarChart :items="resultTotals" :color="cat[0]" measure="Conversations" />
-          </ChartCard>
-        </div>
+        <ChartCard
+          title="New and updated"
+          subtitle="registrations each day"
+          :columns="['Day', 'New', 'Updated']"
+          :rows="axis.map((d, i) => [d, kindStack[0].values[i], kindStack[1].values[i]])"
+        >
+          <StackedBarChart :labels="axis.map(dayLabel)" :series="kindStack" :height="230" />
+        </ChartCard>
       </template>
 
       <!-- ============================== Sites -->
       <template v-else-if="props.tab === 'sites'">
-        <p v-if="!siteGroups.length" class="card center muted">No site conversations in this window.</p>
+        <p v-if="!siteGroups.length" class="card center muted">No site registrations in this window.</p>
         <template v-else>
           <div class="two-col">
             <ChartCard
@@ -499,30 +444,15 @@ const peopleRows = computed(() =>
             </ChartCard>
 
             <ChartCard
-              title="Registration rate by site"
-              data-help="reg-site-rate"
-              subtitle="registrations ÷ conversations"
-              :columns="['Site', 'Rate', 'Detail']"
-              :rows="rateBySite.map((i) => [i.label, fmtPct(i.value, 1), i.detail ?? ''])"
+              title="Registrations per shift"
+              data-help="reg-per-shift"
+              subtitle="registrations ÷ shifts worked"
+              :columns="['Site', 'Per shift', 'Detail']"
+              :rows="perShift.map((i) => [i.label, i.value.toFixed(1), i.detail ?? ''])"
             >
-              <BarChart
-                :items="rateBySite"
-                :color="cat[0]"
-                percent
-                measure="Registration rate"
-                :ref-value="overallRate"
-              />
+              <BarChart :items="perShift" :color="cat[0]" measure="Registrations per shift" />
             </ChartCard>
           </div>
-
-          <ChartCard
-            title="Registrations per shift"
-            subtitle="registrations ÷ shifts worked"
-            :columns="['Site', 'Per shift', 'Detail']"
-            :rows="perShift.map((i) => [i.label, i.value.toFixed(1), i.detail ?? ''])"
-          >
-            <BarChart :items="perShift" :color="cat[0]" measure="Registrations per shift" />
-          </ChartCard>
 
           <ChartCard title="Every site" table-only :columns="SITE_COLUMNS" :rows="siteRows" />
         </template>
@@ -530,7 +460,7 @@ const peopleRows = computed(() =>
 
       <!-- ============================== People -->
       <template v-else>
-        <p v-if="!peopleGroups.length" class="card center muted">No conversations in this window.</p>
+        <p v-if="!peopleGroups.length" class="card center muted">No registrations in this window.</p>
         <template v-else>
           <div class="two-col">
             <ChartCard
@@ -543,18 +473,12 @@ const peopleRows = computed(() =>
             </ChartCard>
 
             <ChartCard
-              title="Registration rate by person"
-              subtitle="registrations ÷ conversations"
-              :columns="['Person', 'Rate', 'Detail']"
-              :rows="rateByPerson.map((i) => [i.label, fmtPct(i.value, 1), i.detail ?? ''])"
+              title="Registrations per day out"
+              subtitle="registrations ÷ days worked"
+              :columns="['Person', 'Per day out', 'Detail']"
+              :rows="perDayOut.map((i) => [i.label, i.value.toFixed(1), i.detail ?? ''])"
             >
-              <BarChart
-                :items="rateByPerson"
-                :color="cat[0]"
-                percent
-                measure="Registration rate"
-                :ref-value="overallRate"
-              />
+              <BarChart :items="perDayOut" :color="cat[0]" measure="Registrations per day out" />
             </ChartCard>
           </div>
 

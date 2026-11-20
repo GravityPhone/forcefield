@@ -83,6 +83,26 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'Registration campaigns swap the grid.\nRegistered, Updated, Already registered, Not eligible, Declined: one tap each, no name needed.\nInaccessible: could not reach the door. Both modes.',
       },
       {
+        heading: 'Site',
+        target: 'canvass-site-tab',
+        body: 'Registration campaigns only. For working a table or a doorway, not a street.\nNo doors, no notes, no next house.',
+      },
+      {
+        heading: 'Which site',
+        target: 'site-pick',
+        body: 'Today\'s shifts first, yours at the top. Then every other site.\nThe count is everybody\'s registrations here today.',
+      },
+      {
+        heading: 'Look up a name',
+        target: 'site-search',
+        body: 'Type a name. Tap the person if they are on the roll: Already registered, Updated or Declined.\nNot on the roll: Registered, Not eligible or Declined.\nNothing from the form is stored.',
+      },
+      {
+        heading: 'Today here',
+        target: 'site-today',
+        body: 'Everything logged at this site today, newest first.\nUndo my last takes back your own most recent one.',
+      },
+      {
         heading: 'Wants to volunteer',
         target: 'talk-volunteer',
         body: 'Marks the picked person as willing to knock doors. Press again to remove.\nNeeds a person picked, like Signed.\nYes only. Nothing is recorded for a no.\nThe list is under More → Volunteers, for managers.',
@@ -609,7 +629,7 @@ const WHAT_COUNTS =
 
 /** The same paragraph for a registration campaign. */
 const REG_WHAT_COUNTS =
-  'Conversation: one person talked to, at a site or at a door, whatever came of it.\nRegistration: a conversation that ended in Registered or Updated.\nRegistration rate: registrations divided by conversations.\nAlready registered, Not eligible and Declined are conversations that are not registrations.'
+  'Registration: somebody logged as Registered or Updated, at a site or at a door.\nNew: Registered. Updated: an existing registration with a name or address changed.\nAlready registered, Not eligible and Declined are not counted on this page.'
 
 export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
   overview: {
@@ -821,7 +841,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'The time window',
         target: 'analytics-scope',
-        body: 'Counted back from today, and today is included. The count on the right is conversations in the window.',
+        body: 'Counted back from today, and today is included. The count on the right is registrations in the window.',
       },
       {
         heading: 'Registrations per day',
@@ -842,9 +862,9 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
         body: 'Total registrations at each place in the window. A site worked more often will lead here whether or not it is a better site.',
       },
       {
-        heading: 'Registration rate',
-        target: 'reg-site-rate',
-        body: 'Of the people talked to there, the share who registered or updated.\nThe whisker is how sure the number is. Short means plenty of conversations behind it. Long means few.\nThe dashed line is the campaign average. Sites with fewer than 10 conversations are left off.',
+        heading: 'Per shift',
+        target: 'reg-per-shift',
+        body: 'Registrations divided by the shifts worked there. This is the fair comparison between a site worked ten times and one worked twice.',
       },
     ],
   },
@@ -856,7 +876,7 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
       {
         heading: 'A fair reading',
         target: 'reg-by-person',
-        body: 'The rate depends heavily on the place. Somebody at a busy campus will lead somebody at a quiet library, whoever they are.\nCompare people who worked the same sites before drawing conclusions.',
+        body: 'The count depends heavily on the place. Somebody at a busy campus will lead somebody at a quiet library, whoever they are.\nCompare people who worked the same sites before drawing conclusions.',
       },
     ],
   },

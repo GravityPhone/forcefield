@@ -15,7 +15,21 @@ import { fetchMyTurf } from '@/lib/myTurf'
 import { appointmentSettings } from '@/lib/appointments'
 import { useAuthStore } from './auth'
 import type { Address, Appointment, KnockLog, KnockOutcome, NewKnock, Person } from '@/types'
+import { campaignMode } from '@/lib/registration'
 import type { RegResult } from '@/lib/registration'
+
+/** A door's visits, narrowed to the campaign on screen (2026-11-20, user
+ * call: the petition and the registration drive keep separate histories).
+ * Doors are shared, so the query returns every campaign's visits; each knock
+ * carries the campaign it was logged under. Null is everything from before
+ * that stamp existed, which is petition history: a registration campaign hides
+ * it, a petition keeps it. */
+function ownHistory(list: KnockHistoryEntry[]): KnockHistoryEntry[] {
+  const cid = useAuthStore().profile?.campaign_id ?? null
+  if (!cid) return list
+  const reg = campaignMode.value === 'registration'
+  return list.filter((h) => (h.campaign_id ? h.campaign_id === cid : !reg))
+}
 
 const WALK_DIRECTION_KEY = 'forcefield.walk_direction'
 const WALK_PARITY_KEY = 'forcefield.walk_parity'
@@ -35,7 +49,7 @@ export interface KnockHistoryEntry extends KnockLog {
 }
 
 interface TalkState {
-  activeTab: 'talk' | 'hunt'
+  activeTab: 'talk' | 'hunt' | 'site'
   searchQuery: string
   searchResults: { persons: PersonHit[]; addresses: Address[] }
   searching: boolean
@@ -223,13 +237,13 @@ export const useTalkStore = defineStore('talk', {
         if (!cached) return
         this.selectedAddress = cached.address
         this.roster = cached.roster
-        this.history = cached.history as unknown as KnockHistoryEntry[]
+        this.history = ownHistory(cached.history as unknown as KnockHistoryEntry[])
         // Appointments are deliberately never cached (see lib/offlineCache.ts).
         this.appointments = []
       } else {
         this.selectedAddress = addressRes.data as Address
         this.roster = (rosterRes.data ?? []) as Person[]
-        this.history = (historyRes.data ?? []) as unknown as KnockHistoryEntry[]
+        this.history = ownHistory((historyRes.data ?? []) as unknown as KnockHistoryEntry[])
         this.appointments = apptRes
       }
       this.selectedPerson = preselectPersonId
@@ -506,6 +520,7 @@ export const useTalkStore = defineStore('talk', {
             squad_name: null,
             turf_id: null,
             turf_name: null,
+            campaign_id: auth.profile.campaign_id ?? null,
             // The visit row is about the door, not the signer — its person_id
             // is null and its name must be too.
             person:

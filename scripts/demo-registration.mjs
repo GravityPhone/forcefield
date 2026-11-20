@@ -21,10 +21,11 @@
 // laid out the way a real one tends to be, with crew names that exist in the
 // app, for showing the import.
 
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { createClient } from '@supabase/supabase-js'
 import { sql } from './apply-migration.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -35,13 +36,16 @@ const TZ = 'America/New_York'
 // Per-conversation odds by site, so the places differ the way real ones do:
 // a campus has many unregistered people, a library mostly registered ones.
 // [registered, updated, already_registered, not_eligible, declined]
+// `perHour` is results one person LOGS in an hour, not people approached:
+// nobody tallies everyone who walks past. Most of what gets written down is a
+// form (new or updated); the rest are names looked up and found on the roll.
 const SITES = [
-  { name: 'Community college, student center', notes: 'Table inside the main doors. Student life office signed off.', perHour: 7, odds: [0.2, 0.09, 0.42, 0.07, 0.22] },
-  { name: 'Grocery store, east entrance', notes: 'Stay left of the cart return. Manager wants a heads up each visit.', perHour: 8, odds: [0.08, 0.07, 0.6, 0.04, 0.21] },
-  { name: 'Public library, front steps', notes: 'Outside only.', perHour: 4, odds: [0.07, 0.08, 0.66, 0.03, 0.16] },
-  { name: 'Farmers market', notes: 'Saturdays. Booth space by the entrance.', perHour: 9, odds: [0.09, 0.1, 0.58, 0.03, 0.2] },
-  { name: 'Transit stop, uptown', notes: 'Short conversations. People are catching a bus.', perHour: 6, odds: [0.14, 0.06, 0.45, 0.08, 0.27] },
-  { name: 'Apartment complex, mail room', notes: 'High turnover, lots of address updates. Leasing office OK.', perHour: 5, odds: [0.13, 0.2, 0.44, 0.05, 0.18] },
+  { name: 'Community college, student center', notes: 'Table inside the main doors. Student life office signed off.', perHour: 2.4, odds: [0.56, 0.14, 0.2, 0.04, 0.06] },
+  { name: 'Grocery store, east entrance', notes: 'Stay left of the cart return. Manager wants a heads up each visit.', perHour: 1.6, odds: [0.34, 0.16, 0.38, 0.03, 0.09] },
+  { name: 'Public library, front steps', notes: 'Outside only.', perHour: 1.0, odds: [0.3, 0.18, 0.4, 0.03, 0.09] },
+  { name: 'Farmers market', notes: 'Saturdays. Booth space by the entrance.', perHour: 2.2, odds: [0.38, 0.2, 0.32, 0.02, 0.08] },
+  { name: 'Transit stop, uptown', notes: 'Short conversations. People are catching a bus.', perHour: 1.3, odds: [0.46, 0.12, 0.26, 0.06, 0.1] },
+  { name: 'Apartment complex, mail room', notes: 'High turnover, lots of address updates. Leasing office OK.', perHour: 1.7, odds: [0.3, 0.42, 0.2, 0.03, 0.05] },
 ]
 const RESULTS = ['registered', 'updated', 'already_registered', 'not_eligible', 'declined']
 const SLOTS = [
@@ -60,6 +64,103 @@ function rng(seed) {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
+}
+
+// THE REGISTRATION DRIVE HAS ITS OWN PEOPLE (2026-11-20, user call: "entirely
+// different histories and people on both of them"). These accounts exist only
+// in this campaign, on their own team, so its leaderboard, feed, shifts and
+// Analytics never show a name from the petition crew. No first name here is
+// used by the petition's simulated staff.
+const TEAM = 'Registration Crew'
+const STAFF = [
+  ['Aurelio', 'V', 'team_lead'], ['Bronwyn', 'S', 'team_lead'],
+  ['Cyrus', 'M'], ['Darcy', 'O'], ['Esme', 'K'], ['Felipe', 'R'], ['Greta', 'N'], ['Hollis', 'B'],
+  ['Idris', 'W'], ['Joaquin', 'D'], ['Keiko', 'T'], ['Lucinda', 'P'], ['Marcus', 'E'], ['Nia', 'G'],
+  ['Oskar', 'L'], ['Pilar', 'C'], ['Quentin', 'H'], ['Rosalind', 'F'], ['Santiago', 'J'], ['Tamsin', 'A'],
+].map(([first, last, role]) => ({
+  handle: `reg-${first}-${last}`.toLowerCase(),
+  display: `${first} ${last}.`,
+  role: role ?? 'canvasser',
+}))
+const AVATARS = ['accordion', 'anchor', 'avocado', 'badger', 'bagel', 'balloon', 'banjo', 'bear', 'beaver', 'bell',
+  'bird', 'blossom', 'blueberries', 'broccoli', 'butterfly', 'cactus', 'camel', 'carrot', 'cherries', 'compass']
+
+function keysFile() {
+  let dir = HERE
+  for (let i = 0; i < 6; i++) {
+    const p = join(dir, 'KEYS-AND-ACCESS.md')
+    if (existsSync(p)) return p
+    dir = dirname(dir)
+  }
+  throw new Error('KEYS-AND-ACCESS.md not found walking up from scripts/')
+}
+function admin() {
+  const m = readFileSync(keysFile(), 'utf8').match(/^SUPABASE_SERVICE_ROLE_KEY=(.+)$/m)
+  if (!m) throw new Error('SUPABASE_SERVICE_ROLE_KEY not found in KEYS-AND-ACCESS.md')
+  return createClient('https://whrliwbdxjdcksbvwkrc.supabase.co', m[1].trim(), {
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
+}
+
+/** Make sure the registration crew exists and belongs to this campaign only.
+ * Accounts are created with NO password: nobody signs in as them. */
+async function ensureStaff(cid) {
+  const supa = admin()
+  let [team] = await sql(`select id from public.teams where name = ${q(TEAM)} limit 1`)
+  if (!team) [team] = await sql(`insert into public.teams (name, campaign_id) values (${q(TEAM)}, ${q(cid)}) returning id`)
+  else await sql(`update public.teams set campaign_id = ${q(cid)} where id = ${q(team.id)}`)
+
+  const have = await sql(`select id, username from public.profiles where username in (${STAFF.map((p) => q(p.handle)).join(', ')})`)
+  const idOf = new Map(have.map((r) => [r.username, r.id]))
+  for (const p of STAFF) {
+    if (idOf.has(p.handle)) continue
+    const { data, error } = await supa.auth.admin.createUser({
+      email: `${p.handle}@example.com`,
+      email_confirm: true,
+      user_metadata: { username: p.handle },
+    })
+    if (error) throw new Error(`createUser ${p.handle}: ${error.message}`)
+    idOf.set(p.handle, data.user.id)
+  }
+  const ids = STAFF.map((p) => idOf.get(p.handle))
+  // Membership first: the profile guard refuses an active campaign you have
+  // not joined.
+  await sql(`
+    insert into public.campaign_members (campaign_id, user_id)
+    values ${ids.map((id) => `(${q(cid)}, ${q(id)})`).join(', ')}
+    on conflict do nothing;
+    delete from public.campaign_members where user_id in (${ids.map(q).join(', ')}) and campaign_id <> ${q(cid)};
+  `)
+  for (let i = 0; i < STAFF.length; i++) {
+    const p = STAFF[i]
+    await sql(`
+      update public.profiles set
+        display_name = ${q(p.display)}, role = ${q(p.role)}, team_id = ${q(team.id)},
+        campaign_id = ${q(cid)}, avatar = ${q(AVATARS[i % AVATARS.length])}, is_simulated = true
+      where id = ${q(ids[i])}
+    `)
+  }
+  // The petition's simulated staff were all added to this campaign by earlier
+  // builds. Take them back out, except anyone actually switched into it.
+  await sql(`
+    delete from public.campaign_members m
+    using public.profiles p
+    where m.campaign_id = ${q(cid)} and p.id = m.user_id and p.is_simulated
+      and p.team_id is distinct from ${q(team.id)}
+      and p.campaign_id is distinct from ${q(cid)}
+  `)
+  return STAFF.map((p, i) => ({ id: ids[i], name: p.display }))
+}
+
+async function removeStaff() {
+  const supa = admin()
+  const rows = await sql(`select id from public.profiles where username in (${STAFF.map((p) => q(p.handle)).join(', ')})`)
+  for (const { id } of rows) {
+    const { error } = await supa.auth.admin.deleteUser(id)
+    if (error) throw new Error(`deleteUser ${id}: ${error.message}`)
+  }
+  await sql(`delete from public.teams where name = ${q(TEAM)}`)
+  if (rows.length) console.log(`Removed ${rows.length} registration crew accounts.`)
 }
 
 const q = (s) => `'${String(s).replace(/'/g, "''")}'`
@@ -115,6 +216,7 @@ async function wipe() {
     console.log(`Removed ${NAME} (${id}).`)
   }
   if (!found.length) console.log('Nothing to remove.')
+  await removeStaff()
 }
 
 async function build() {
@@ -143,22 +245,10 @@ async function build() {
       returning id
     `)
   }
-  await sql(`
-    insert into public.campaign_members (campaign_id, user_id)
-    select distinct ${q(cid)}::uuid, m.user_id from public.campaign_members m
-    on conflict do nothing
-  `)
-
-  const pool = await sql(`
-    select p.id, coalesce(p.display_name, p.username) as name
-    from public.profiles p
-    where p.role in ('canvasser', 'team_lead')
-      -- Simulated staff only ("Renata A."). A real person who signed up to
-      -- look around must never find themselves scheduled on a fake shift.
-      and p.display_name ~ '^[A-Z][a-z]+ [A-Z]\.$'
-    order by p.username
-  `)
-  if (pool.length < 6) throw new Error('Not enough canvasser accounts to staff the demo shifts.')
+  const pool = await ensureStaff(cid)
+  // Names for today's "found on the roll" rows, so the Site tab's list for
+  // today reads like a real afternoon. Pointers at voter-file rows only.
+  const roll = (await sql(`select id from public.persons order by random() limit 400`)).map((r) => r.id)
 
   const sites = SITES.map((s) => ({ ...s, id: randomUUID() }))
   await sql(`
@@ -206,7 +296,8 @@ async function build() {
             }
           }
           const at = startMin + Math.floor(rand() * worked)
-          logs.push({ user: person.id, site: site.id, shift: shift.id, result, at: `${day} ${clock(at)}:${String(Math.floor(rand() * 60)).padStart(2, '0')}` })
+          const onRoll = offset === 0 && (result === 'already_registered' || result === 'updated')
+          logs.push({ user: person.id, site: site.id, shift: shift.id, result, person: onRoll ? roll[Math.floor(rand() * roll.length)] : null, at: `${day} ${clock(at)}:${String(Math.floor(rand() * 60)).padStart(2, '0')}` })
         }
       }
     })
@@ -223,11 +314,11 @@ async function build() {
   for (let i = 0; i < logs.length; i += 800) {
     const chunk = logs.slice(i, i + 800)
     await sql(`
-      insert into public.registration_logs (campaign_id, canvasser_id, site_id, shift_id, result, occurred_at) values
+      insert into public.registration_logs (campaign_id, canvasser_id, site_id, shift_id, person_id, result, occurred_at) values
       ${chunk
         .map(
           (l) =>
-            `(${q(cid)}, ${q(l.user)}, ${q(l.site)}, ${q(l.shift)}, ${q(l.result)}, (${q(l.at)}::timestamp at time zone ${q(TZ)}))`,
+            `(${q(cid)}, ${q(l.user)}, ${q(l.site)}, ${q(l.shift)}, ${l.person ? q(l.person) : 'null'}, ${q(l.result)}, (${q(l.at)}::timestamp at time zone ${q(TZ)}))`,
         )
         .join(',\n')}
     `)
@@ -255,7 +346,7 @@ async function build() {
 
   const made = logs.filter((l) => l.result === 'registered' || l.result === 'updated').length
   console.log(`Built ${NAME} (${cid}).`)
-  console.log(`  ${sites.length} sites, ${shifts.length} shifts (${shifts.filter((s) => s.day === today).length} today), ${logs.length} conversations, ${made} registrations.`)
+  console.log(`  ${sites.length} sites, ${shifts.length} shifts (${shifts.filter((s) => s.day === today).length} today), ${logs.length} results logged, ${made} registrations, ${pool.length} crew.`)
   console.log('  Wrote demo/site-plan-sample.csv')
 }
 
