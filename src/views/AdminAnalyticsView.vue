@@ -49,6 +49,9 @@ import {
 import { titleCase } from '@/lib/streetWalk'
 import { whenIdle } from '@/lib/idle'
 import { ANALYTICS_TAB_HELP } from '@/lib/helpContent'
+import RegistrationAnalytics from '@/components/analytics/RegistrationAnalytics.vue'
+import type { RegTab } from '@/components/analytics/RegistrationAnalytics.vue'
+import { campaignMode, loadCampaignMode } from '@/lib/registration'
 import type { KnockOutcome } from '@/types'
 
 const palette = useChartPalette()
@@ -179,7 +182,17 @@ async function fetchAllPages<T>(
 // otherwise stays exactly as it was. `loading` is deliberately not raised
 // either, so a refresh shows the old numbers until the new ones land rather
 // than blanking a report somebody is reading.
-onPageEnter(async () => {
+// A REGISTRATION CAMPAIGN GETS ITS OWN BODY (2026-11-20, user call: "the
+// analytics in reg mode are sig based"). Everything below this point counts
+// knocks and signatures; RegistrationAnalytics counts the registration log
+// instead, and this page's own read (the whole knock log plus every address)
+// is skipped while that one is showing. It runs the moment the mode flips
+// back to petition if it has not run yet.
+const regMode = computed(() => campaignMode.value === 'registration')
+const regTab = ref<RegTab>('overview')
+let petitionLoaded = false
+
+async function loadPetition() {
   try {
     const [{ count: knockCount }, { count: addrCount }] = await Promise.all([
       supabase.from('knock_logs').select('id', { count: 'exact', head: true }),
@@ -317,12 +330,23 @@ onPageEnter(async () => {
         scoreReady.value = true
       }, 4000)
     }, 4000)
+    petitionLoaded = true
+    loadError.value = ''
   } catch (e) {
     loadError.value = e instanceof Error ? e.message : String(e)
   } finally {
     loading.value = false
   }
+}
+
+onPageEnter(async () => {
+  // The mode has to be known before deciding which read to pay for.
+  await loadCampaignMode()
+  if (!regMode.value) await loadPetition()
 }, 180_000)
+watch(regMode, (reg) => {
+  if (!reg && !petitionLoaded) void loadPetition()
+})
 
 /** TWO tiers now, one word each (2026-07-27, user call: "we wanna call a not
  * home also an interaction. But then that means we also need to have another
@@ -508,7 +532,9 @@ const TABS = computed(() =>
 const tab = ref<TabId>('overview')
 
 /** The header "?" teaches whichever tab is on screen. */
-const helpTopic = computed(() => ANALYTICS_TAB_HELP[tab.value])
+const helpTopic = computed(() =>
+  regMode.value ? ANALYTICS_TAB_HELP[`reg-${regTab.value}`] : ANALYTICS_TAB_HELP[tab.value],
+)
 
 // ---------------------------------------------------------------- drill focus
 // Turf/Squads/Canvassers each hold a focused entity; the focus panel (one
@@ -2221,7 +2247,8 @@ const focusRanks = computed<FocusRank[]>(() => {
 
 <template>
   <AppShell title="Analytics" :help-topic="helpTopic">
-    <div v-if="loading" class="card center">
+    <RegistrationAnalytics v-if="regMode" v-model:tab="regTab" />
+    <div v-else-if="loading" class="card center">
       <p class="muted">{{ loadNote }}</p>
     </div>
     <div v-else-if="loadError" class="card center">

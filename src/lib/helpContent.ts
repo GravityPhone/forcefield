@@ -607,6 +607,10 @@ const CARD_CONTROLS =
 const WHAT_COUNTS =
   'Knock: one logged visit. The same door twice is two knocks.\nDoor: one household, counted once however often it is knocked.\nInteraction: a knock that tried the door. Every outcome counts except Skip, Not Home included.\nConversation: an interaction somebody answered. Signed, Not Interested, Return and Hostile count. Not Home does not.'
 
+/** The same paragraph for a registration campaign. */
+const REG_WHAT_COUNTS =
+  'Conversation: one person talked to, at a site or at a door, whatever came of it.\nRegistration: a conversation that ended in Registered or Updated.\nRegistration rate: registrations divided by conversations.\nAlready registered, Not eligible and Declined are conversations that are not registrations.'
+
 export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
   overview: {
     title: 'Overview tab',
@@ -801,6 +805,58 @@ export const ANALYTICS_TAB_HELP: Record<string, HelpTopic> = {
         heading: 'A fair reading',
         target: 'canvassers-scatter',
         body: 'Sign rate depends heavily on the ground. Somebody sent to a hostile street will trail somebody sent to a friendly one, whoever they are.\nCompare people against the turf they walked, on the Turf tab, before drawing conclusions.',
+      },
+    ],
+  },
+
+  // Registration campaigns: Analytics counts the registration log, not knocks.
+  'reg-overview': {
+    title: 'Overview tab',
+    sections: [
+      {
+        target: 'analytics-tabs',
+        body: 'Registration numbers for this campaign, at sites and at doors. Each tab has its own help under this button.',
+      },
+      { heading: 'What counts as what', target: 'analytics-tiles', body: REG_WHAT_COUNTS },
+      {
+        heading: 'The time window',
+        target: 'analytics-scope',
+        body: 'Counted back from today, and today is included. The count on the right is conversations in the window.',
+      },
+      {
+        heading: 'Registrations per day',
+        target: 'reg-trend',
+        body: 'The solid line is each day. The dashed line is the average of the seven days ending that day, which smooths out a big Saturday.\n' +
+          FOLDING_CARDS,
+      },
+    ],
+  },
+
+  'reg-sites': {
+    title: 'Sites tab',
+    sections: [
+      { heading: 'What counts as what', target: 'reg-by-site', body: REG_WHAT_COUNTS },
+      {
+        heading: 'Which sites are worth a crew',
+        target: 'reg-by-site',
+        body: 'Total registrations at each place in the window. A site worked more often will lead here whether or not it is a better site.',
+      },
+      {
+        heading: 'Registration rate',
+        target: 'reg-site-rate',
+        body: 'Of the people talked to there, the share who registered or updated.\nThe whisker is how sure the number is. Short means plenty of conversations behind it. Long means few.\nThe dashed line is the campaign average. Sites with fewer than 10 conversations are left off.',
+      },
+    ],
+  },
+
+  'reg-people': {
+    title: 'People tab',
+    sections: [
+      { heading: 'What counts as what', target: 'reg-by-person', body: REG_WHAT_COUNTS },
+      {
+        heading: 'A fair reading',
+        target: 'reg-by-person',
+        body: 'The rate depends heavily on the place. Somebody at a busy campus will lead somebody at a quiet library, whoever they are.\nCompare people who worked the same sites before drawing conclusions.',
       },
     ],
   },

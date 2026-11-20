@@ -70,7 +70,15 @@ If the link fails in the room, paste the rows instead: copy them in Sheets, past
 
 Open **Canvass**, search a street and open a house. The buttons are now Registered, Updated, Already registered, Not eligible, Declined, Return, Not Home and Skip.
 
-### 9. Progress, and back to petition
+### 9. The numbers
+
+Open **Analytics**. In registration mode it counts registrations, not signatures.
+
+- **Overview**: registrations per day, the registration rate, and what every conversation turned into.
+- **Sites**: registrations, registration rate and registrations per shift for each place.
+- **People**: the same by person.
+
+### 10. Progress, and back to petition
 
 **More > Campaign.** The progress card counts registrations against the goal. Tap **Switch to petition** at the top to return to the petition app.
 
@@ -86,8 +94,7 @@ Open **Canvass**, search a street and open a house. The buttons are now Register
 
 - A second registration at the same door has no count (sites count every tap).
 - Site taps need signal; they are not queued offline.
-- Maps, My knocks, the feed and Analytics still use petition wording for door registrations.
-- No registration report beyond the Sites screens and the Campaign progress card.
+- No export of the registration numbers. Analytics shows them by day, by site and by person.
 
 ## Removing the sample data
 
