@@ -89,16 +89,22 @@ const barItems = computed<NavItem[]>(() => {
     // from a dashboard detour. The Dashboard tab went away 2026-07-25 with
     // the route itself — Analytics took its slot and its home-screen job.
     // A registration campaign is run from the site plan, so Sites takes the
-    // first tab and Leaders gives up its slot (it moves to More). The bar
-    // stays six wide (2026-11-19: Sites as the first row of More was not
-    // where a manager looked for it).
+    // first tab (2026-11-19: Sites as the first row of More was not where a
+    // manager looked for it).
+    //
+    // NO SQUADS IN REGISTRATION MODE (2026-11-20, user call: "take out squads
+    // for registration mode as well"). A squad is the crew that walks a turf
+    // together for a day; a registration drive staffs SHIFTS at sites, and a
+    // shift already names who is standing there. Two ways of saying who is
+    // working with whom was one too many. The Squad tab is gone from every
+    // role's bar here, and Leaders has its slot back.
     if (showSites.value) {
       return [
         sitesItem,
         { to: '/canvass', label: 'Canvass', icon: 'pin' },
-        { to: '/squad', label: 'Squad', icon: 'squads' },
         { to: '/turf', label: 'Turf', icon: 'map' },
         { to: '/activity', label: 'Feed', icon: 'pulse' },
+        { to: '/leaderboard', label: 'Leaders', icon: 'trophy' },
         { to: '/admin/analytics', label: 'Analytics', icon: 'chart' },
       ]
     }
@@ -118,8 +124,7 @@ const barItems = computed<NavItem[]>(() => {
   // everyone's job, so the home tab is called Canvass everywhere.
   return [
     { to: '/canvass', label: 'Canvass', icon: 'pin' },
-    ...(showSites.value ? [sitesItem] : []),
-    { to: '/squad', label: 'Squad', icon: 'squads' },
+    ...(showSites.value ? [sitesItem] : [{ to: '/squad', label: 'Squad', icon: 'squads' } as NavItem]),
     { to: '/activity', label: 'Feed', icon: 'pulse' },
     { to: '/bulletin', label: 'Bulletin', icon: 'bulletin' },
     { to: '/leaderboard', label: 'Leaders', icon: 'trophy' },
@@ -177,11 +182,10 @@ const moreItems = computed<NavItem[]>(() => {
   }
   if (auth.profile.role === 'campaign_manager') {
     return [
-      ...(showSites.value ? [{ to: '/leaderboard', label: 'Leaders', icon: 'trophy' } as NavItem] : []),
       // Analytics is the bottom bar's first tab now, not a More item.
       { to: '/admin/roles', label: 'Roles', icon: 'shield' },
       // Every crew out today — the Squad tab is the manager's own crew now.
-      { to: '/squads', label: 'All squads', icon: 'squads' },
+      ...(showSites.value ? [] : [{ to: '/squads', label: 'All squads', icon: 'squads' } as NavItem]),
       roster,
       volunteers,
       myKnocks,

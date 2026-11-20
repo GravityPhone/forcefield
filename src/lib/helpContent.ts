@@ -382,11 +382,6 @@ export const HELP_TOPICS: Record<string, HelpTopic> = {
         body: 'Tap a shift to open its tally screen.\nYour own shifts sort first and wear a You tag.\nThe number is registered plus updated, against the goal if one is set.',
       },
       {
-        heading: 'Crew',
-        target: 'sites-add-squad',
-        body: 'Managers set the crew when adding or editing a shift.\nSearch anybody by name, or tap a squad to add all of it.\nThe crew is a list of people, so it stays after the squad ends.',
-      },
-      {
         target: 'sites-plan',
         body: 'Managers only.\nAdd shift: site, date, hours, goal, crew.\nAdd site (on the Sites chip): a place, before anyone is scheduled there.\nImport: a Google Sheets link (shared as Anyone with the link), pasted rows, or a .csv. Then match its columns.\nA linked sheet gets a Refresh button: it adds, updates and removes upcoming shifts to match. Past shifts and worked shifts are left alone.',
       },

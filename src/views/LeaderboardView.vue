@@ -483,7 +483,7 @@ onPageEnter(() => void refreshAll())
           </div>
         </div>
 
-        <div class="card" data-board="squads">
+        <div v-if="!regMode" class="card" data-board="squads">
           <div class="board-head">
             <h3>{{ squadsTitle }}</h3>
             <button v-if="mySquadStanding" class="standing" @click="jumpToMyRow('squads')">
